@@ -84,6 +84,14 @@ That data is stored by the app locally, not in the tracked source files in this 
 - Remote URL imports are fetched in Rust to avoid browser CORS limitations.
 - No shell execution is driven by playlist data.
 
+## Disclaimer
+
+Onyx is a client application for loading and playing user-supplied playlists, streams, and related credentials. It does not provide any channels, playlists, stream URLs, or service access.
+
+Users are responsible for ensuring they are authorized to use any playlists, streams, Xtream accounts, credentials, and other third-party services or content loaded into Onyx, and that their use complies with applicable law and the terms of the relevant provider.
+
+Onyx is not affiliated with, endorsed by, or responsible for third-party content or services loaded by users.
+
 ## Build From Source
 
 You need:
