@@ -1,14 +1,14 @@
 # Onyx
 
-Onyx is a local-first Windows IPTV player with native `libmpv` playback, saved source profiles, favorites, recents, multi-source XMLTV EPG support, and a cleaner browsing experience than raw playlist links and browser tabs.
+Onyx is a local-first Windows IPTV player with native `libmpv` playback, saved source profiles, favorites, recents, and multi-source XMLTV EPG support in a desktop interface built for browsing and watching instead of juggling raw playlist links and browser tabs.
 
 Built with Tauri, React, and TypeScript.
 
-Windows is the primary supported platform.
+Windows is currently the primary supported platform.
 
 ## Download
 
-Download the latest installer from [GitHub Releases](https://github.com/Guts444/Onyx/releases).
+Download the latest Windows installer from [GitHub Releases](https://github.com/Guts444/Onyx/releases).
 
 If you install Onyx from a release build:
 
@@ -18,27 +18,18 @@ If you install Onyx from a release build:
 
 Those requirements only apply if you want to build Onyx from source.
 
-## Why Onyx
+## Features
 
-- Native playback through `libmpv`
-- Local `.m3u` / `.m3u8` import
-- Remote M3U URL import
-- Xtream live login import
-- Multi-source XMLTV EPG integration
-- Manual per-channel EPG matching with saved mappings
-- Per-guide EPG refresh controls with update now, auto update, and update on startup
-- Pinned Favorites group
-- Library-wide Recents view
-- Saved source profiles
-- Resume last channel and volume on startup
-- Group visibility controls and group search
-- Local-only storage for personal data
+- Sources that stay organized: import local `.m3u` / `.m3u8` files, remote M3U playlist URLs, and Xtream accounts, then switch between saved source profiles without re-entering everything each time.
+- A better browsing library: browse channels by group, keep Favorites pinned, revisit Recents, hide noisy groups, search faster, and collapse the current source from the sidebar.
+- EPG you can actually control: load one or more XMLTV guides, enable or disable each guide independently, refresh them on demand or on a schedule, and manually match channels when automatic lookup is not enough.
+- Native playback that feels like a desktop app: `libmpv` playback with reload, stop, mute, volume, fullscreen, and startup restore for the last channel and volume.
 
 ## Screenshots
 
 ### Clean home screen
 
-Onyx keeps the first-run experience simple: open Settings, add a source, and start browsing without a crowded layout.
+Open Settings, add a source, and start browsing without a crowded layout slowing you down.
 
 ![Onyx home screen](docs/screenshots/home.png)
 
@@ -52,33 +43,9 @@ The Settings drawer keeps Library, EPG, and Sources side by side so you can mana
 
 ## Privacy
 
-Onyx does not use a cloud backend, analytics, telemetry, or account sync.
+Onyx has no cloud backend, analytics, telemetry, or account sync.
 
-Saved M3U URLs, Xtream details, EPG settings, guide mappings, favorites, recents, and playback/session preferences stay on the machine running the app.
-
-## Features
-
-- Sources: import local playlist files, remote M3U playlist URLs, and Xtream accounts, then save multiple source profiles locally.
-- Library: browse channels by group, keep Favorites pinned at the top, view Recents across the whole loaded source, hide noisy groups, search groups, and collapse the current source from the sidebar.
-- EPG: load one or more XMLTV guides, enable or disable each guide independently, refresh them on demand or on a schedule, manually match channels when automatic lookup is not enough, and keep those matches after restarting the app.
-- Player: native `libmpv` playback with reload, stop, mute, volume, and fullscreen controls, plus startup restore for the last channel and volume.
-
-## Local Data
-
-Onyx stores this locally on your machine:
-
-- saved M3U URLs
-- saved Xtream credentials
-- saved EPG sources and per-guide refresh settings
-- saved EPG channel mappings
-- cached guide data per source
-- favorites
-- recents
-- last selected channel
-- resume playback state
-- remembered volume
-
-That data is stored by the app locally, not in the tracked source files in this repository.
+Your playlists, Xtream details, guide settings, favorites, recents, and playback preferences stay on the device running the app.
 
 ## Security
 
@@ -133,7 +100,7 @@ Or double-click:
 
 If you only run `npm run dev`, the app opens in a browser preview and native playback will be disabled.
 
-For release builds, the DLLs only need to exist locally when you build. The Tauri bundle config includes them as resources, so when they are present during the build, they are bundled into the installer.
+For release builds, the DLLs only need to exist locally when you build. The Tauri bundle config includes them as resources, so when they are present during the build they are bundled into the installer.
 
 To build a release:
 
