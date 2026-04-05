@@ -1,9 +1,11 @@
 import { useState } from "react";
+import type { EpgDirectoryResponse, EpgSettings } from "../domain/epg";
 import type { PlaylistImport } from "../domain/iptv";
 import type { SavedPlaylistSource } from "../domain/sourceProfiles";
+import { EpgSettingsPanel } from "./EpgSettingsPanel";
 import { SourceProfilesPanel } from "./SourceProfilesPanel";
 
-export type SettingsTab = "library" | "sources";
+export type SettingsTab = "library" | "epg" | "sources";
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -13,6 +15,11 @@ interface SettingsDrawerProps {
   channelCountByGroup: Record<string, number>;
   enabledGroups: string[];
   hiddenGroups: string[];
+  epgSettings: EpgSettings;
+  epgDirectory: EpgDirectoryResponse | null;
+  matchedEpgChannelCount: number;
+  isEpgUpdating: boolean;
+  epgStatusMessage: string | null;
   savedSources: SavedPlaylistSource[];
   activeSourceId: string | null;
   collapsedSourceIds: string[];
@@ -24,6 +31,8 @@ interface SettingsDrawerProps {
   onEnableAllGroups: () => void;
   onDisableAllGroups: () => void;
   onToggleGroup: (group: string) => void;
+  onUpdateEpgSettings: (patch: Partial<EpgSettings>) => void;
+  onRefreshEpg: () => void;
   onAddM3uProfile: () => void;
   onAddXtreamProfile: () => void;
   onImportFile: (file: File) => void;
@@ -41,6 +50,11 @@ export function SettingsDrawer({
   channelCountByGroup,
   enabledGroups,
   hiddenGroups,
+  epgSettings,
+  epgDirectory,
+  matchedEpgChannelCount,
+  isEpgUpdating,
+  epgStatusMessage,
   savedSources,
   activeSourceId,
   collapsedSourceIds,
@@ -52,6 +66,8 @@ export function SettingsDrawer({
   onEnableAllGroups,
   onDisableAllGroups,
   onToggleGroup,
+  onUpdateEpgSettings,
+  onRefreshEpg,
   onAddM3uProfile,
   onAddXtreamProfile,
   onImportFile,
@@ -83,10 +99,18 @@ export function SettingsDrawer({
         <header className="settings-drawer__header">
           <div>
             <span className="settings-drawer__eyebrow">Settings</span>
-            <h2 id="settings-title">{activeTab === "library" ? "Library" : "Saved Sources"}</h2>
+            <h2 id="settings-title">
+              {activeTab === "library"
+                ? "Library"
+                : activeTab === "epg"
+                ? "EPG"
+                : "Saved Sources"}
+            </h2>
             <p>
               {activeTab === "library"
                 ? `Choose which groups should appear in the main channel browser for ${playlistDisplayName ?? "the current library"}.`
+                : activeTab === "epg"
+                ? "Guide data is cached locally so matched channels keep their now and next information after you reopen the app."
                 : "Saved source details stay local on this machine so you can reopen the app without typing them again."}
             </p>
           </div>
@@ -103,6 +127,13 @@ export function SettingsDrawer({
             onClick={() => onSelectTab("library")}
           >
             Library
+          </button>
+          <button
+            type="button"
+            className={`chip ${activeTab === "epg" ? "chip--active" : ""}`}
+            onClick={() => onSelectTab("epg")}
+          >
+            EPG
           </button>
           <button
             type="button"
@@ -195,6 +226,16 @@ export function SettingsDrawer({
               </div>
             </>
           )
+        ) : activeTab === "epg" ? (
+          <EpgSettingsPanel
+            settings={epgSettings}
+            epgDirectory={epgDirectory}
+            matchedChannelCount={matchedEpgChannelCount}
+            isUpdating={isEpgUpdating}
+            statusMessage={epgStatusMessage}
+            onUpdateSettings={onUpdateEpgSettings}
+            onRefresh={onRefreshEpg}
+          />
         ) : (
           <SourceProfilesPanel
             sources={savedSources}
