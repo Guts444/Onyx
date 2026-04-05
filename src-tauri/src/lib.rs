@@ -460,7 +460,8 @@ pub fn run() {
             fetch_playlist_from_url,
             fetch_xtream_live_channels,
             epg::refresh_epg_cache,
-            epg::load_epg_cache_directory,
+            epg::load_epg_cache_directories,
+            epg::delete_epg_cache,
             epg::get_epg_programme_snapshots
         ])
         .run(tauri::generate_context!())

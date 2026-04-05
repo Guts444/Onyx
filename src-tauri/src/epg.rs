@@ -26,7 +26,7 @@ const GZIP_MAGIC_BYTES: [u8; 2] = [0x1f, 0x8b];
 
 #[derive(Default)]
 pub struct EpgState {
-    cache: Mutex<Option<EpgCache>>,
+    caches: Mutex<Option<HashMap<String, EpgCache>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,14 +36,24 @@ struct EpgCache {
     fetched_at: String,
     channel_count: usize,
     programme_count: usize,
-    channels: Vec<EpgDirectoryChannel>,
+    channels: Vec<StoredEpgChannel>,
     programmes_by_channel: HashMap<String, Vec<EpgProgramme>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct StoredEpgChannel {
+    id: String,
+    display_names: Vec<String>,
+    icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EpgDirectoryChannel {
     id: String,
+    unique_id: String,
+    source_url: String,
     display_names: Vec<String>,
     icon: Option<String>,
 }
@@ -83,9 +93,15 @@ pub struct EpgProgrammeSummary {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpgProgrammeSnapshot {
-    epg_channel_id: String,
+    epg_channel_key: String,
     current: Option<EpgProgrammeSummary>,
     next: Option<EpgProgrammeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpgCacheStore {
+    caches: HashMap<String, EpgCache>,
 }
 
 #[derive(Default)]
@@ -119,9 +135,57 @@ impl EpgCache {
             fetched_at: self.fetched_at.clone(),
             channel_count: self.channel_count,
             programme_count: self.programme_count,
-            channels: self.channels.clone(),
+            channels: self
+                .channels
+                .iter()
+                .map(|channel| EpgDirectoryChannel {
+                    id: channel.id.clone(),
+                    unique_id: create_epg_channel_key(&self.source_url, &channel.id),
+                    source_url: self.source_url.clone(),
+                    display_names: channel.display_names.clone(),
+                    icon: channel.icon.clone(),
+                })
+                .collect(),
         }
     }
+}
+
+fn create_epg_channel_key(source_url: &str, channel_id: &str) -> String {
+    format!("{}\u{1}{}", source_url.trim(), channel_id.trim())
+}
+
+fn split_epg_channel_key(raw_key: &str) -> Option<(String, String)> {
+    let (source_url, channel_id) = raw_key.split_once('\u{1}')?;
+    let trimmed_source_url = source_url.trim();
+    let trimmed_channel_id = channel_id.trim();
+
+    if trimmed_source_url.is_empty() || trimmed_channel_id.is_empty() {
+        return None;
+    }
+
+    Some((trimmed_source_url.to_string(), trimmed_channel_id.to_string()))
+}
+
+fn normalize_epg_cache_map(
+    caches: HashMap<String, EpgCache>,
+) -> HashMap<String, EpgCache> {
+    let mut normalized_caches = HashMap::new();
+
+    for (_, cache) in caches {
+        let normalized_source_url = normalize_epg_url_input(&cache.source_url)
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| cache.source_url.clone());
+
+        normalized_caches.insert(
+            normalized_source_url.clone(),
+            EpgCache {
+                source_url: normalized_source_url,
+                ..cache
+            },
+        );
+    }
+
+    normalized_caches
 }
 
 fn build_http_client() -> Result<Client, String> {
@@ -356,7 +420,7 @@ fn parse_xmltv_timestamp(raw_value: &str) -> Result<i64, String> {
 
 fn finalize_channel(
     channel: PendingChannel,
-    channels: &mut Vec<EpgDirectoryChannel>,
+    channels: &mut Vec<StoredEpgChannel>,
     known_channel_ids: &mut HashSet<String>,
 ) {
     let channel_id = channel.id.trim();
@@ -382,7 +446,7 @@ fn finalize_channel(
         display_names.push(channel_id.to_string());
     }
 
-    channels.push(EpgDirectoryChannel {
+    channels.push(StoredEpgChannel {
         id: channel_id.to_string(),
         display_names,
         icon: normalize_optional_text(channel.icon),
@@ -444,7 +508,7 @@ fn parse_xmltv_document(source_url: String, xml_bytes: Vec<u8>) -> Result<EpgCac
     reader.config_mut().trim_text(true);
 
     let mut buffer = Vec::new();
-    let mut channels = Vec::new();
+    let mut channels: Vec<StoredEpgChannel> = Vec::new();
     let mut known_channel_ids = HashSet::new();
     let mut programmes_by_channel: HashMap<String, Vec<EpgProgramme>> = HashMap::new();
     let mut current_channel: Option<PendingChannel> = None;
@@ -626,7 +690,7 @@ fn parse_xmltv_document(source_url: String, xml_bytes: Vec<u8>) -> Result<EpgCac
     for (channel_id, programmes) in &mut programmes_by_channel {
         if !known_channel_ids.contains(channel_id) {
             known_channel_ids.insert(channel_id.clone());
-            channels.push(EpgDirectoryChannel {
+            channels.push(StoredEpgChannel {
                 id: channel_id.clone(),
                 display_names: vec![channel_id.clone()],
                 icon: None,
@@ -668,7 +732,10 @@ fn get_epg_cache_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String>
         .map_err(|error| format!("Could not resolve the EPG cache path: {error}"))
 }
 
-fn write_epg_cache_to_disk<R: Runtime>(app: &AppHandle<R>, cache: &EpgCache) -> Result<(), String> {
+fn write_epg_caches_to_disk<R: Runtime>(
+    app: &AppHandle<R>,
+    caches: &HashMap<String, EpgCache>,
+) -> Result<(), String> {
     let cache_path = get_epg_cache_path(app)?;
 
     if let Some(parent_directory) = cache_path.parent() {
@@ -676,44 +743,60 @@ fn write_epg_cache_to_disk<R: Runtime>(app: &AppHandle<R>, cache: &EpgCache) -> 
             .map_err(|error| format!("Could not create the EPG cache directory: {error}"))?;
     }
 
-    let serialized = serde_json::to_vec(cache)
-        .map_err(|error| format!("Could not serialize the EPG cache: {error}"))?;
+    let serialized = serde_json::to_vec(&EpgCacheStore {
+        caches: caches.clone(),
+    })
+    .map_err(|error| format!("Could not serialize the EPG cache store: {error}"))?;
 
     fs::write(cache_path, serialized)
-        .map_err(|error| format!("Could not write the EPG cache to disk: {error}"))?;
+        .map_err(|error| format!("Could not write the EPG cache store to disk: {error}"))?;
 
     Ok(())
 }
 
-fn read_epg_cache_from_disk<R: Runtime>(app: &AppHandle<R>) -> Result<Option<EpgCache>, String> {
+fn read_epg_caches_from_disk<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<HashMap<String, EpgCache>, String> {
     let cache_path = get_epg_cache_path(app)?;
 
     if !cache_path.exists() {
-        return Ok(None);
+        return Ok(HashMap::new());
     }
 
     let bytes = fs::read(cache_path)
         .map_err(|error| format!("Could not read the saved EPG cache: {error}"))?;
-    let cache = serde_json::from_slice::<EpgCache>(&bytes)
-        .map_err(|error| format!("Could not parse the saved EPG cache: {error}"))?;
 
-    Ok(Some(cache))
+    if let Ok(cache_store) = serde_json::from_slice::<EpgCacheStore>(&bytes) {
+        return Ok(normalize_epg_cache_map(cache_store.caches));
+    }
+
+    if let Ok(caches) = serde_json::from_slice::<HashMap<String, EpgCache>>(&bytes) {
+        return Ok(normalize_epg_cache_map(caches));
+    }
+
+    if let Ok(cache) = serde_json::from_slice::<EpgCache>(&bytes) {
+        let mut caches = HashMap::new();
+        caches.insert(cache.source_url.clone(), cache);
+        return Ok(normalize_epg_cache_map(caches));
+    }
+
+    Err("Could not parse the saved EPG cache.".to_string())
 }
 
-fn ensure_epg_cache_loaded<R: Runtime>(
+fn ensure_epg_caches_loaded<R: Runtime>(
     app: &AppHandle<R>,
     state: &State<'_, EpgState>,
 ) -> Result<(), String> {
     let mut cache_guard = state
-        .cache
+        .caches
         .lock()
-        .map_err(|_| "Could not access the saved EPG cache.".to_string())?;
+        .map_err(|_| "Could not access the saved EPG caches.".to_string())?;
 
     if cache_guard.is_some() {
         return Ok(());
     }
 
-    *cache_guard = read_epg_cache_from_disk(app)?;
+    *cache_guard = Some(read_epg_caches_from_disk(app)?);
     Ok(())
 }
 
@@ -776,69 +859,114 @@ pub async fn refresh_epg_cache(
     let cache = parse_xmltv_document(normalized_url.to_string(), xml_bytes)?;
     let response = cache.directory_response();
 
-    write_epg_cache_to_disk(&app, &cache)?;
+    ensure_epg_caches_loaded(&app, &state)?;
 
     let mut cache_guard = state
-        .cache
+        .caches
         .lock()
         .map_err(|_| "Could not save the in-memory EPG cache.".to_string())?;
-    *cache_guard = Some(cache);
+    let caches = cache_guard
+        .as_mut()
+        .ok_or_else(|| "Could not initialize the in-memory EPG cache store.".to_string())?;
+
+    caches.insert(cache.source_url.clone(), cache);
+    write_epg_caches_to_disk(&app, caches)?;
 
     Ok(response)
 }
 
 #[tauri::command]
-pub fn load_epg_cache_directory(
+pub fn load_epg_cache_directories(
     app: AppHandle,
     state: State<'_, EpgState>,
-) -> Result<Option<EpgDirectoryResponse>, String> {
-    ensure_epg_cache_loaded(&app, &state)?;
+) -> Result<Vec<EpgDirectoryResponse>, String> {
+    ensure_epg_caches_loaded(&app, &state)?;
 
     let cache_guard = state
-        .cache
+        .caches
         .lock()
         .map_err(|_| "Could not access the saved EPG cache.".to_string())?;
+    let Some(caches) = cache_guard.as_ref() else {
+        return Ok(Vec::new());
+    };
 
-    Ok(cache_guard.as_ref().map(EpgCache::directory_response))
+    let mut directories = caches
+        .values()
+        .map(EpgCache::directory_response)
+        .collect::<Vec<_>>();
+    directories.sort_by(|left, right| left.source_url.cmp(&right.source_url));
+    Ok(directories)
+}
+
+#[tauri::command]
+pub fn delete_epg_cache(
+    app: AppHandle,
+    state: State<'_, EpgState>,
+    url: String,
+) -> Result<bool, String> {
+    let normalized_url = normalize_epg_url_input(&url)?.to_string();
+    ensure_epg_caches_loaded(&app, &state)?;
+
+    let mut cache_guard = state
+        .caches
+        .lock()
+        .map_err(|_| "Could not access the saved EPG cache.".to_string())?;
+    let caches = cache_guard
+        .as_mut()
+        .ok_or_else(|| "Could not initialize the in-memory EPG cache store.".to_string())?;
+    let did_remove = caches.remove(&normalized_url).is_some();
+
+    if did_remove {
+        write_epg_caches_to_disk(&app, caches)?;
+    }
+
+    Ok(did_remove)
 }
 
 #[tauri::command]
 pub fn get_epg_programme_snapshots(
     app: AppHandle,
     state: State<'_, EpgState>,
-    epg_channel_ids: Vec<String>,
+    epg_channel_keys: Vec<String>,
     at_ms: Option<i64>,
 ) -> Result<Vec<EpgProgrammeSnapshot>, String> {
-    ensure_epg_cache_loaded(&app, &state)?;
+    ensure_epg_caches_loaded(&app, &state)?;
 
     let now_ms = at_ms.unwrap_or_else(|| Utc::now().timestamp_millis());
     let cache_guard = state
-        .cache
+        .caches
         .lock()
         .map_err(|_| "Could not access the saved EPG cache.".to_string())?;
-    let Some(cache) = cache_guard.as_ref() else {
+    let Some(caches) = cache_guard.as_ref() else {
         return Ok(Vec::new());
     };
 
-    let mut seen_channel_ids = HashSet::new();
+    let mut seen_channel_keys = HashSet::new();
     let mut snapshots = Vec::new();
 
-    for epg_channel_id in epg_channel_ids {
-        let trimmed_channel_id = epg_channel_id.trim();
+    for epg_channel_key in epg_channel_keys {
+        let Some((source_url, channel_id)) = split_epg_channel_key(&epg_channel_key) else {
+            continue;
+        };
+        let normalized_url = normalize_epg_url_input(&source_url)?.to_string();
+        let unique_channel_key = create_epg_channel_key(&normalized_url, &channel_id);
 
-        if trimmed_channel_id.is_empty() || !seen_channel_ids.insert(trimmed_channel_id.to_string())
-        {
+        if !seen_channel_keys.insert(unique_channel_key.clone()) {
             continue;
         }
 
-        let Some(programmes) = cache.programmes_by_channel.get(trimmed_channel_id) else {
+        let Some(cache) = caches.get(&normalized_url) else {
+            continue;
+        };
+
+        let Some(programmes) = cache.programmes_by_channel.get(&channel_id) else {
             continue;
         };
 
         let (current, next) = get_programme_snapshots_for_channel(programmes, now_ms);
 
         snapshots.push(EpgProgrammeSnapshot {
-            epg_channel_id: trimmed_channel_id.to_string(),
+            epg_channel_key: unique_channel_key,
             current,
             next,
         });

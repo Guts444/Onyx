@@ -17,11 +17,33 @@ const GUIDE_NOISE_TOKENS = new Set([
 ]);
 
 export interface EpgChannelIndex {
-  idIndex: Map<string, EpgDirectoryChannel>;
+  idIndex: Map<string, EpgDirectoryChannel[]>;
   nameIndex: Map<string, EpgDirectoryChannel[]>;
+  sourceIdIndex: Map<string, Map<string, EpgDirectoryChannel>>;
+  uniqueIdIndex: Map<string, EpgDirectoryChannel>;
+}
+
+interface ScopedManualMappings {
+  sourceUrl: string;
+  mappings: Record<string, string>;
 }
 
 function addNameCandidate(
+  target: Map<string, EpgDirectoryChannel[]>,
+  key: string,
+  value: EpgDirectoryChannel,
+) {
+  const existing = target.get(key);
+
+  if (existing) {
+    existing.push(value);
+    return;
+  }
+
+  target.set(key, [value]);
+}
+
+function addIdCandidate(
   target: Map<string, EpgDirectoryChannel[]>,
   key: string,
   value: EpgDirectoryChannel,
@@ -75,25 +97,29 @@ function getUniqueCandidate(candidates: EpgDirectoryChannel[] | undefined) {
 }
 
 function resolveManualMatch(
-  manualMappings: Record<string, string> | undefined,
+  manualMappingsBySource: ScopedManualMappings[],
   channel: Channel,
   index: EpgChannelIndex,
 ) {
-  if (!manualMappings) {
-    return null;
-  }
+  for (const scopedMappings of manualMappingsBySource) {
+    const sourceIdIndex = index.sourceIdIndex.get(normalizeEpgUrlKey(scopedMappings.sourceUrl));
 
-  for (const key of getChannelManualMappingKeys(channel)) {
-    const mappedChannelId = manualMappings[key];
-
-    if (!mappedChannelId) {
+    if (!sourceIdIndex) {
       continue;
     }
 
-    const resolved = index.idIndex.get(normalizeEpgLookupText(mappedChannelId));
+    for (const key of getChannelManualMappingKeys(channel)) {
+      const mappedChannelId = scopedMappings.mappings[key];
 
-    if (resolved) {
-      return resolved;
+      if (!mappedChannelId) {
+        continue;
+      }
+
+      const resolved = sourceIdIndex.get(normalizeEpgLookupText(mappedChannelId));
+
+      if (resolved) {
+        return resolved;
+      }
     }
   }
 
@@ -102,7 +128,7 @@ function resolveManualMatch(
 
 function findIdMatch(index: EpgChannelIndex, value: string | null | undefined) {
   for (const variant of buildLookupVariants(value)) {
-    const directMatch = index.idIndex.get(variant);
+    const directMatch = getUniqueCandidate(index.idIndex.get(variant));
 
     if (directMatch) {
       return directMatch;
@@ -194,23 +220,47 @@ export function createEpgMappingScope(scopeId: string, epgUrl: string) {
   return `${normalizeEpgUrlKey(epgUrl)}\u0001${scopeId}`;
 }
 
+export function createEpgChannelKey(sourceUrl: string, channelId: string) {
+  return `${normalizeEpgUrlKey(sourceUrl)}\u0001${channelId.trim()}`;
+}
+
 export function createEpgChannelIndex(channels: EpgDirectoryChannel[]): EpgChannelIndex {
-  const idIndex = new Map<string, EpgDirectoryChannel>();
+  const idIndex = new Map<string, EpgDirectoryChannel[]>();
   const nameIndex = new Map<string, EpgDirectoryChannel[]>();
+  const sourceIdIndex = new Map<string, Map<string, EpgDirectoryChannel>>();
+  const uniqueIdIndex = new Map<string, EpgDirectoryChannel>();
 
   for (const channel of channels) {
-    idIndex.set(normalizeEpgLookupText(channel.id), channel);
+    const sourceUrlKey = normalizeEpgUrlKey(channel.sourceUrl);
+
+    uniqueIdIndex.set(channel.uniqueId, channel);
+
+    for (const variant of buildLookupVariants(channel.id)) {
+      addIdCandidate(idIndex, variant, channel);
+    }
 
     for (const displayName of channel.displayNames) {
       for (const variant of buildLookupVariants(displayName)) {
         addNameCandidate(nameIndex, variant, channel);
       }
     }
+
+    if (!sourceIdIndex.has(sourceUrlKey)) {
+      sourceIdIndex.set(sourceUrlKey, new Map<string, EpgDirectoryChannel>());
+    }
+
+    const scopedIndex = sourceIdIndex.get(sourceUrlKey);
+
+    if (scopedIndex) {
+      scopedIndex.set(normalizeEpgLookupText(channel.id), channel);
+    }
   }
 
   return {
     idIndex,
     nameIndex,
+    sourceIdIndex,
+    uniqueIdIndex,
   };
 }
 
@@ -239,10 +289,10 @@ export function getChannelManualMappingKeys(channel: Channel) {
 
 export function resolveEpgChannelMatch(
   channel: Channel,
-  manualMappings: Record<string, string> | undefined,
+  manualMappingsBySource: ScopedManualMappings[],
   index: EpgChannelIndex,
 ): EpgResolvedChannel | null {
-  const manualMatch = resolveManualMatch(manualMappings, channel, index);
+  const manualMatch = resolveManualMatch(manualMappingsBySource, channel, index);
 
   if (manualMatch) {
     return {
@@ -302,7 +352,13 @@ export function searchEpgChannelsForChannel(
 
       const leftName = left.epgChannel.displayNames[0] ?? left.epgChannel.id;
       const rightName = right.epgChannel.displayNames[0] ?? right.epgChannel.id;
-      return leftName.localeCompare(rightName);
+      const nameComparison = leftName.localeCompare(rightName);
+
+      if (nameComparison !== 0) {
+        return nameComparison;
+      }
+
+      return left.epgChannel.sourceUrl.localeCompare(right.epgChannel.sourceUrl);
     })
     .slice(0, limit)
     .map(({ epgChannel }) => epgChannel);

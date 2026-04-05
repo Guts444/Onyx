@@ -7,12 +7,18 @@ export function refreshEpgCache(url: string) {
   });
 }
 
-export function loadEpgCacheDirectory() {
-  return invoke<EpgDirectoryResponse | null>("load_epg_cache_directory");
+export function loadEpgCacheDirectories() {
+  return invoke<EpgDirectoryResponse[]>("load_epg_cache_directories");
 }
 
-export function getEpgProgrammeSnapshots(epgChannelIds: string[]) {
+export function deleteEpgCache(url: string) {
+  return invoke<boolean>("delete_epg_cache", {
+    url,
+  });
+}
+
+export function getEpgProgrammeSnapshots(epgChannelKeys: string[]) {
   return invoke<EpgProgrammeSnapshot[]>("get_epg_programme_snapshots", {
-    epgChannelIds,
+    epgChannelKeys,
   });
 }

@@ -100,12 +100,6 @@ export function ChannelShelf({
         </div>
       </div>
 
-      {canMatchEpg && activeGroupLabel ? (
-        <div className="channel-shelf__hint">
-          Use the <strong>EPG</strong> button on any channel to assign the correct guide entry.
-        </div>
-      ) : null}
-
       {!activeGroupLabel ? (
         <div className="empty-state">
           <strong>No group selected</strong>
