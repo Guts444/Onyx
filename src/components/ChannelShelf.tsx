@@ -1,3 +1,4 @@
+import type { EpgResolvedGuide } from "../domain/epg";
 import type { Channel, LibraryView } from "../domain/iptv";
 
 interface ChannelShelfProps {
@@ -9,10 +10,13 @@ interface ChannelShelfProps {
   searchQuery: string;
   favoriteIds: string[];
   recentIds: string[];
+  guidesByChannelId: Record<string, EpgResolvedGuide>;
+  canMatchEpg: boolean;
   onSearchChange: (value: string) => void;
   onSelectView: (view: LibraryView) => void;
   onSelectChannel: (channel: Channel) => void;
   onToggleFavorite: (channelId: string) => void;
+  onOpenEpgMatcher: (channel: Channel) => void;
 }
 
 export function ChannelShelf({
@@ -24,11 +28,31 @@ export function ChannelShelf({
   searchQuery,
   favoriteIds,
   recentIds,
+  guidesByChannelId,
+  canMatchEpg,
   onSearchChange,
   onSelectView,
   onSelectChannel,
   onToggleFavorite,
+  onOpenEpgMatcher,
 }: ChannelShelfProps) {
+  function formatProgrammeTime(timestamp: number) {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  function formatProgrammeWindow(programme: EpgResolvedGuide["current"] | EpgResolvedGuide["next"]) {
+    if (!programme) {
+      return null;
+    }
+
+    const startLabel = formatProgrammeTime(programme.startMs);
+    const stopLabel = programme.stopMs ? formatProgrammeTime(programme.stopMs) : null;
+    return stopLabel ? `${startLabel} - ${stopLabel}` : startLabel;
+  }
+
   return (
     <section className="panel channel-shelf">
       <div className="channel-shelf__toolbar">
@@ -76,6 +100,12 @@ export function ChannelShelf({
         </div>
       </div>
 
+      {canMatchEpg && activeGroupLabel ? (
+        <div className="channel-shelf__hint">
+          Use the <strong>EPG</strong> button on any channel to assign the correct guide entry.
+        </div>
+      ) : null}
+
       {!activeGroupLabel ? (
         <div className="empty-state">
           <strong>No group selected</strong>
@@ -100,6 +130,7 @@ export function ChannelShelf({
             const isFavorite = favoriteIds.includes(channel.id);
             const isRecent = recentIds.includes(channel.id);
             const isSelected = selectedChannelId === channel.id;
+            const guide = guidesByChannelId[channel.id] ?? null;
 
             return (
               <article
@@ -122,8 +153,26 @@ export function ChannelShelf({
                   <div className="channel-card__tags">
                     {isFavorite ? <span className="tag">Favorite</span> : null}
                     {isRecent ? <span className="tag">Recent</span> : null}
+                    {guide ? (
+                      <span className={`tag ${guide.matchSource === "manual" ? "tag--active" : ""}`}>
+                        {guide.matchSource === "manual" ? "Guide matched" : "Guide"}
+                      </span>
+                    ) : null}
                     {!channel.isPlayable ? <span className="tag tag--danger">Unavailable</span> : null}
                   </div>
+                  {guide?.current ? (
+                    <div className="channel-guide">
+                      <span className="channel-guide__eyebrow">
+                        On now {formatProgrammeWindow(guide.current)}
+                      </span>
+                      <strong>{guide.current.title}</strong>
+                      {guide.next ? (
+                        <span>
+                          Next {formatProgrammeWindow(guide.next)}: {guide.next.title}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </button>
 
                 <button
@@ -132,6 +181,15 @@ export function ChannelShelf({
                   onClick={() => onToggleFavorite(channel.id)}
                 >
                   Fav
+                </button>
+                <button
+                  type="button"
+                  className={`favorite-toggle ${guide ? "favorite-toggle--active" : ""}`}
+                  onClick={() => onOpenEpgMatcher(channel)}
+                  disabled={!canMatchEpg}
+                  title={guide ? "Change EPG match" : "Add EPG match"}
+                >
+                  EPG
                 </button>
               </article>
             );

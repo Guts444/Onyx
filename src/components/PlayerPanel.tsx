@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import type { EpgResolvedGuide } from "../domain/epg";
 import type { Channel } from "../domain/iptv";
 import type { MpvPlayerState } from "../features/player/mpv";
 
 interface PlayerPanelProps {
   player: MpvPlayerState;
   selectedChannel: Channel | null;
+  guide: EpgResolvedGuide | null;
   isFullscreen: boolean;
   playerShellRef: RefObject<HTMLDivElement | null>;
   playerSurfaceRef: RefObject<HTMLDivElement | null>;
@@ -65,6 +67,7 @@ function getPlayerCopy(player: MpvPlayerState, selectedChannel: Channel | null) 
 export function PlayerPanel({
   player,
   selectedChannel,
+  guide,
   isFullscreen,
   playerShellRef,
   playerSurfaceRef,
@@ -102,6 +105,25 @@ export function PlayerPanel({
       : "Detecting...";
   const shouldRenderChrome = selectedChannel !== null;
   const shouldHideCursor = isFullscreen && !showPlayerChrome && !shouldShowStatusCard;
+
+  function formatProgrammeTime(timestamp: number) {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  function formatProgrammeWindow(
+    programme: EpgResolvedGuide["current"] | EpgResolvedGuide["next"],
+  ) {
+    if (!programme) {
+      return null;
+    }
+
+    const startLabel = formatProgrammeTime(programme.startMs);
+    const stopLabel = programme.stopMs ? formatProgrammeTime(programme.stopMs) : null;
+    return stopLabel ? `${startLabel} - ${stopLabel}` : startLabel;
+  }
 
   function clearHideTimer() {
     if (hideChromeTimeoutRef.current !== null) {
@@ -188,6 +210,19 @@ export function PlayerPanel({
               <div className="player-chrome__summary">
                 <strong>{currentTitle}</strong>
                 <span>{currentMeta}</span>
+                {guide?.current ? (
+                  <div className="player-guide">
+                    <span className="player-guide__eyebrow">
+                      On now {formatProgrammeWindow(guide.current)}
+                    </span>
+                    <strong>{guide.current.title}</strong>
+                    {guide.next ? (
+                      <span>
+                        Next {formatProgrammeWindow(guide.next)}: {guide.next.title}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <div className="player-chrome__controls">

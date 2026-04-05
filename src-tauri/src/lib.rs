@@ -1,3 +1,5 @@
+mod epg;
+
 use std::{collections::HashMap, time::Duration};
 
 use reqwest::{Client, Url};
@@ -452,10 +454,14 @@ async fn fetch_xtream_live_channels(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(epg::EpgState::default())
         .plugin(tauri_plugin_libmpv::init())
         .invoke_handler(tauri::generate_handler![
             fetch_playlist_from_url,
-            fetch_xtream_live_channels
+            fetch_xtream_live_channels,
+            epg::refresh_epg_cache,
+            epg::load_epg_cache_directory,
+            epg::get_epg_programme_snapshots
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

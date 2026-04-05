@@ -1,12 +1,34 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { ChannelEpgMatchDialog } from "./components/ChannelEpgMatchDialog";
 import { ChannelShelf } from "./components/ChannelShelf";
 import { ChannelSidebar } from "./components/ChannelSidebar";
 import { PlayerPanel } from "./components/PlayerPanel";
 import { SettingsDrawer, type SettingsTab } from "./components/SettingsDrawer";
+import {
+  DEFAULT_EPG_SETTINGS,
+  type EpgDirectoryChannel,
+  type EpgDirectoryResponse,
+  type EpgProgrammeSnapshot,
+  type EpgResolvedGuide,
+  type EpgSettings,
+  type SavedEpgMappingStore,
+} from "./domain/epg";
 import type { Channel, LibraryView, PlaylistImport } from "./domain/iptv";
 import type { PlaylistSnapshot, SavedPlaylistSource } from "./domain/sourceProfiles";
+import {
+  getEpgProgrammeSnapshots,
+  loadEpgCacheDirectory,
+  refreshEpgCache,
+} from "./features/epg/api";
+import {
+  createEpgChannelIndex,
+  createEpgMappingScope,
+  getChannelManualMappingKeys,
+  normalizeEpgUrlKey,
+  resolveEpgChannelMatch,
+} from "./features/epg/matching";
 import { DEFAULT_PLAYER_VOLUME, useMpvPlayer } from "./features/player/mpv";
 import { parseM3u } from "./features/playlist/m3u";
 import { downloadPlaylistFromUrl } from "./features/playlist/remote";
@@ -29,6 +51,8 @@ const SAVED_SOURCES_STORAGE_KEY = "iptv-player:saved-sources";
 const ACTIVE_SOURCE_STORAGE_KEY = "iptv-player:active-source";
 const PLAYLIST_SNAPSHOT_STORAGE_KEY = "iptv-player:playlist-snapshot";
 const COLLAPSED_SOURCE_CARDS_STORAGE_KEY = "iptv-player:collapsed-source-cards";
+const EPG_SETTINGS_STORAGE_KEY = "iptv-player:epg-settings";
+const EPG_MANUAL_MATCHES_STORAGE_KEY = "iptv-player:epg-manual-matches";
 const PLAYER_RESUME_STORAGE_KEY = "iptv-player:playback-session";
 const PLAYER_VOLUME_STORAGE_KEY = "iptv-player:player-volume";
 const RECENT_CHANNEL_LIMIT = 12;
@@ -65,6 +89,14 @@ function getPlaylistPreferenceKey(playlist: PlaylistImport | null) {
   )}`;
 }
 
+function getEpgPlaylistScope(sourceId: string | null, playlist: PlaylistImport | null) {
+  if (!playlist) {
+    return null;
+  }
+
+  return sourceId ?? getPlaylistPreferenceKey(playlist) ?? `playlist_${hashString(playlist.name)}`;
+}
+
 function App() {
   const [favoriteIds, setFavoriteIds] = usePersistentState<string[]>(FAVORITES_STORAGE_KEY, []);
   const [recentIds, setRecentIds] = usePersistentState<string[]>(RECENTS_STORAGE_KEY, []);
@@ -86,6 +118,14 @@ function App() {
   const [activeSourceId, setActiveSourceId] = usePersistentState<string | null>(
     ACTIVE_SOURCE_STORAGE_KEY,
     null,
+  );
+  const [epgSettings, setEpgSettings] = usePersistentState<EpgSettings>(
+    EPG_SETTINGS_STORAGE_KEY,
+    DEFAULT_EPG_SETTINGS,
+  );
+  const [savedEpgMappings, setSavedEpgMappings] = usePersistentState<SavedEpgMappingStore>(
+    EPG_MANUAL_MATCHES_STORAGE_KEY,
+    {},
   );
   const [playbackSession, setPlaybackSession] = usePersistentState<PlaybackSession>(
     PLAYER_RESUME_STORAGE_KEY,
@@ -117,11 +157,20 @@ function App() {
   const [isRestoringStartupSource, setIsRestoringStartupSource] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("library");
   const [message, setMessage] = useState<string | null>(null);
+  const [epgDirectory, setEpgDirectory] = useState<EpgDirectoryResponse | null>(null);
+  const [epgSnapshotsByChannelId, setEpgSnapshotsByChannelId] = useState<
+    Record<string, EpgProgrammeSnapshot>
+  >({});
+  const [isEpgUpdating, setIsEpgUpdating] = useState(false);
+  const [epgStatusMessage, setEpgStatusMessage] = useState<string | null>(null);
+  const [matcherChannel, setMatcherChannel] = useState<Channel | null>(null);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const playerShellRef = useRef<HTMLDivElement>(null);
   const playerSurfaceRef = useRef<HTMLDivElement>(null);
   const startupRestoreAttemptedRef = useRef(false);
   const startupPlaybackRestoreKeyRef = useRef<string | null>(null);
+  const startupEpgRefreshAttemptedRef = useRef(false);
+  const epgRefreshPromiseRef = useRef<Promise<EpgDirectoryResponse | null> | null>(null);
   const { player, playChannel, reloadPlayback, setVolumeLevel, stopPlayback, toggleMute } =
     useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
 
@@ -463,9 +512,78 @@ function App() {
     setIsSettingsOpen(true);
   }
 
+  function handleUpdateEpgSettings(patch: Partial<EpgSettings>) {
+    setEpgSettings((currentSettings) => ({
+      ...currentSettings,
+      ...patch,
+    }));
+
+    if (patch.url !== undefined && patch.url.trim().length === 0) {
+      setEpgStatusMessage(null);
+      setEpgDirectory(null);
+      setEpgSnapshotsByChannelId({});
+    }
+  }
+
+  async function refreshEpgGuide(reason: "manual" | "startup" | "auto") {
+    const rawGuideUrl = epgSettings.url.trim();
+
+    if (rawGuideUrl.length === 0) {
+      const statusCopy = "Enter an EPG URL first.";
+      setEpgStatusMessage(statusCopy);
+
+      if (reason === "manual") {
+        setMessage(statusCopy);
+      }
+
+      return null;
+    }
+
+    if (epgRefreshPromiseRef.current) {
+      return epgRefreshPromiseRef.current;
+    }
+
+    setIsEpgUpdating(true);
+
+    const refreshPromise = refreshEpgCache(rawGuideUrl)
+      .then((directory) => {
+        setEpgDirectory(directory);
+        setEpgStatusMessage(`Guide updated ${new Date(directory.fetchedAt).toLocaleString()}.`);
+        return directory;
+      })
+      .catch((error) => {
+        const errorMessage =
+          error instanceof Error ? error.message : "The guide could not be updated.";
+        setEpgStatusMessage(errorMessage);
+
+        if (reason === "manual") {
+          setMessage(errorMessage);
+        }
+
+        return null;
+      })
+      .finally(() => {
+        epgRefreshPromiseRef.current = null;
+        setIsEpgUpdating(false);
+      });
+
+    epgRefreshPromiseRef.current = refreshPromise;
+    return refreshPromise;
+  }
+
   const channels = playlist?.channels ?? [];
   const allGroups = playlist?.groups ?? [];
   const activeSource = savedSources.find((source) => source.id === activeSourceId) ?? null;
+  const epgUrlKey = normalizeEpgUrlKey(epgSettings.url);
+  const playlistEpgScope = getEpgPlaylistScope(activeSourceId, playlist);
+  const activeEpgMappingScope =
+    playlistEpgScope && epgUrlKey ? createEpgMappingScope(playlistEpgScope, epgSettings.url) : null;
+  const savedMappingsForActiveGuide =
+    activeEpgMappingScope !== null ? savedEpgMappings[activeEpgMappingScope] ?? {} : undefined;
+  const epgChannelIndex = useMemo(
+    () => createEpgChannelIndex(epgDirectory?.channels ?? []),
+    [epgDirectory?.channels],
+  );
   const playlistDisplayName =
     playlist !== null
       ? activeSource?.name.trim().length
@@ -488,6 +606,19 @@ function App() {
     () => channels.filter((channel) => favoriteIdSet.has(channel.id)),
     [channels, favoriteIdSet],
   );
+  const resolvedEpgMatchesByChannelId = useMemo(() => {
+    const nextMatches: Record<string, { epgChannel: EpgDirectoryChannel; matchSource: "manual" | "auto" }> = {};
+
+    for (const channel of channels) {
+      const resolvedMatch = resolveEpgChannelMatch(channel, savedMappingsForActiveGuide, epgChannelIndex);
+
+      if (resolvedMatch) {
+        nextMatches[channel.id] = resolvedMatch;
+      }
+    }
+
+    return nextMatches;
+  }, [channels, epgChannelIndex, savedMappingsForActiveGuide]);
   const recentChannels = useMemo(
     () =>
       recentIds
@@ -504,6 +635,31 @@ function App() {
 
     return counts;
   }, [channels]);
+  const guidesByChannelId = useMemo(() => {
+    const nextGuides: Record<string, EpgResolvedGuide> = {};
+
+    for (const channel of channels) {
+      const resolvedMatch = resolvedEpgMatchesByChannelId[channel.id];
+
+      if (!resolvedMatch) {
+        continue;
+      }
+
+      const guideSnapshot = epgSnapshotsByChannelId[resolvedMatch.epgChannel.id];
+
+      nextGuides[channel.id] = {
+        ...resolvedMatch,
+        current: guideSnapshot?.current ?? null,
+        next: guideSnapshot?.next ?? null,
+      };
+    }
+
+    return nextGuides;
+  }, [channels, epgSnapshotsByChannelId, resolvedEpgMatchesByChannelId]);
+  const matchedEpgChannelCount = useMemo(
+    () => Object.keys(resolvedEpgMatchesByChannelId).length,
+    [resolvedEpgMatchesByChannelId],
+  );
 
   function updateHiddenGroups(nextHiddenGroups: string[]) {
     if (!playlistPreferenceKey) {
@@ -582,6 +738,16 @@ function App() {
     );
   }
 
+  const selectedGuide = selectedChannel ? guidesByChannelId[selectedChannel.id] ?? null : null;
+  const visibleEpgChannelIds = [
+    ...new Set(
+      [
+        ...visibleChannels.map((channel) => guidesByChannelId[channel.id]?.epgChannel.id ?? null),
+        selectedChannel ? guidesByChannelId[selectedChannel.id]?.epgChannel.id ?? null : null,
+      ].filter((channelId): channelId is string => channelId !== null),
+    ),
+  ];
+  const visibleEpgChannelIdsKey = visibleEpgChannelIds.join("\u0001");
   const favoritesCount = favoriteChannels.length;
   const groupsCollapsed = playlistPreferenceKey
     ? collapsedGroupsByLibrary[playlistPreferenceKey] ?? false
@@ -593,6 +759,182 @@ function App() {
       ? "Favorites"
       : activeGroup;
   const isFavoritesGroupActive = activeGroup === FAVORITES_GROUP_ID;
+
+  function handleOpenEpgMatcher(channel: Channel) {
+    if (!epgDirectory) {
+      setMessage("Load an EPG guide first, then you can match channels from the right-click menu.");
+      openSettings("epg");
+      return;
+    }
+
+    setMatcherChannel(channel);
+  }
+
+  function handleApplyManualEpgMatch(channel: Channel, epgChannel: EpgDirectoryChannel) {
+    if (!activeEpgMappingScope) {
+      setMessage("Load a source and configure an EPG guide before saving manual matches.");
+      return;
+    }
+
+    setSavedEpgMappings((currentMappings) => {
+      const scopedMappings = {
+        ...(currentMappings[activeEpgMappingScope] ?? {}),
+      };
+
+      for (const mappingKey of getChannelManualMappingKeys(channel)) {
+        scopedMappings[mappingKey] = epgChannel.id;
+      }
+
+      return {
+        ...currentMappings,
+        [activeEpgMappingScope]: scopedMappings,
+      };
+    });
+
+    setMatcherChannel(null);
+    setEpgStatusMessage(`Matched ${channel.name} to ${epgChannel.displayNames[0] ?? epgChannel.id}.`);
+  }
+
+  function handleClearManualEpgMatch(channel: Channel) {
+    if (!activeEpgMappingScope) {
+      return;
+    }
+
+    setSavedEpgMappings((currentMappings) => {
+      const scopedMappings = {
+        ...(currentMappings[activeEpgMappingScope] ?? {}),
+      };
+
+      for (const mappingKey of getChannelManualMappingKeys(channel)) {
+        delete scopedMappings[mappingKey];
+      }
+
+      if (Object.keys(scopedMappings).length === 0) {
+        const nextMappings = { ...currentMappings };
+        delete nextMappings[activeEpgMappingScope];
+        return nextMappings;
+      }
+
+      return {
+        ...currentMappings,
+        [activeEpgMappingScope]: scopedMappings,
+      };
+    });
+
+    setEpgStatusMessage(`Cleared the manual guide match for ${channel.name}.`);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!epgUrlKey) {
+      setEpgDirectory(null);
+      setEpgSnapshotsByChannelId({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void loadEpgCacheDirectory()
+      .then((cachedDirectory) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (cachedDirectory && normalizeEpgUrlKey(cachedDirectory.sourceUrl) === epgUrlKey) {
+          setEpgDirectory(cachedDirectory);
+          setEpgStatusMessage(
+            `Cached guide loaded from ${new Date(cachedDirectory.fetchedAt).toLocaleString()}.`,
+          );
+          return;
+        }
+
+        setEpgDirectory(null);
+        setEpgSnapshotsByChannelId({});
+        setEpgStatusMessage(null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const errorMessage =
+          error instanceof Error ? error.message : "The saved guide cache could not be loaded.";
+        setEpgStatusMessage(errorMessage);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [epgUrlKey]);
+
+  useEffect(() => {
+    if (startupEpgRefreshAttemptedRef.current) {
+      return;
+    }
+
+    startupEpgRefreshAttemptedRef.current = true;
+
+    if (!epgUrlKey || !epgSettings.updateOnStartup) {
+      return;
+    }
+
+    void refreshEpgGuide("startup");
+  }, [epgSettings.updateOnStartup, epgUrlKey]);
+
+  useEffect(() => {
+    if (!epgUrlKey || !epgSettings.autoUpdateEnabled) {
+      return undefined;
+    }
+
+    const intervalMs = Math.max(1, epgSettings.updateIntervalHours) * 60 * 60 * 1000;
+    const timerId = window.setInterval(() => {
+      void refreshEpgGuide("auto");
+    }, intervalMs);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [epgSettings.autoUpdateEnabled, epgSettings.updateIntervalHours, epgUrlKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!epgDirectory || visibleEpgChannelIds.length === 0) {
+      setEpgSnapshotsByChannelId({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void getEpgProgrammeSnapshots(visibleEpgChannelIds)
+      .then((snapshots) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextSnapshots: Record<string, EpgProgrammeSnapshot> = {};
+
+        for (const snapshot of snapshots) {
+          nextSnapshots[snapshot.epgChannelId] = snapshot;
+        }
+
+        setEpgSnapshotsByChannelId(nextSnapshots);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const errorMessage =
+          error instanceof Error ? error.message : "The current guide schedule could not be loaded.";
+        setEpgStatusMessage(errorMessage);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [epgDirectory, visibleEpgChannelIdsKey]);
 
   useEffect(() => {
     if (!playlist) {
@@ -671,6 +1013,7 @@ function App() {
         <PlayerPanel
           player={player}
           selectedChannel={selectedChannel}
+          guide={selectedGuide}
           isFullscreen={isFullscreen}
           playerShellRef={playerShellRef}
           playerSurfaceRef={playerSurfaceRef}
@@ -716,6 +1059,7 @@ function App() {
             <PlayerPanel
               player={player}
               selectedChannel={selectedChannel}
+              guide={selectedGuide}
               isFullscreen={isFullscreen}
               playerShellRef={playerShellRef}
               playerSurfaceRef={playerSurfaceRef}
@@ -748,10 +1092,13 @@ function App() {
               searchQuery={searchQuery}
               favoriteIds={favoriteIds}
               recentIds={recentIds}
+              guidesByChannelId={guidesByChannelId}
+              canMatchEpg={epgDirectory !== null}
               onSearchChange={setSearchQuery}
               onSelectView={setActiveView}
               onSelectChannel={handleSelectChannel}
               onToggleFavorite={handleToggleFavorite}
+              onOpenEpgMatcher={handleOpenEpgMatcher}
             />
           </section>
         </div>
@@ -765,6 +1112,11 @@ function App() {
         channelCountByGroup={channelCountByGroup}
         enabledGroups={enabledGroups}
         hiddenGroups={hiddenGroups}
+        epgSettings={epgSettings}
+        epgDirectory={epgDirectory}
+        matchedEpgChannelCount={matchedEpgChannelCount}
+        isEpgUpdating={isEpgUpdating}
+        epgStatusMessage={epgStatusMessage}
         savedSources={savedSources}
         activeSourceId={activeSourceId}
         collapsedSourceIds={collapsedSourceIds}
@@ -776,6 +1128,10 @@ function App() {
         onEnableAllGroups={handleEnableAllGroups}
         onDisableAllGroups={handleDisableAllGroups}
         onToggleGroup={handleToggleGroup}
+        onUpdateEpgSettings={handleUpdateEpgSettings}
+        onRefreshEpg={() => {
+          void refreshEpgGuide("manual");
+        }}
         onAddM3uProfile={handleAddM3uProfile}
         onAddXtreamProfile={handleAddXtreamProfile}
         onImportFile={(file) => {
@@ -787,6 +1143,16 @@ function App() {
           void handleLoadSavedSource(sourceId);
         }}
         onUpdateSource={handleUpdateSource}
+      />
+
+      <ChannelEpgMatchDialog
+        isOpen={matcherChannel !== null}
+        channel={matcherChannel}
+        epgChannels={epgDirectory?.channels ?? []}
+        currentGuide={matcherChannel ? guidesByChannelId[matcherChannel.id] ?? null : null}
+        onClose={() => setMatcherChannel(null)}
+        onApplyMatch={handleApplyManualEpgMatch}
+        onClearMatch={handleClearManualEpgMatch}
       />
     </main>
   );
