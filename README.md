@@ -116,6 +116,30 @@ Release artifacts are generated in:
 src-tauri/target/release/bundle
 ```
 
+## Donations
+
+If you're enjoying this project, please consider donating. It helps me continue improving it and spending more time on updates, fixes, and new features.
+
+Bitcoin:
+
+```text
+3LYX3oEDCzz5S7oQjPmYQYi7ZGoA5XpCdM
+```
+
+Ethereum:
+
+```text
+0x1246dFAf32E435d79689852A3304ca384A73c1cb
+```
+
+Solana:
+
+```text
+Aqm2mLHikyZ5guTf7pKcaXjNXG69ifrDRY2324h79ony
+```
+
+Thank you for the support.
+
 ## License
 
 This project is licensed under the MIT License.
