@@ -42,17 +42,13 @@ Onyx keeps the first-run experience simple: open Settings, add a source, and sta
 
 ![Onyx home screen](docs/screenshots/home.png)
 
-### Library controls
+### Settings tabs
 
-Hide noisy groups, search large playlists faster, and keep the sidebar focused on the groups you actually want to browse.
+The Settings drawer keeps Library, EPG, and Sources side by side so you can manage browsing, guide data, and saved logins from one place.
 
-![Onyx library settings](docs/screenshots/library-settings.png)
-
-### Saved sources
-
-Add M3U files, remote M3U URLs, or Xtream accounts once and reopen them later without retyping everything every time you launch the app.
-
-![Onyx saved sources](docs/screenshots/saved-sources.png)
+| Library | EPG | Sources |
+| --- | --- | --- |
+| ![Onyx library settings](docs/screenshots/library-settings.png) | ![Onyx EPG settings](docs/screenshots/epg-settings.png) | ![Onyx saved sources](docs/screenshots/saved-sources.png) |
 
 ## Privacy
 
