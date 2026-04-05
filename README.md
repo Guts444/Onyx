@@ -1,6 +1,6 @@
 # Onyx
 
-Onyx is a local-first Windows IPTV player with native `libmpv` playback, saved source profiles, favorites, recents, XMLTV EPG support, and a cleaner browsing experience than raw playlist links and browser tabs.
+Onyx is a local-first Windows IPTV player with native `libmpv` playback, saved source profiles, favorites, recents, multi-source XMLTV EPG support, and a cleaner browsing experience than raw playlist links and browser tabs.
 
 Built with Tauri, React, and TypeScript.
 
@@ -24,9 +24,9 @@ Those requirements only apply if you want to build Onyx from source.
 - Local `.m3u` / `.m3u8` import
 - Remote M3U URL import
 - Xtream live login import
-- XMLTV EPG integration
+- Multi-source XMLTV EPG integration
 - Manual per-channel EPG matching with saved mappings
-- EPG refresh controls with update now, auto update, and update on startup
+- Per-guide EPG refresh controls with update now, auto update, and update on startup
 - Pinned Favorites group
 - Library-wide Recents view
 - Saved source profiles
@@ -60,7 +60,7 @@ Saved M3U URLs, Xtream details, EPG settings, guide mappings, favorites, recents
 
 - Sources: import local playlist files, remote M3U playlist URLs, and Xtream accounts, then save multiple source profiles locally.
 - Library: browse channels by group, keep Favorites pinned at the top, view Recents across the whole loaded source, hide noisy groups, search groups, and collapse the current source from the sidebar.
-- EPG: load XMLTV guides from a URL, refresh them on demand or on a schedule, manually match channels when automatic lookup is not enough, and keep those matches after restarting the app.
+- EPG: load one or more XMLTV guides, enable or disable each guide independently, refresh them on demand or on a schedule, manually match channels when automatic lookup is not enough, and keep those matches after restarting the app.
 - Player: native `libmpv` playback with reload, stop, mute, volume, and fullscreen controls, plus startup restore for the last channel and volume.
 
 ## Local Data
@@ -69,9 +69,9 @@ Onyx stores this locally on your machine:
 
 - saved M3U URLs
 - saved Xtream credentials
-- saved EPG URL and refresh settings
+- saved EPG sources and per-guide refresh settings
 - saved EPG channel mappings
-- cached guide data
+- cached guide data per source
 - favorites
 - recents
 - last selected channel

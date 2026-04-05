@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { EpgDirectoryChannel, EpgResolvedGuide } from "../domain/epg";
+import { getEpgSourceLabel, type EpgDirectoryChannel, type EpgResolvedGuide } from "../domain/epg";
 import type { Channel } from "../domain/iptv";
 import { searchEpgChannelsForChannel } from "../features/epg/matching";
 
@@ -58,7 +58,7 @@ export function ChannelEpgMatchDialog({
           <div>
             <span className="settings-drawer__eyebrow">EPG Match</span>
             <h2 id="epg-match-title">{channel.name}</h2>
-            <p>Pick the guide entry that should drive now and next data for this channel. The saved choice will load automatically next time you open Onyx.</p>
+            <p>Pick the guide entry that should drive now and next data for this channel. Enabled guide feeds are combined below so you can choose the correct country or provider listing.</p>
           </div>
 
           <button type="button" className="settings-close" onClick={onClose} aria-label="Close guide matcher">
@@ -69,7 +69,8 @@ export function ChannelEpgMatchDialog({
         {currentGuide ? (
           <div className="settings-notice">
             Current match: <strong>{currentGuide.epgChannel.displayNames[0] ?? currentGuide.epgChannel.id}</strong>{" "}
-            ({currentGuide.matchSource === "manual" ? "manual" : "auto"}).
+            from <strong>{getEpgSourceLabel(currentGuide.epgChannel.sourceUrl)}</strong> (
+            {currentGuide.matchSource === "manual" ? "manual" : "auto"}).
           </div>
         ) : null}
 
@@ -96,7 +97,7 @@ export function ChannelEpgMatchDialog({
         </div>
 
         <div className="channel-match-hint">
-          Scroll through the results or search by the channel name, `tvg-name`, or the XMLTV channel id.
+          Search by the channel name, `tvg-name`, XMLTV channel id, or scan the combined enabled guides until you find the right source.
         </div>
 
         <div className="settings-list">
@@ -108,17 +109,21 @@ export function ChannelEpgMatchDialog({
           ) : null}
 
           {visibleChannels.map((epgChannel) => {
-            const isCurrentMatch = currentGuide?.epgChannel.id === epgChannel.id;
+            const isCurrentMatch = currentGuide?.epgChannel.uniqueId === epgChannel.uniqueId;
             const isCurrentManualMatch =
               isCurrentMatch && currentGuide?.matchSource === "manual";
 
             return (
-              <article key={epgChannel.id} className="settings-list__item settings-list__item--stacked">
+              <article
+                key={epgChannel.uniqueId}
+                className="settings-list__item settings-list__item--stacked"
+              >
                 <div className="settings-list__copy">
                   <strong>{epgChannel.displayNames[0] ?? epgChannel.id}</strong>
                   <span>{epgChannel.id}</span>
+                  <span>{getEpgSourceLabel(epgChannel.sourceUrl)}</span>
                   {epgChannel.displayNames.slice(1, 4).map((displayName) => (
-                    <span key={displayName}>{displayName}</span>
+                    <span key={`${epgChannel.uniqueId}\u0001${displayName}`}>{displayName}</span>
                   ))}
                 </div>
 

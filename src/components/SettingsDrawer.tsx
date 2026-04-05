@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { EpgDirectoryResponse, EpgSettings } from "../domain/epg";
+import type { EpgDirectoryResponse, EpgSource } from "../domain/epg";
 import type { PlaylistImport } from "../domain/iptv";
 import type { SavedPlaylistSource } from "../domain/sourceProfiles";
 import { EpgSettingsPanel } from "./EpgSettingsPanel";
@@ -15,10 +15,10 @@ interface SettingsDrawerProps {
   channelCountByGroup: Record<string, number>;
   enabledGroups: string[];
   hiddenGroups: string[];
-  epgSettings: EpgSettings;
-  epgDirectory: EpgDirectoryResponse | null;
+  epgSources: EpgSource[];
+  epgDirectoriesByUrlKey: Record<string, EpgDirectoryResponse>;
   matchedEpgChannelCount: number;
-  isEpgUpdating: boolean;
+  updatingEpgSourceIds: string[];
   epgStatusMessage: string | null;
   savedSources: SavedPlaylistSource[];
   activeSourceId: string | null;
@@ -31,8 +31,12 @@ interface SettingsDrawerProps {
   onEnableAllGroups: () => void;
   onDisableAllGroups: () => void;
   onToggleGroup: (group: string) => void;
-  onUpdateEpgSettings: (patch: Partial<EpgSettings>) => void;
-  onRefreshEpg: () => void;
+  onAddEpgSource: () => void;
+  onToggleEpgSourceEnabled: (sourceId: string) => void;
+  onRemoveEpgSource: (sourceId: string) => void;
+  onUpdateEpgSource: (sourceId: string, patch: Partial<EpgSource>) => void;
+  onRefreshEpgSource: (sourceId: string) => void;
+  onRefreshEnabledEpgSources: () => void;
   onAddM3uProfile: () => void;
   onAddXtreamProfile: () => void;
   onImportFile: (file: File) => void;
@@ -50,10 +54,10 @@ export function SettingsDrawer({
   channelCountByGroup,
   enabledGroups,
   hiddenGroups,
-  epgSettings,
-  epgDirectory,
+  epgSources,
+  epgDirectoriesByUrlKey,
   matchedEpgChannelCount,
-  isEpgUpdating,
+  updatingEpgSourceIds,
   epgStatusMessage,
   savedSources,
   activeSourceId,
@@ -66,8 +70,12 @@ export function SettingsDrawer({
   onEnableAllGroups,
   onDisableAllGroups,
   onToggleGroup,
-  onUpdateEpgSettings,
-  onRefreshEpg,
+  onAddEpgSource,
+  onToggleEpgSourceEnabled,
+  onRemoveEpgSource,
+  onUpdateEpgSource,
+  onRefreshEpgSource,
+  onRefreshEnabledEpgSources,
   onAddM3uProfile,
   onAddXtreamProfile,
   onImportFile,
@@ -110,7 +118,7 @@ export function SettingsDrawer({
               {activeTab === "library"
                 ? `Choose which groups should appear in the main channel browser for ${playlistDisplayName ?? "the current library"}.`
                 : activeTab === "epg"
-                ? "Guide data is cached locally so matched channels keep their now and next information after you reopen the app."
+                ? "Guide data is cached locally per XMLTV source, and enabled guides are merged together when you match channels."
                 : "Saved source details stay local on this machine so you can reopen the app without typing them again."}
             </p>
           </div>
@@ -228,13 +236,17 @@ export function SettingsDrawer({
           )
         ) : activeTab === "epg" ? (
           <EpgSettingsPanel
-            settings={epgSettings}
-            epgDirectory={epgDirectory}
+            sources={epgSources}
+            directoriesByUrlKey={epgDirectoriesByUrlKey}
             matchedChannelCount={matchedEpgChannelCount}
-            isUpdating={isEpgUpdating}
+            updatingSourceIds={updatingEpgSourceIds}
             statusMessage={epgStatusMessage}
-            onUpdateSettings={onUpdateEpgSettings}
-            onRefresh={onRefreshEpg}
+            onAddSource={onAddEpgSource}
+            onToggleSourceEnabled={onToggleEpgSourceEnabled}
+            onRemoveSource={onRemoveEpgSource}
+            onUpdateSource={onUpdateEpgSource}
+            onRefreshSource={onRefreshEpgSource}
+            onRefreshEnabledSources={onRefreshEnabledEpgSources}
           />
         ) : (
           <SourceProfilesPanel
