@@ -3,7 +3,6 @@ import type {
   SavedPlaylistSource,
   SavedXtreamSource,
 } from "../../domain/sourceProfiles";
-import { hashString } from "../../utils/hash";
 
 interface BaseSourceDraft<K extends SavedPlaylistSource["kind"]> {
   id: string;
