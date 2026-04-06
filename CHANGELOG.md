@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.0
+
+- **Under the Hood / Security**: Upgraded to Tauri v2 project structure and implemented robust source profile management logic.
+- **Speed & Efficiency**: Significantly optimized EPG loop processing and channel lookups.
+- **UX Improvements**: Implemented lazy guide lookups for much faster initial loads and snappier UI responsiveness.
+- **Code Health**: Removed dead code, unused legacy functions, and refactored ID generation pipelines.
+
 ## v0.3.0
 
 - Added support for saving and using multiple XMLTV EPG sources at the same time.
