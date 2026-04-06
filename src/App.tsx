@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelEpgMatchDialog } from "./components/ChannelEpgMatchDialog";
 import { ChannelShelf } from "./components/ChannelShelf";
 import { ChannelSidebar } from "./components/ChannelSidebar";
@@ -46,6 +46,7 @@ import {
   updateSourceProfile,
 } from "./features/sources/profiles";
 import { usePersistentState } from "./hooks/usePersistentState";
+import { hashString } from "./utils/hash";
 import "./App.css";
 
 const FAVORITES_STORAGE_KEY = "iptv-player:favorites";
@@ -91,17 +92,6 @@ function pushRecentId(recentIds: string[], channelId: string) {
   }
 
   return nextIds;
-}
-
-function hashString(source: string) {
-  let hash = 0;
-
-  for (const character of source) {
-    hash = (hash << 5) - hash + character.charCodeAt(0);
-    hash |= 0;
-  }
-
-  return Math.abs(hash).toString(36);
 }
 
 function getPlaylistPreferenceKey(playlist: PlaylistImport | null) {
@@ -202,9 +192,19 @@ function App() {
     COLLAPSED_SOURCE_CARDS_STORAGE_KEY,
     [],
   );
-  const [savedSources, setSavedSources] = usePersistentState<SavedPlaylistSource[]>(
+  const [savedSources, setSavedSources] = usePersistentState<Record<string, SavedPlaylistSource>>(
     SAVED_SOURCES_STORAGE_KEY,
-    [],
+    {},
+    (parsedValue) => {
+      if (Array.isArray(parsedValue)) {
+        const record: Record<string, SavedPlaylistSource> = {};
+        for (const source of parsedValue) {
+          record[source.id] = source as SavedPlaylistSource;
+        }
+        return record;
+      }
+      return parsedValue as Record<string, SavedPlaylistSource>;
+    }
   );
   const [activeSourceId, setActiveSourceId] = usePersistentState<string | null>(
     ACTIVE_SOURCE_STORAGE_KEY,
@@ -435,15 +435,20 @@ function App() {
         playlistSnapshot?.sourceId === source.id ? playlistSnapshot.selectedChannelId : null,
       preservePlaybackSession: options?.preservePlaybackSession,
     });
-    setSavedSources((currentSources) =>
-      currentSources.map((currentSource) =>
-        currentSource.id === source.id ? markSourceLoaded(currentSource) : currentSource,
-      ),
-    );
+    setSavedSources((currentSources) => {
+      const currentSource = currentSources[source.id];
+      if (!currentSource) return currentSources;
+      return {
+        ...currentSources,
+        [source.id]: markSourceLoaded(currentSource),
+      };
+    });
   }
 
   const startupSourceToRestore =
-    savedSources.find((source) => source.id === activeSourceId && isSourceProfileReady(source)) ?? null;
+    activeSourceId && savedSources[activeSourceId] && isSourceProfileReady(savedSources[activeSourceId])
+      ? savedSources[activeSourceId]
+      : null;
   const shouldDelayResumeForStartupRestore =
     !startupRestoreAttemptedRef.current && startupSourceToRestore !== null;
 
@@ -570,7 +575,7 @@ function App() {
   }
 
   async function handleLoadSavedSource(sourceId: string) {
-    const source = savedSources.find((currentSource) => currentSource.id === sourceId);
+    const source = savedSources[sourceId];
 
     if (!source) {
       return;
@@ -595,31 +600,43 @@ function App() {
   }
 
   function handleAddM3uProfile() {
-    setSavedSources((currentSources) => [...currentSources, createM3uUrlSource()]);
+    const newSource = createM3uUrlSource();
+    setSavedSources((currentSources) => ({
+      ...currentSources,
+      [newSource.id]: newSource,
+    }));
   }
 
   function handleAddXtreamProfile() {
-    setSavedSources((currentSources) => [...currentSources, createXtreamSource()]);
+    const newSource = createXtreamSource();
+    setSavedSources((currentSources) => ({
+      ...currentSources,
+      [newSource.id]: newSource,
+    }));
   }
 
   function handleToggleSourceEnabled(sourceId: string) {
-    setSavedSources((currentSources) =>
-      currentSources.map((source) =>
-        source.id === sourceId
-          ? updateSourceProfile(source, {
-              enabled: !source.enabled,
-            })
-          : source,
-      ),
-    );
+    setSavedSources((currentSources) => {
+      const source = currentSources[sourceId];
+      if (!source) return currentSources;
+      return {
+        ...currentSources,
+        [sourceId]: updateSourceProfile(source, {
+          enabled: !source.enabled,
+        }),
+      };
+    });
   }
 
   function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
-    setSavedSources((currentSources) =>
-      currentSources.map((source) =>
-        source.id === sourceId ? updateSourceProfile(source, patch) : source,
-      ),
-    );
+    setSavedSources((currentSources) => {
+      const source = currentSources[sourceId];
+      if (!source) return currentSources;
+      return {
+        ...currentSources,
+        [sourceId]: updateSourceProfile(source, patch),
+      };
+    });
   }
 
   function openSettings(tab: SettingsTab) {
@@ -819,8 +836,15 @@ function App() {
   );
 
   const channels = playlist?.channels ?? [];
+  const channelsById = useMemo(() => {
+    const map = new Map<string, Channel>();
+    for (const channel of channels) {
+      map.set(channel.id, channel);
+    }
+    return map;
+  }, [channels]);
   const allGroups = playlist?.groups ?? [];
-  const activeSource = savedSources.find((source) => source.id === activeSourceId) ?? null;
+  const activeSource = activeSourceId ? savedSources[activeSourceId] ?? null : null;
   const playlistEpgScope = getEpgPlaylistScope(activeSourceId, playlist);
   const savedMappingsForEnabledGuides = useMemo(
     () =>
@@ -865,7 +889,7 @@ function App() {
         : playlist.name
       : null;
   const selectedChannel =
-    channels.find((channel) => channel.id === selectedChannelId) ?? channels[0] ?? null;
+    (selectedChannelId !== null ? channelsById.get(selectedChannelId) : null) ?? channels[0] ?? null;
   const normalizedSearchQuery = deferredSearchQuery.trim().toLowerCase();
   const playlistPreferenceKey = getPlaylistPreferenceKey(playlist);
   const hiddenGroups = playlistPreferenceKey ? hiddenGroupsByLibrary[playlistPreferenceKey] ?? [] : [];
@@ -901,9 +925,9 @@ function App() {
   const recentChannels = useMemo(
     () =>
       recentIds
-        .map((recentId) => channels.find((channel) => channel.id === recentId) ?? null)
+        .map((recentId) => channelsById.get(recentId) ?? null)
         .filter((channel): channel is Channel => channel !== null),
-    [channels, recentIds],
+    [channelsById, recentIds],
   );
   const channelCountByGroup = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -914,31 +938,26 @@ function App() {
 
     return counts;
   }, [channels]);
-  const guidesByChannelId = useMemo(() => {
-    const nextGuides: Record<string, EpgResolvedGuide> = {};
+  const getGuideByChannelId = useCallback((channelId: string): EpgResolvedGuide | null => {
+    const resolvedMatch = resolvedEpgMatchesByChannelId[channelId];
 
-    for (const channel of channels) {
-      const resolvedMatch = resolvedEpgMatchesByChannelId[channel.id];
-
-      if (!resolvedMatch) {
-        continue;
-      }
-
-      const guideSnapshot = epgSnapshotsByChannelKey[resolvedMatch.epgChannel.uniqueId];
-
-      nextGuides[channel.id] = {
-        ...resolvedMatch,
-        current: guideSnapshot?.current ?? null,
-        next: guideSnapshot?.next ?? null,
-      };
+    if (!resolvedMatch) {
+      return null;
     }
 
-    return nextGuides;
-  }, [channels, epgSnapshotsByChannelKey, resolvedEpgMatchesByChannelId]);
+    const guideSnapshot = epgSnapshotsByChannelKey[resolvedMatch.epgChannel.uniqueId];
+
+    return {
+      ...resolvedMatch,
+      current: guideSnapshot?.current ?? null,
+      next: guideSnapshot?.next ?? null,
+    };
+  }, [epgSnapshotsByChannelKey, resolvedEpgMatchesByChannelId]);
   const matchedEpgChannelCount = useMemo(
     () => Object.keys(resolvedEpgMatchesByChannelId).length,
     [resolvedEpgMatchesByChannelId],
   );
+  const savedSourcesList = useMemo(() => Object.values(savedSources), [savedSources]);
 
   function updateHiddenGroups(nextHiddenGroups: string[]) {
     if (!playlistPreferenceKey) {
@@ -1030,11 +1049,11 @@ function App() {
     normalizedSearchQuery,
   ]);
 
-  const selectedGuide = selectedChannel ? guidesByChannelId[selectedChannel.id] ?? null : null;
+  const selectedGuide = selectedChannel ? getGuideByChannelId(selectedChannel.id) ?? null : null;
   const visibleEpgChannelKeys = [
     ...new Set(
       [
-        ...visibleChannels.map((channel) => guidesByChannelId[channel.id]?.epgChannel.uniqueId ?? null),
+        ...visibleChannels.map((channel) => getGuideByChannelId(channel.id)?.epgChannel.uniqueId ?? null),
         selectedGuide?.epgChannel.uniqueId ?? null,
       ].filter((channelKey): channelKey is string => channelKey !== null),
     ),
@@ -1330,7 +1349,7 @@ function App() {
     }
 
     const channelToResume =
-      playlist.channels.find((channel) => channel.id === playbackSession.channelId) ?? null;
+      (playbackSession.channelId !== null ? channelsById.get(playbackSession.channelId) : null) ?? null;
 
     if (!channelToResume || !channelToResume.isPlayable) {
       return;
@@ -1359,6 +1378,7 @@ function App() {
     });
   }, [
     activeSourceId,
+    channelsById,
     isRestoringStartupSource,
     playbackSession,
     player.environment,
@@ -1454,7 +1474,7 @@ function App() {
               searchQuery={searchQuery}
               favoriteIdSet={favoriteIdSet}
               recentIdSet={recentIdSet}
-              guidesByChannelId={guidesByChannelId}
+              getGuideByChannelId={getGuideByChannelId}
               canMatchEpg={enabledEpgChannels.length > 0}
               onSearchChange={setSearchQuery}
               onSelectView={setActiveView}
@@ -1479,7 +1499,7 @@ function App() {
         matchedEpgChannelCount={matchedEpgChannelCount}
         updatingEpgSourceIds={updatingEpgSourceIds}
         epgStatusMessage={epgStatusMessage}
-        savedSources={savedSources}
+        savedSources={savedSourcesList}
         activeSourceId={activeSourceId}
         collapsedSourceIds={collapsedSourceIds}
         loadingSourceId={loadingSourceId}
@@ -1517,7 +1537,7 @@ function App() {
         isOpen={matcherChannel !== null}
         channel={matcherChannel}
         epgChannels={enabledEpgChannels}
-        currentGuide={matcherChannel ? guidesByChannelId[matcherChannel.id] ?? null : null}
+        currentGuide={matcherChannel ? getGuideByChannelId(matcherChannel.id) ?? null : null}
         onClose={() => setMatcherChannel(null)}
         onApplyMatch={handleApplyManualEpgMatch}
         onClearMatch={handleClearManualEpgMatch}

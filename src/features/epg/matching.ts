@@ -28,29 +28,14 @@ interface ScopedManualMappings {
   mappings: Record<string, string>;
 }
 
-function addNameCandidate(
+function addCandidate(
   target: Map<string, EpgDirectoryChannel[]>,
   key: string,
   value: EpgDirectoryChannel,
 ) {
   const existing = target.get(key);
 
-  if (existing) {
-    existing.push(value);
-    return;
-  }
-
-  target.set(key, [value]);
-}
-
-function addIdCandidate(
-  target: Map<string, EpgDirectoryChannel[]>,
-  key: string,
-  value: EpgDirectoryChannel,
-) {
-  const existing = target.get(key);
-
-  if (existing) {
+  if (existing !== undefined) {
     existing.push(value);
     return;
   }
@@ -78,18 +63,17 @@ function buildLookupVariants(value: string | null | undefined) {
     return [];
   }
 
-  const variants = new Set([normalizedValue]);
   const strippedNoiseValue = normalizedValue
     .split(" ")
     .filter((token) => token.length > 0 && !GUIDE_NOISE_TOKENS.has(token))
     .join(" ")
     .trim();
 
-  if (strippedNoiseValue) {
-    variants.add(strippedNoiseValue);
+  if (strippedNoiseValue && strippedNoiseValue !== normalizedValue) {
+    return [normalizedValue, strippedNoiseValue];
   }
 
-  return [...variants];
+  return [normalizedValue];
 }
 
 function getUniqueCandidate(candidates: EpgDirectoryChannel[] | undefined) {
@@ -220,10 +204,6 @@ export function createEpgMappingScope(scopeId: string, epgUrl: string) {
   return `${normalizeEpgUrlKey(epgUrl)}\u0001${scopeId}`;
 }
 
-export function createEpgChannelKey(sourceUrl: string, channelId: string) {
-  return `${normalizeEpgUrlKey(sourceUrl)}\u0001${channelId.trim()}`;
-}
-
 export function createEpgChannelIndex(channels: EpgDirectoryChannel[]): EpgChannelIndex {
   const idIndex = new Map<string, EpgDirectoryChannel[]>();
   const nameIndex = new Map<string, EpgDirectoryChannel[]>();
@@ -236,24 +216,23 @@ export function createEpgChannelIndex(channels: EpgDirectoryChannel[]): EpgChann
     uniqueIdIndex.set(channel.uniqueId, channel);
 
     for (const variant of buildLookupVariants(channel.id)) {
-      addIdCandidate(idIndex, variant, channel);
+      addCandidate(idIndex, variant, channel);
     }
 
     for (const displayName of channel.displayNames) {
       for (const variant of buildLookupVariants(displayName)) {
-        addNameCandidate(nameIndex, variant, channel);
+        addCandidate(nameIndex, variant, channel);
       }
     }
 
-    if (!sourceIdIndex.has(sourceUrlKey)) {
-      sourceIdIndex.set(sourceUrlKey, new Map<string, EpgDirectoryChannel>());
+    let scopedIndex = sourceIdIndex.get(sourceUrlKey);
+
+    if (scopedIndex === undefined) {
+      scopedIndex = new Map<string, EpgDirectoryChannel>();
+      sourceIdIndex.set(sourceUrlKey, scopedIndex);
     }
 
-    const scopedIndex = sourceIdIndex.get(sourceUrlKey);
-
-    if (scopedIndex) {
-      scopedIndex.set(normalizeEpgLookupText(channel.id), channel);
-    }
+    scopedIndex.set(normalizeEpgLookupText(channel.id), channel);
   }
 
   return {
