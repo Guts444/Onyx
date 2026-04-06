@@ -819,6 +819,13 @@ function App() {
   );
 
   const channels = playlist?.channels ?? [];
+  const channelsById = useMemo(() => {
+    const map = new Map<string, Channel>();
+    for (const channel of channels) {
+      map.set(channel.id, channel);
+    }
+    return map;
+  }, [channels]);
   const allGroups = playlist?.groups ?? [];
   const activeSource = savedSources.find((source) => source.id === activeSourceId) ?? null;
   const playlistEpgScope = getEpgPlaylistScope(activeSourceId, playlist);
@@ -865,7 +872,7 @@ function App() {
         : playlist.name
       : null;
   const selectedChannel =
-    channels.find((channel) => channel.id === selectedChannelId) ?? channels[0] ?? null;
+    (selectedChannelId !== null ? channelsById.get(selectedChannelId) : null) ?? channels[0] ?? null;
   const normalizedSearchQuery = deferredSearchQuery.trim().toLowerCase();
   const playlistPreferenceKey = getPlaylistPreferenceKey(playlist);
   const hiddenGroups = playlistPreferenceKey ? hiddenGroupsByLibrary[playlistPreferenceKey] ?? [] : [];
@@ -901,9 +908,9 @@ function App() {
   const recentChannels = useMemo(
     () =>
       recentIds
-        .map((recentId) => channels.find((channel) => channel.id === recentId) ?? null)
+        .map((recentId) => channelsById.get(recentId) ?? null)
         .filter((channel): channel is Channel => channel !== null),
-    [channels, recentIds],
+    [channelsById, recentIds],
   );
   const channelCountByGroup = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1304,7 +1311,7 @@ function App() {
     }
 
     const channelToResume =
-      playlist.channels.find((channel) => channel.id === playbackSession.channelId) ?? null;
+      (playbackSession.channelId !== null ? channelsById.get(playbackSession.channelId) : null) ?? null;
 
     if (!channelToResume || !channelToResume.isPlayable) {
       return;
@@ -1333,6 +1340,7 @@ function App() {
     });
   }, [
     activeSourceId,
+    channelsById,
     isRestoringStartupSource,
     playbackSession,
     player.environment,
