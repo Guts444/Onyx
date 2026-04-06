@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelEpgMatchDialog } from "./components/ChannelEpgMatchDialog";
 import { ChannelShelf } from "./components/ChannelShelf";
 import { ChannelSidebar } from "./components/ChannelSidebar";
@@ -914,27 +914,21 @@ function App() {
 
     return counts;
   }, [channels]);
-  const guidesByChannelId = useMemo(() => {
-    const nextGuides: Record<string, EpgResolvedGuide> = {};
+  const getGuideByChannelId = useCallback((channelId: string): EpgResolvedGuide | null => {
+    const resolvedMatch = resolvedEpgMatchesByChannelId[channelId];
 
-    for (const channel of channels) {
-      const resolvedMatch = resolvedEpgMatchesByChannelId[channel.id];
-
-      if (!resolvedMatch) {
-        continue;
-      }
-
-      const guideSnapshot = epgSnapshotsByChannelKey[resolvedMatch.epgChannel.uniqueId];
-
-      nextGuides[channel.id] = {
-        ...resolvedMatch,
-        current: guideSnapshot?.current ?? null,
-        next: guideSnapshot?.next ?? null,
-      };
+    if (!resolvedMatch) {
+      return null;
     }
 
-    return nextGuides;
-  }, [channels, epgSnapshotsByChannelKey, resolvedEpgMatchesByChannelId]);
+    const guideSnapshot = epgSnapshotsByChannelKey[resolvedMatch.epgChannel.uniqueId];
+
+    return {
+      ...resolvedMatch,
+      current: guideSnapshot?.current ?? null,
+      next: guideSnapshot?.next ?? null,
+    };
+  }, [epgSnapshotsByChannelKey, resolvedEpgMatchesByChannelId]);
   const matchedEpgChannelCount = useMemo(
     () => Object.keys(resolvedEpgMatchesByChannelId).length,
     [resolvedEpgMatchesByChannelId],
@@ -1030,11 +1024,11 @@ function App() {
     normalizedSearchQuery,
   ]);
 
-  const selectedGuide = selectedChannel ? guidesByChannelId[selectedChannel.id] ?? null : null;
+  const selectedGuide = selectedChannel ? getGuideByChannelId(selectedChannel.id) ?? null : null;
   const visibleEpgChannelKeys = [
     ...new Set(
       [
-        ...visibleChannels.map((channel) => guidesByChannelId[channel.id]?.epgChannel.uniqueId ?? null),
+        ...visibleChannels.map((channel) => getGuideByChannelId(channel.id)?.epgChannel.uniqueId ?? null),
         selectedGuide?.epgChannel.uniqueId ?? null,
       ].filter((channelKey): channelKey is string => channelKey !== null),
     ),
@@ -1428,7 +1422,7 @@ function App() {
               searchQuery={searchQuery}
               favoriteIdSet={favoriteIdSet}
               recentIdSet={recentIdSet}
-              guidesByChannelId={guidesByChannelId}
+              getGuideByChannelId={getGuideByChannelId}
               canMatchEpg={enabledEpgChannels.length > 0}
               onSearchChange={setSearchQuery}
               onSelectView={setActiveView}
@@ -1491,7 +1485,7 @@ function App() {
         isOpen={matcherChannel !== null}
         channel={matcherChannel}
         epgChannels={enabledEpgChannels}
-        currentGuide={matcherChannel ? guidesByChannelId[matcherChannel.id] ?? null : null}
+        currentGuide={matcherChannel ? getGuideByChannelId(matcherChannel.id) ?? null : null}
         onClose={() => setMatcherChannel(null)}
         onApplyMatch={handleApplyManualEpgMatch}
         onClearMatch={handleClearManualEpgMatch}
