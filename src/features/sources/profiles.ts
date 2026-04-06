@@ -95,13 +95,6 @@ export function isSourceProfileReady(source: SavedPlaylistSource) {
   );
 }
 
-export function touchSource(source: SavedPlaylistSource) {
-  return {
-    ...source,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
 export function markSourceLoaded(source: SavedPlaylistSource) {
   const timestamp = new Date().toISOString();
 
