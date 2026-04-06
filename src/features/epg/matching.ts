@@ -149,11 +149,10 @@ function getChannelIdentityTerms(channel: Channel) {
 }
 
 function getSearchScore(
-  channel: Channel,
+  identityTerms: Set<string>,
   epgChannel: EpgDirectoryChannel,
   normalizedQuery: string,
 ) {
-  const identityTerms = getChannelIdentityTerms(channel);
   const candidates = [epgChannel.id, ...epgChannel.displayNames];
   let bestScore = 0;
 
@@ -318,10 +317,14 @@ export function searchEpgChannelsForChannel(
 ) {
   const normalizedQuery = normalizeEpgLookupText(searchQuery);
 
+  // OPTIMIZATION: Hoisted outside the iteration over the potentially large epgChannels array
+  // so we don't redundantly recompute identity terms per channel mapped.
+  const identityTerms = getChannelIdentityTerms(channel);
+
   return epgChannels
     .map((epgChannel) => ({
       epgChannel,
-      score: getSearchScore(channel, epgChannel, normalizedQuery),
+      score: getSearchScore(identityTerms, epgChannel, normalizedQuery),
     }))
     .filter(({ score }) => score > 0 || normalizedQuery.length === 0)
     .sort((left, right) => {
