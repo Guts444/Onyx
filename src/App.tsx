@@ -46,6 +46,7 @@ import {
   updateSourceProfile,
 } from "./features/sources/profiles";
 import { usePersistentState } from "./hooks/usePersistentState";
+import { hashString } from "./utils/hash";
 import "./App.css";
 
 const FAVORITES_STORAGE_KEY = "iptv-player:favorites";
@@ -91,17 +92,6 @@ function pushRecentId(recentIds: string[], channelId: string) {
   }
 
   return nextIds;
-}
-
-function hashString(source: string) {
-  let hash = 0;
-
-  for (const character of source) {
-    hash = (hash << 5) - hash + character.charCodeAt(0);
-    hash |= 0;
-  }
-
-  return Math.abs(hash).toString(36);
 }
 
 function getPlaylistPreferenceKey(playlist: PlaylistImport | null) {
