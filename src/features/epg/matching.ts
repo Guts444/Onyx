@@ -204,10 +204,6 @@ export function createEpgMappingScope(scopeId: string, epgUrl: string) {
   return `${normalizeEpgUrlKey(epgUrl)}\u0001${scopeId}`;
 }
 
-export function createEpgChannelKey(sourceUrl: string, channelId: string) {
-  return `${normalizeEpgUrlKey(sourceUrl)}\u0001${channelId.trim()}`;
-}
-
 export function createEpgChannelIndex(channels: EpgDirectoryChannel[]): EpgChannelIndex {
   const idIndex = new Map<string, EpgDirectoryChannel[]>();
   const nameIndex = new Map<string, EpgDirectoryChannel[]>();
