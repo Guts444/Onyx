@@ -4,6 +4,26 @@ import type {
   SavedXtreamSource,
 } from "../../domain/sourceProfiles";
 
+const hashCache = new Map<string, string>();
+
+function hashString(source: string) {
+  const cached = hashCache.get(source);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  let hash = 0;
+
+  for (const character of source) {
+    hash = (hash << 5) - hash + character.charCodeAt(0);
+    hash |= 0;
+  }
+
+  const result = Math.abs(hash).toString(36);
+  hashCache.set(source, result);
+  return result;
+}
+
 interface BaseSourceDraft<K extends SavedPlaylistSource["kind"]> {
   id: string;
   kind: K;
