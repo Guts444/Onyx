@@ -1,27 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { normalizeEpgUrlKey } from "./matching.ts";
+import { normalizeEpgLookupText } from "./matching.ts";
 
-test("normalizeEpgUrlKey returns empty string for empty or whitespace input", () => {
-  assert.strictEqual(normalizeEpgUrlKey(""), "");
-  assert.strictEqual(normalizeEpgUrlKey("   "), "");
-  assert.strictEqual(normalizeEpgUrlKey("\t\n"), "");
+test("normalizeEpgLookupText handles empty or nullish inputs", () => {
+  assert.strictEqual(normalizeEpgLookupText(null), "");
+  assert.strictEqual(normalizeEpgLookupText(undefined), "");
+  assert.strictEqual(normalizeEpgLookupText(""), "");
 });
 
-test("normalizeEpgUrlKey strips 'xmltv:' prefix and trims whitespace", () => {
-  assert.strictEqual(normalizeEpgUrlKey("xmltv:http://example.com/epg.xml"), "http://example.com/epg.xml");
-  assert.strictEqual(normalizeEpgUrlKey("XMLTV:http://example.com/epg.xml"), "http://example.com/epg.xml");
-  assert.strictEqual(normalizeEpgUrlKey("xmltv : http://example.com/epg.xml"), "http://example.com/epg.xml");
-  assert.strictEqual(normalizeEpgUrlKey("  xmltv: http://example.com/epg.xml  "), "http://example.com/epg.xml");
+test("normalizeEpgLookupText removes diacritics and converts to lowercase", () => {
+  assert.strictEqual(normalizeEpgLookupText("Café"), "cafe");
+  assert.strictEqual(normalizeEpgLookupText("reçu"), "recu");
+  assert.strictEqual(normalizeEpgLookupText("Müller"), "muller");
 });
 
-test("normalizeEpgUrlKey normalizes valid URLs to lowercase", () => {
-  assert.strictEqual(normalizeEpgUrlKey("HTTP://EXAMPLE.COM/EPG.XML"), "http://example.com/epg.xml");
-  assert.strictEqual(normalizeEpgUrlKey("https://Example.com/Path?Query=1"), "https://example.com/path?query=1");
+test("normalizeEpgLookupText replaces non-alphanumeric characters with spaces and trims", () => {
+  assert.strictEqual(normalizeEpgLookupText("BBC One (HD)"), "bbc one hd");
+  assert.strictEqual(normalizeEpgLookupText("Channel-1"), "channel 1");
+  assert.strictEqual(normalizeEpgLookupText("Hello, World!"), "hello world");
+  assert.strictEqual(normalizeEpgLookupText("***"), "");
 });
 
-test("normalizeEpgUrlKey falls back to returning lowercase string on URL parsing error", () => {
-  assert.strictEqual(normalizeEpgUrlKey("not-a-url"), "not-a-url");
-  assert.strictEqual(normalizeEpgUrlKey("INVALID://///URL"), "invalid://///url");
-  assert.strictEqual(normalizeEpgUrlKey("XMLTV:SOME-LOCAL-FILE"), "some-local-file");
+test("normalizeEpgLookupText collapses multiple whitespace characters into single spaces", () => {
+  assert.strictEqual(normalizeEpgLookupText("  Hello   World  "), "hello world");
+  assert.strictEqual(normalizeEpgLookupText("A\tB\nC\rD"), "a b c d");
+  assert.strictEqual(normalizeEpgLookupText(" \t \n \r "), "");
 });
