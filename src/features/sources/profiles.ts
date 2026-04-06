@@ -4,7 +4,6 @@ import type {
   SavedXtreamSource,
 } from "../../domain/sourceProfiles";
 
-
 interface BaseSourceDraft<K extends SavedPlaylistSource["kind"]> {
   id: string;
   kind: K;
