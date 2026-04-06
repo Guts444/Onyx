@@ -10,7 +10,7 @@ interface ChannelShelfProps {
   searchQuery: string;
   favoriteIdSet: Set<string>;
   recentIdSet: Set<string>;
-  guidesByChannelId: Record<string, EpgResolvedGuide>;
+  getGuideByChannelId: (channelId: string) => EpgResolvedGuide | null;
   canMatchEpg: boolean;
   onSearchChange: (value: string) => void;
   onSelectView: (view: LibraryView) => void;
@@ -28,7 +28,7 @@ export function ChannelShelf({
   searchQuery,
   favoriteIdSet,
   recentIdSet,
-  guidesByChannelId,
+  getGuideByChannelId,
   canMatchEpg,
   onSearchChange,
   onSelectView,
@@ -124,7 +124,7 @@ export function ChannelShelf({
             const isFavorite = favoriteIdSet.has(channel.id);
             const isRecent = recentIdSet.has(channel.id);
             const isSelected = selectedChannelId === channel.id;
-            const guide = guidesByChannelId[channel.id] ?? null;
+            const guide = getGuideByChannelId(channel.id) ?? null;
 
             return (
               <article
