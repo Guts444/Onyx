@@ -173,6 +173,7 @@ export function ChannelShelf({
                   type="button"
                   className={`favorite-toggle ${isFavorite ? "favorite-toggle--active" : ""}`}
                   onClick={() => onToggleFavorite(channel.id)}
+                  aria-label={isFavorite ? `Remove ${channel.name} from favorites` : `Add ${channel.name} to favorites`}
                 >
                   Fav
                 </button>
@@ -182,6 +183,7 @@ export function ChannelShelf({
                   onClick={() => onOpenEpgMatcher(channel)}
                   disabled={!canMatchEpg}
                   title={guide ? "Change EPG match" : "Add EPG match"}
+                  aria-label={guide ? `Change EPG match for ${channel.name}` : `Add EPG match for ${channel.name}`}
                 >
                   EPG
                 </button>
