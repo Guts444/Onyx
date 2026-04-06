@@ -54,22 +54,6 @@ export function createXtreamSource(
   };
 }
 
-export function getDefaultSourceName(source: SavedPlaylistSource) {
-  if (source.kind === "m3u_url") {
-    try {
-      const parsedUrl = new URL(source.url.trim());
-      return parsedUrl.hostname.length > 0 ? parsedUrl.hostname : "Saved M3U URL";
-    } catch {
-      return source.name;
-    }
-  }
-
-  const normalizedDomain = source.domain.trim().replace(/^https?:\/\//, "");
-  return source.username.trim().length > 0
-    ? `${normalizedDomain || "Xtream"} (${source.username.trim()})`
-    : normalizedDomain || source.name;
-}
-
 export function isSourceProfileReady(source: SavedPlaylistSource) {
   if (!source.enabled) {
     return false;
