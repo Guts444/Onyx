@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { normalizeEpgSources } from "./epg.ts";
+import { normalizeEpgSources, sanitizeUpdateIntervalHours } from "./epg.ts";
 
 test("normalizeEpgSources returns empty array for non-array inputs", () => {
   assert.deepStrictEqual(normalizeEpgSources(null), []);
@@ -76,4 +76,47 @@ test("normalizeEpgSources sanitizes updateIntervalHours", () => {
   assert.strictEqual(result[1].updateIntervalHours, 6);
   assert.strictEqual(result[2].updateIntervalHours, 24);
   assert.strictEqual(result[3].updateIntervalHours, 24);
+});
+
+test("sanitizeUpdateIntervalHours accepts valid numbers", () => {
+  assert.strictEqual(sanitizeUpdateIntervalHours(2), 2);
+  assert.strictEqual(sanitizeUpdateIntervalHours(4), 4);
+  assert.strictEqual(sanitizeUpdateIntervalHours(6), 6);
+  assert.strictEqual(sanitizeUpdateIntervalHours(12), 12);
+  assert.strictEqual(sanitizeUpdateIntervalHours(24), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(48), 48);
+});
+
+test("sanitizeUpdateIntervalHours defaults invalid numbers to 24", () => {
+  assert.strictEqual(sanitizeUpdateIntervalHours(1), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(3), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(5), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(100), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(0), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(-6), 24);
+});
+
+test("sanitizeUpdateIntervalHours handles decimals by rounding", () => {
+  assert.strictEqual(sanitizeUpdateIntervalHours(5.5), 6); // Rounds to 6 (valid)
+  assert.strictEqual(sanitizeUpdateIntervalHours(6.4), 6); // Rounds to 6 (valid)
+  assert.strictEqual(sanitizeUpdateIntervalHours(3.5), 4); // Rounds to 4 (valid)
+  assert.strictEqual(sanitizeUpdateIntervalHours(2.1), 2); // Rounds to 2 (valid)
+  assert.strictEqual(sanitizeUpdateIntervalHours(4.6), 24); // Rounds to 5 (invalid) -> defaults to 24
+});
+
+test("sanitizeUpdateIntervalHours defaults non-numbers to 24", () => {
+  assert.strictEqual(sanitizeUpdateIntervalHours(undefined), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(null), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours("12"), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours("invalid"), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(true), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(false), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours([]), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours({}), 24);
+});
+
+test("sanitizeUpdateIntervalHours handles non-finite numbers", () => {
+  assert.strictEqual(sanitizeUpdateIntervalHours(NaN), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(Infinity), 24);
+  assert.strictEqual(sanitizeUpdateIntervalHours(-Infinity), 24);
 });
