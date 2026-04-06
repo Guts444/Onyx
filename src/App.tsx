@@ -93,7 +93,14 @@ function pushRecentId(recentIds: string[], channelId: string) {
   return nextIds;
 }
 
+const hashCache = new Map<string, string>();
+
 function hashString(source: string) {
+  const cached = hashCache.get(source);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   let hash = 0;
 
   for (const character of source) {
@@ -101,7 +108,9 @@ function hashString(source: string) {
     hash |= 0;
   }
 
-  return Math.abs(hash).toString(36);
+  const result = Math.abs(hash).toString(36);
+  hashCache.set(source, result);
+  return result;
 }
 
 function getPlaylistPreferenceKey(playlist: PlaylistImport | null) {
@@ -202,9 +211,19 @@ function App() {
     COLLAPSED_SOURCE_CARDS_STORAGE_KEY,
     [],
   );
-  const [savedSources, setSavedSources] = usePersistentState<SavedPlaylistSource[]>(
+  const [savedSources, setSavedSources] = usePersistentState<Record<string, SavedPlaylistSource>>(
     SAVED_SOURCES_STORAGE_KEY,
-    [],
+    {},
+    (parsedValue) => {
+      if (Array.isArray(parsedValue)) {
+        const record: Record<string, SavedPlaylistSource> = {};
+        for (const source of parsedValue) {
+          record[source.id] = source as SavedPlaylistSource;
+        }
+        return record;
+      }
+      return parsedValue as Record<string, SavedPlaylistSource>;
+    }
   );
   const [activeSourceId, setActiveSourceId] = usePersistentState<string | null>(
     ACTIVE_SOURCE_STORAGE_KEY,
@@ -435,15 +454,20 @@ function App() {
         playlistSnapshot?.sourceId === source.id ? playlistSnapshot.selectedChannelId : null,
       preservePlaybackSession: options?.preservePlaybackSession,
     });
-    setSavedSources((currentSources) =>
-      currentSources.map((currentSource) =>
-        currentSource.id === source.id ? markSourceLoaded(currentSource) : currentSource,
-      ),
-    );
+    setSavedSources((currentSources) => {
+      const currentSource = currentSources[source.id];
+      if (!currentSource) return currentSources;
+      return {
+        ...currentSources,
+        [source.id]: markSourceLoaded(currentSource),
+      };
+    });
   }
 
   const startupSourceToRestore =
-    savedSources.find((source) => source.id === activeSourceId && isSourceProfileReady(source)) ?? null;
+    activeSourceId && savedSources[activeSourceId] && isSourceProfileReady(savedSources[activeSourceId])
+      ? savedSources[activeSourceId]
+      : null;
   const shouldDelayResumeForStartupRestore =
     !startupRestoreAttemptedRef.current && startupSourceToRestore !== null;
 
@@ -570,7 +594,7 @@ function App() {
   }
 
   async function handleLoadSavedSource(sourceId: string) {
-    const source = savedSources.find((currentSource) => currentSource.id === sourceId);
+    const source = savedSources[sourceId];
 
     if (!source) {
       return;
@@ -595,31 +619,43 @@ function App() {
   }
 
   function handleAddM3uProfile() {
-    setSavedSources((currentSources) => [...currentSources, createM3uUrlSource()]);
+    const newSource = createM3uUrlSource();
+    setSavedSources((currentSources) => ({
+      ...currentSources,
+      [newSource.id]: newSource,
+    }));
   }
 
   function handleAddXtreamProfile() {
-    setSavedSources((currentSources) => [...currentSources, createXtreamSource()]);
+    const newSource = createXtreamSource();
+    setSavedSources((currentSources) => ({
+      ...currentSources,
+      [newSource.id]: newSource,
+    }));
   }
 
   function handleToggleSourceEnabled(sourceId: string) {
-    setSavedSources((currentSources) =>
-      currentSources.map((source) =>
-        source.id === sourceId
-          ? updateSourceProfile(source, {
-              enabled: !source.enabled,
-            })
-          : source,
-      ),
-    );
+    setSavedSources((currentSources) => {
+      const source = currentSources[sourceId];
+      if (!source) return currentSources;
+      return {
+        ...currentSources,
+        [sourceId]: updateSourceProfile(source, {
+          enabled: !source.enabled,
+        }),
+      };
+    });
   }
 
   function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
-    setSavedSources((currentSources) =>
-      currentSources.map((source) =>
-        source.id === sourceId ? updateSourceProfile(source, patch) : source,
-      ),
-    );
+    setSavedSources((currentSources) => {
+      const source = currentSources[sourceId];
+      if (!source) return currentSources;
+      return {
+        ...currentSources,
+        [sourceId]: updateSourceProfile(source, patch),
+      };
+    });
   }
 
   function openSettings(tab: SettingsTab) {
@@ -820,7 +856,7 @@ function App() {
 
   const channels = playlist?.channels ?? [];
   const allGroups = playlist?.groups ?? [];
-  const activeSource = savedSources.find((source) => source.id === activeSourceId) ?? null;
+  const activeSource = activeSourceId ? savedSources[activeSourceId] ?? null : null;
   const playlistEpgScope = getEpgPlaylistScope(activeSourceId, playlist);
   const savedMappingsForEnabledGuides = useMemo(
     () =>
@@ -933,6 +969,7 @@ function App() {
     () => Object.keys(resolvedEpgMatchesByChannelId).length,
     [resolvedEpgMatchesByChannelId],
   );
+  const savedSourcesList = useMemo(() => Object.values(savedSources), [savedSources]);
 
   function updateHiddenGroups(nextHiddenGroups: string[]) {
     if (!playlistPreferenceKey) {
@@ -1447,7 +1484,7 @@ function App() {
         matchedEpgChannelCount={matchedEpgChannelCount}
         updatingEpgSourceIds={updatingEpgSourceIds}
         epgStatusMessage={epgStatusMessage}
-        savedSources={savedSources}
+        savedSources={savedSourcesList}
         activeSourceId={activeSourceId}
         collapsedSourceIds={collapsedSourceIds}
         loadingSourceId={loadingSourceId}
