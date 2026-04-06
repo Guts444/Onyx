@@ -78,7 +78,19 @@ interface LegacyEpgSettings {
 }
 
 function pushRecentId(recentIds: string[], channelId: string) {
-  return [channelId, ...recentIds.filter((id) => id !== channelId)].slice(0, RECENT_CHANNEL_LIMIT);
+  const nextIds = [channelId];
+
+  for (const id of recentIds) {
+    if (nextIds.length >= RECENT_CHANNEL_LIMIT) {
+      break;
+    }
+
+    if (id !== channelId) {
+      nextIds.push(id);
+    }
+  }
+
+  return nextIds;
 }
 
 function hashString(source: string) {
