@@ -41,7 +41,8 @@ function createBaseSource<K extends SavedPlaylistSource["kind"]>(
   const timestamp = new Date().toISOString();
 
   return {
-    id: `source_${kind}_${hashString(`${name}\u0001${timestamp}\u0001${Math.random()}`)}`,
+    // 🛡️ Sentinel: Use crypto.randomUUID() instead of Math.random() for secure, guaranteed unique ID generation
+    id: `source_${kind}_${crypto.randomUUID()}`,
     kind,
     name,
     enabled: true,

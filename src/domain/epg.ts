@@ -49,7 +49,8 @@ export function createEpgSource(
   const timestamp = new Date().toISOString();
 
   return {
-    id: `epg_${hashString(`${url}\u0001${timestamp}\u0001${Math.random()}`)}`,
+    // 🛡️ Sentinel: Use crypto.randomUUID() instead of Math.random() for secure, guaranteed unique ID generation
+    id: `epg_${crypto.randomUUID()}`,
     url,
     enabled: overrides.enabled ?? true,
     autoUpdateEnabled: overrides.autoUpdateEnabled ?? false,
