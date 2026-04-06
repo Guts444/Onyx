@@ -859,6 +859,7 @@ function App() {
   const hiddenGroups = playlistPreferenceKey ? hiddenGroupsByLibrary[playlistPreferenceKey] ?? [] : [];
   const hiddenGroupSet = useMemo(() => new Set(hiddenGroups), [hiddenGroups]);
   const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
+  const recentIdSet = useMemo(() => new Set(recentIds), [recentIds]);
   const enabledGroups = useMemo(
     () => allGroups.filter((group) => !hiddenGroupSet.has(group)),
     [allGroups, hiddenGroupSet],
@@ -985,24 +986,37 @@ function App() {
     setActiveView("all");
   }
 
-  let visibleChannels =
-    activeView === "recents"
-      ? recentChannels
-      : activeGroup === FAVORITES_GROUP_ID
-      ? favoriteChannels
-      : activeGroup && enabledGroupSet.has(activeGroup)
-      ? channels.filter((channel) => channel.group === activeGroup)
-      : [];
+  const visibleChannels = useMemo(() => {
+    let result =
+      activeView === "recents"
+        ? recentChannels
+        : activeGroup === FAVORITES_GROUP_ID
+        ? favoriteChannels
+        : activeGroup && enabledGroupSet.has(activeGroup)
+        ? channels.filter((channel) => channel.group === activeGroup)
+        : [];
 
-  if (activeView === "favorites" && activeGroup !== FAVORITES_GROUP_ID) {
-    visibleChannels = visibleChannels.filter((channel) => favoriteIdSet.has(channel.id));
-  }
+    if (activeView === "favorites" && activeGroup !== FAVORITES_GROUP_ID) {
+      result = result.filter((channel) => favoriteIdSet.has(channel.id));
+    }
 
-  if (normalizedSearchQuery.length > 0) {
-    visibleChannels = visibleChannels.filter((channel) =>
-      channel.name.toLowerCase().includes(normalizedSearchQuery),
-    );
-  }
+    if (normalizedSearchQuery.length > 0) {
+      result = result.filter((channel) =>
+        channel.name.toLowerCase().includes(normalizedSearchQuery),
+      );
+    }
+
+    return result;
+  }, [
+    activeView,
+    activeGroup,
+    recentChannels,
+    favoriteChannels,
+    enabledGroupSet,
+    channels,
+    favoriteIdSet,
+    normalizedSearchQuery,
+  ]);
 
   const selectedGuide = selectedChannel ? guidesByChannelId[selectedChannel.id] ?? null : null;
   const visibleEpgChannelKeys = [
@@ -1400,8 +1414,8 @@ function App() {
               selectedChannelId={selectedChannel?.id ?? null}
               activeView={activeView}
               searchQuery={searchQuery}
-              favoriteIds={favoriteIds}
-              recentIds={recentIds}
+              favoriteIdSet={favoriteIdSet}
+              recentIdSet={recentIdSet}
               guidesByChannelId={guidesByChannelId}
               canMatchEpg={enabledEpgChannels.length > 0}
               onSearchChange={setSearchQuery}

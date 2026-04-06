@@ -8,8 +8,8 @@ interface ChannelShelfProps {
   selectedChannelId: string | null;
   activeView: LibraryView;
   searchQuery: string;
-  favoriteIds: string[];
-  recentIds: string[];
+  favoriteIdSet: Set<string>;
+  recentIdSet: Set<string>;
   guidesByChannelId: Record<string, EpgResolvedGuide>;
   canMatchEpg: boolean;
   onSearchChange: (value: string) => void;
@@ -26,8 +26,8 @@ export function ChannelShelf({
   selectedChannelId,
   activeView,
   searchQuery,
-  favoriteIds,
-  recentIds,
+  favoriteIdSet,
+  recentIdSet,
   guidesByChannelId,
   canMatchEpg,
   onSearchChange,
@@ -121,8 +121,8 @@ export function ChannelShelf({
       {activeGroupLabel && channels.length > 0 ? (
         <div className="channel-shelf__list">
           {channels.map((channel) => {
-            const isFavorite = favoriteIds.includes(channel.id);
-            const isRecent = recentIds.includes(channel.id);
+            const isFavorite = favoriteIdSet.has(channel.id);
+            const isRecent = recentIdSet.has(channel.id);
             const isSelected = selectedChannelId === channel.id;
             const guide = guidesByChannelId[channel.id] ?? null;
 
