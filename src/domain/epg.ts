@@ -13,7 +13,7 @@ export interface EpgSource {
 
 export const EPG_AUTO_UPDATE_OPTIONS = [2, 4, 6, 12, 24, 48] as const;
 
-function sanitizeUpdateIntervalHours(value: unknown) {
+export function sanitizeUpdateIntervalHours(value: unknown) {
   const numericValue =
     typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 24;
 
