@@ -4,7 +4,14 @@ import type {
   SavedXtreamSource,
 } from "../../domain/sourceProfiles";
 
+const hashCache = new Map<string, string>();
+
 function hashString(source: string) {
+  const cached = hashCache.get(source);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   let hash = 0;
 
   for (const character of source) {
@@ -12,7 +19,9 @@ function hashString(source: string) {
     hash |= 0;
   }
 
-  return Math.abs(hash).toString(36);
+  const result = Math.abs(hash).toString(36);
+  hashCache.set(source, result);
+  return result;
 }
 
 interface BaseSourceDraft<K extends SavedPlaylistSource["kind"]> {
@@ -32,7 +41,8 @@ function createBaseSource<K extends SavedPlaylistSource["kind"]>(
   const timestamp = new Date().toISOString();
 
   return {
-    id: `source_${kind}_${hashString(`${name}\u0001${timestamp}\u0001${Math.random()}`)}`,
+    // 🛡️ Sentinel: Use crypto.randomUUID() instead of Math.random() for secure, guaranteed unique ID generation
+    id: `source_${kind}_${crypto.randomUUID()}`,
     kind,
     name,
     enabled: true,
