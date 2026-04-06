@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export function usePersistentState<T>(key: string, initialValue: T) {
+export function usePersistentState<T>(key: string, initialValue: T, reviver?: (val: unknown) => T) {
   const [value, setValue] = useState<T>(() => {
     try {
       const storedValue = window.localStorage.getItem(key);
@@ -9,7 +9,8 @@ export function usePersistentState<T>(key: string, initialValue: T) {
         return initialValue;
       }
 
-      return JSON.parse(storedValue) as T;
+      const parsedValue = JSON.parse(storedValue);
+      return reviver ? reviver(parsedValue) : (parsedValue as T);
     } catch {
       return initialValue;
     }
