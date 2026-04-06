@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { normalizeEpgSources } from "./epg.ts";
+import { normalizeEpgSources, getEpgSourceLabel } from "./epg.ts";
 
 test("normalizeEpgSources returns empty array for non-array inputs", () => {
   assert.deepStrictEqual(normalizeEpgSources(null), []);
@@ -62,6 +62,56 @@ test("normalizeEpgSources normalizes valid and partially valid objects", () => {
   assert.strictEqual(result[1].updatedAt, "2023-01-02T00:00:00.000Z");
 });
 
+test("createEpgSource returns an object with correct default values", () => {
+  const result = createEpgSource();
+
+  assert.ok(result.id.startsWith("epg_"));
+  assert.strictEqual(result.url, "");
+  assert.strictEqual(result.enabled, true);
+  assert.strictEqual(result.autoUpdateEnabled, false);
+  assert.strictEqual(result.updateOnStartup, true);
+  assert.strictEqual(result.updateIntervalHours, 24);
+  assert.strictEqual(result.createdAt, result.updatedAt);
+  // Ensure it is an ISO string (simple regex check)
+  assert.match(result.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+});
+
+test("createEpgSource sets values from provided arguments and overrides", () => {
+  const url = "http://example.com/guide.xml";
+  const overrides = {
+    enabled: false,
+    autoUpdateEnabled: true,
+    updateOnStartup: false,
+    updateIntervalHours: 12,
+  };
+
+  const result = createEpgSource(url, overrides);
+
+  assert.strictEqual(result.url, url);
+  assert.strictEqual(result.enabled, false);
+  assert.strictEqual(result.autoUpdateEnabled, true);
+  assert.strictEqual(result.updateOnStartup, false);
+  assert.strictEqual(result.updateIntervalHours, 12);
+});
+
+test("createEpgSource sanitizes invalid updateIntervalHours override", () => {
+  const overrides = {
+    updateIntervalHours: 999, // Invalid value
+  };
+
+  const result = createEpgSource("", overrides);
+
+  // Should fallback to default (24)
+  assert.strictEqual(result.updateIntervalHours, 24);
+});
+
+test("createEpgSource generates unique IDs", () => {
+  const source1 = createEpgSource();
+  const source2 = createEpgSource();
+
+  assert.notStrictEqual(source1.id, source2.id);
+});
+
 test("normalizeEpgSources sanitizes updateIntervalHours", () => {
   const input = [
     { url: "1", updateIntervalHours: 1 }, // Invalid, should default to 24
@@ -76,4 +126,34 @@ test("normalizeEpgSources sanitizes updateIntervalHours", () => {
   assert.strictEqual(result[1].updateIntervalHours, 6);
   assert.strictEqual(result[2].updateIntervalHours, 24);
   assert.strictEqual(result[3].updateIntervalHours, 24);
+});
+
+test("getEpgSourceLabel returns 'EPG guide' for empty strings or strings with just whitespaces", () => {
+  assert.strictEqual(getEpgSourceLabel(""), "EPG guide");
+  assert.strictEqual(getEpgSourceLabel("   "), "EPG guide");
+});
+
+test("getEpgSourceLabel uses the url property correctly if an object is passed instead of a string", () => {
+  assert.strictEqual(getEpgSourceLabel({ url: "http://example.com/epg.xml" }), "example.com");
+  assert.strictEqual(getEpgSourceLabel({ url: "   " }), "EPG guide");
+});
+
+test("getEpgSourceLabel returns the hostname for valid HTTP/HTTPS URLs", () => {
+  assert.strictEqual(getEpgSourceLabel("http://example.com/epg.xml"), "example.com");
+  assert.strictEqual(getEpgSourceLabel("https://www.test.org/path/to/epg"), "www.test.org");
+});
+
+test("getEpgSourceLabel removes the xmltv: prefix correctly", () => {
+  assert.strictEqual(getEpgSourceLabel("xmltv:http://test.com"), "test.com");
+  assert.strictEqual(getEpgSourceLabel("XMLTV : http://test.com"), "test.com");
+  assert.strictEqual(getEpgSourceLabel("xmltv:"), "xmltv:");
+});
+
+test("getEpgSourceLabel returns the string representation if the URL has no hostname", () => {
+  assert.strictEqual(getEpgSourceLabel("file:///path/to/file.xml"), "file:///path/to/file.xml");
+});
+
+test("getEpgSourceLabel catches invalid URLs and falls back to returning the original trimmed string", () => {
+  assert.strictEqual(getEpgSourceLabel("invalid-url"), "invalid-url");
+  assert.strictEqual(getEpgSourceLabel("   invalid-url   "), "invalid-url");
 });
