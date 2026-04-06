@@ -105,7 +105,7 @@ async fn fetch_text_with_limit(
         .get(url)
         .send()
         .await
-        .map_err(|error| format!("{failure_label}: {error}"))?;
+        .map_err(|error| format!("{failure_label}: {}", error.without_url()))?;
 
     if !response.status().is_success() {
         return Err(format!(
