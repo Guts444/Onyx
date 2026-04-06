@@ -62,6 +62,56 @@ test("normalizeEpgSources normalizes valid and partially valid objects", () => {
   assert.strictEqual(result[1].updatedAt, "2023-01-02T00:00:00.000Z");
 });
 
+test("createEpgSource returns an object with correct default values", () => {
+  const result = createEpgSource();
+
+  assert.ok(result.id.startsWith("epg_"));
+  assert.strictEqual(result.url, "");
+  assert.strictEqual(result.enabled, true);
+  assert.strictEqual(result.autoUpdateEnabled, false);
+  assert.strictEqual(result.updateOnStartup, true);
+  assert.strictEqual(result.updateIntervalHours, 24);
+  assert.strictEqual(result.createdAt, result.updatedAt);
+  // Ensure it is an ISO string (simple regex check)
+  assert.match(result.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+});
+
+test("createEpgSource sets values from provided arguments and overrides", () => {
+  const url = "http://example.com/guide.xml";
+  const overrides = {
+    enabled: false,
+    autoUpdateEnabled: true,
+    updateOnStartup: false,
+    updateIntervalHours: 12,
+  };
+
+  const result = createEpgSource(url, overrides);
+
+  assert.strictEqual(result.url, url);
+  assert.strictEqual(result.enabled, false);
+  assert.strictEqual(result.autoUpdateEnabled, true);
+  assert.strictEqual(result.updateOnStartup, false);
+  assert.strictEqual(result.updateIntervalHours, 12);
+});
+
+test("createEpgSource sanitizes invalid updateIntervalHours override", () => {
+  const overrides = {
+    updateIntervalHours: 999, // Invalid value
+  };
+
+  const result = createEpgSource("", overrides);
+
+  // Should fallback to default (24)
+  assert.strictEqual(result.updateIntervalHours, 24);
+});
+
+test("createEpgSource generates unique IDs", () => {
+  const source1 = createEpgSource();
+  const source2 = createEpgSource();
+
+  assert.notStrictEqual(source1.id, source2.id);
+});
+
 test("normalizeEpgSources sanitizes updateIntervalHours", () => {
   const input = [
     { url: "1", updateIntervalHours: 1 }, // Invalid, should default to 24
