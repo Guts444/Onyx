@@ -1079,18 +1079,31 @@ function App() {
 
       for (const guideUrl of scopedGuideUrls) {
         const mappingScope = createEpgMappingScope(playlistEpgScope, guideUrl);
-        const scopedMappings = {
-          ...(nextMappings[mappingScope] ?? {}),
-        };
+        const existingMappings = nextMappings[mappingScope];
 
-        for (const mappingKey of mappingKeys) {
-          delete scopedMappings[mappingKey];
+        if (!existingMappings) {
+          continue;
         }
 
-        if (Object.keys(scopedMappings).length === 0) {
+        let hasChanges = false;
+        let scopedMappings: Record<string, string> | undefined;
+
+        for (const mappingKey of mappingKeys) {
+          if (Object.prototype.hasOwnProperty.call(existingMappings, mappingKey)) {
+            if (!scopedMappings) {
+              scopedMappings = { ...existingMappings };
+            }
+            delete scopedMappings[mappingKey];
+            hasChanges = true;
+          }
+        }
+
+        const finalMappings = hasChanges && scopedMappings ? scopedMappings : existingMappings;
+
+        if (Object.keys(finalMappings).length === 0) {
           delete nextMappings[mappingScope];
-        } else {
-          nextMappings[mappingScope] = scopedMappings;
+        } else if (hasChanges) {
+          nextMappings[mappingScope] = finalMappings;
         }
       }
 
@@ -1126,18 +1139,31 @@ function App() {
 
       for (const guideUrl of scopedGuideUrls) {
         const mappingScope = createEpgMappingScope(playlistEpgScope, guideUrl);
-        const scopedMappings = {
-          ...(nextMappings[mappingScope] ?? {}),
-        };
+        const existingMappings = nextMappings[mappingScope];
 
-        for (const mappingKey of mappingKeys) {
-          delete scopedMappings[mappingKey];
+        if (!existingMappings) {
+          continue;
         }
 
-        if (Object.keys(scopedMappings).length === 0) {
+        let hasChanges = false;
+        let scopedMappings: Record<string, string> | undefined;
+
+        for (const mappingKey of mappingKeys) {
+          if (Object.prototype.hasOwnProperty.call(existingMappings, mappingKey)) {
+            if (!scopedMappings) {
+              scopedMappings = { ...existingMappings };
+            }
+            delete scopedMappings[mappingKey];
+            hasChanges = true;
+          }
+        }
+
+        const finalMappings = hasChanges && scopedMappings ? scopedMappings : existingMappings;
+
+        if (Object.keys(finalMappings).length === 0) {
           delete nextMappings[mappingScope];
-        } else {
-          nextMappings[mappingScope] = scopedMappings;
+        } else if (hasChanges) {
+          nextMappings[mappingScope] = finalMappings;
         }
       }
 
