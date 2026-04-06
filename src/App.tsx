@@ -93,7 +93,14 @@ function pushRecentId(recentIds: string[], channelId: string) {
   return nextIds;
 }
 
+const hashCache = new Map<string, string>();
+
 function hashString(source: string) {
+  const cached = hashCache.get(source);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   let hash = 0;
 
   for (const character of source) {
@@ -101,7 +108,9 @@ function hashString(source: string) {
     hash |= 0;
   }
 
-  return Math.abs(hash).toString(36);
+  const result = Math.abs(hash).toString(36);
+  hashCache.set(source, result);
+  return result;
 }
 
 function getPlaylistPreferenceKey(playlist: PlaylistImport | null) {
