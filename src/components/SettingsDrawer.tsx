@@ -225,6 +225,7 @@ export function SettingsDrawer({
                         type="button"
                         className={`visibility-toggle ${isEnabled ? "visibility-toggle--enabled" : ""}`}
                         onClick={() => onToggleGroup(group)}
+                        aria-label={isEnabled ? `Hide group ${group}` : `Enable group ${group}`}
                       >
                         {isEnabled ? "Enabled" : "Hidden"}
                       </button>
