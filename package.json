@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "tauri": "tauri",
-    "test": "node --experimental-strip-types --test src/domain/epg.test.ts"
+    "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/matching.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
