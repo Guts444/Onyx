@@ -1,22 +1,4 @@
-const hashCache = new Map<string, string>();
-
-function hashString(source: string) {
-  const cached = hashCache.get(source);
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  let hash = 0;
-
-  for (const character of source) {
-    hash = (hash << 5) - hash + character.charCodeAt(0);
-    hash |= 0;
-  }
-
-  const result = Math.abs(hash).toString(36);
-  hashCache.set(source, result);
-  return result;
-}
+import { hashString } from "../utils/hash.ts";
 
 export interface EpgSource {
   id: string;
