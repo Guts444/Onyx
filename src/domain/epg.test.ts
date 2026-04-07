@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { normalizeEpgSources, getEpgSourceLabel } from "./epg.ts";
+import { normalizeEpgSources, getEpgSourceLabel, createEpgSource } from "./epg.ts";
 
 test("normalizeEpgSources returns empty array for non-array inputs", () => {
   assert.deepStrictEqual(normalizeEpgSources(null), []);
