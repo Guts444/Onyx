@@ -254,7 +254,7 @@ async fn fetch_bytes_with_limit(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| format!("Could not read the server response: {error}"))?
+        .map_err(|error| format!("Could not read the server response: {}", error.without_url()))?
     {
         if body.len() + chunk.len() > byte_limit {
             return Err("The EPG response is too large to import safely.".to_string());
