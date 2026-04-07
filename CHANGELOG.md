@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.4
+
+- **Security**: Fixed high-severity vulnerabilities related to `Math.random()`.
+- **Performance**: Optimized visible EPG channel keys computation and hoisted loop-invariant computations in EPG search.
+- **UX / Accessibility**: Added contextual ARIA labels to group toggles.
+- **Testing & Stability**: Comprehensive unit testing added for EPG source management, URL key normalization, sanitization logic, and stream references. Refined Tauri backend configurations.
+
 ## v0.4.0
 
 - **Under the Hood / Security**: Upgraded to Tauri v2 project structure and implemented robust source profile management logic.
