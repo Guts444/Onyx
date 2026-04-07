@@ -6,3 +6,7 @@
 **Vulnerability:** A missing or disabled (`"csp": null`) Content Security Policy in a Tauri application allows arbitrary script execution, exposing the application to severe Cross-Site Scripting (XSS) attacks.
 **Learning:** In desktop environments, XSS can lead to more critical consequences like remote code execution or file system access via IPC (if exposed).
 **Prevention:** Always define a strict CSP for Tauri projects that minimally allows 'self', specific required external hosts, and Tauri-specific protocols (`ipc:`, `asset:`). Never leave `"csp": null` in production.
+## 2025-05-18 - [reqwest Error Credential Leak during Chunking]
+**Vulnerability:** `reqwest` connection and parsing errors while reading chunks stream expose the full URL, including sensitive query parameters like `password`, directly to the user/frontend through the error response strings.
+**Learning:** Similar to `.send().await`, reading a stream `.chunk().await` can also fail, and `reqwest` will still include the requested URL with secrets in its debug/stringified errors.
+**Prevention:** Always strip URLs from network errors when returning them to the frontend using `reqwest::Error::without_url()` not only on the initial request, but also when iterating over response chunks.
