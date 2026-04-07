@@ -130,6 +130,7 @@ export function SourceProfilesPanel({
                       type="button"
                       className={`visibility-toggle ${source.enabled ? "visibility-toggle--enabled" : ""}`}
                       onClick={() => onToggleEnabled(source.id)}
+                      aria-label={`${source.enabled ? "Disable" : "Enable"} source ${sourceLabel}`}
                     >
                       {source.enabled ? "Enabled" : "Disabled"}
                     </button>
@@ -138,6 +139,7 @@ export function SourceProfilesPanel({
                       className="control-button"
                       onClick={() => onLoadSource(source.id)}
                       disabled={!isReady || isLoading}
+                      aria-label={`Load source ${sourceLabel}`}
                     >
                       {isLoading ? "Loading..." : "Load Now"}
                     </button>
@@ -155,6 +157,7 @@ export function SourceProfilesPanel({
                         })
                       }
                       placeholder="Profile name"
+                      aria-label={`Profile name for ${sourceLabel}`}
                       autoComplete="off"
                       spellCheck={false}
                     />
@@ -167,6 +170,7 @@ export function SourceProfilesPanel({
                         } as Partial<SavedPlaylistSource>)
                       }
                       placeholder="Playlist URL"
+                      aria-label={`Playlist URL for ${sourceLabel}`}
                       autoComplete="off"
                       spellCheck={false}
                     />
@@ -184,6 +188,7 @@ export function SourceProfilesPanel({
                         })
                       }
                       placeholder="Profile name"
+                      aria-label={`Profile name for ${sourceLabel}`}
                       autoComplete="off"
                       spellCheck={false}
                     />
@@ -196,6 +201,7 @@ export function SourceProfilesPanel({
                         } as Partial<SavedPlaylistSource>)
                       }
                       placeholder="Domain"
+                      aria-label={`Domain for ${sourceLabel}`}
                       autoComplete="off"
                       spellCheck={false}
                     />
@@ -208,6 +214,7 @@ export function SourceProfilesPanel({
                         } as Partial<SavedPlaylistSource>)
                       }
                       placeholder="Username"
+                      aria-label={`Username for ${sourceLabel}`}
                       autoComplete="off"
                       spellCheck={false}
                     />
@@ -220,6 +227,7 @@ export function SourceProfilesPanel({
                         } as Partial<SavedPlaylistSource>)
                       }
                       placeholder="Password"
+                      aria-label={`Password for ${sourceLabel}`}
                       autoComplete="off"
                       spellCheck={false}
                     />
