@@ -1050,14 +1050,22 @@ function App() {
   ]);
 
   const selectedGuide = selectedChannel ? getGuideByChannelId(selectedChannel.id) ?? null : null;
-  const visibleEpgChannelKeys = [
-    ...new Set(
-      [
-        ...visibleChannels.map((channel) => getGuideByChannelId(channel.id)?.epgChannel.uniqueId ?? null),
-        selectedGuide?.epgChannel.uniqueId ?? null,
-      ].filter((channelKey): channelKey is string => channelKey !== null),
-    ),
-  ];
+  const visibleEpgChannelKeys = useMemo(() => {
+    const keys = new Set<string>();
+
+    for (const channel of visibleChannels) {
+      const uniqueId = resolvedEpgMatchesByChannelId[channel.id]?.epgChannel.uniqueId;
+      if (uniqueId) {
+        keys.add(uniqueId);
+      }
+    }
+
+    if (selectedGuide?.epgChannel.uniqueId) {
+      keys.add(selectedGuide.epgChannel.uniqueId);
+    }
+
+    return [...keys];
+  }, [visibleChannels, resolvedEpgMatchesByChannelId, selectedGuide]);
   const visibleEpgChannelKeysKey = visibleEpgChannelKeys.join("\u0001");
   const favoritesCount = favoriteChannels.length;
   const groupsCollapsed = playlistPreferenceKey
