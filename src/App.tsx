@@ -1204,23 +1204,44 @@ function App() {
   }
 
   const visibleChannels = useMemo(() => {
-    let result =
+    // ⚡ Bolt: Single for...of loop for visibleChannels to reduce GC pressure and avoid multiple array iterations
+    const baseList =
       activeView === "recents"
         ? recentChannels
         : activeGroup === FAVORITES_GROUP_ID
         ? favoriteChannels
         : activeGroup && enabledGroupSet.has(activeGroup)
-        ? channels.filter((channel) => channel.group === activeGroup)
+        ? channels
         : [];
 
-    if (activeView === "favorites" && activeGroup !== FAVORITES_GROUP_ID) {
-      result = result.filter((channel) => favoriteIdSet.has(channel.id));
+    if (baseList.length === 0) {
+      return [];
     }
 
-    if (normalizedSearchQuery.length > 0) {
-      result = result.filter((channel) =>
-        channel.name.toLowerCase().includes(normalizedSearchQuery),
-      );
+    const needsGroupFilter = activeView !== "recents" && activeGroup !== FAVORITES_GROUP_ID;
+    const needsFavoriteFilter = activeView === "favorites" && activeGroup !== FAVORITES_GROUP_ID;
+    const needsSearchFilter = normalizedSearchQuery.length > 0;
+
+    if (!needsGroupFilter && !needsFavoriteFilter && !needsSearchFilter) {
+      return baseList;
+    }
+
+    const result: Channel[] = [];
+
+    for (const channel of baseList) {
+      if (needsGroupFilter && channel.group !== activeGroup) {
+        continue;
+      }
+
+      if (needsFavoriteFilter && !favoriteIdSet.has(channel.id)) {
+        continue;
+      }
+
+      if (needsSearchFilter && !channel.name.toLowerCase().includes(normalizedSearchQuery)) {
+        continue;
+      }
+
+      result.push(channel);
     }
 
     return result;
