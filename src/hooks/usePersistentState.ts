@@ -3,6 +3,16 @@ import { useEffect, useRef, useState } from "react";
 
 const memoryStateStore = new Map<string, unknown>();
 
+interface LoadedPersistentValue {
+  value: unknown | null;
+  shouldMigrate: boolean;
+}
+
+interface AppStatePayload {
+  exists: boolean;
+  value: unknown | null;
+}
+
 function reviveValue<T>(value: unknown, initialValue: T, reviver?: (val: unknown) => T) {
   if (value === null) {
     return initialValue;
@@ -11,12 +21,67 @@ function reviveValue<T>(value: unknown, initialValue: T, reviver?: (val: unknown
   return reviver ? reviver(value) : (value as T);
 }
 
-async function loadPersistentValue(key: string) {
+function loadLegacyLocalStorageValue(key: string): LoadedPersistentValue {
+  try {
+    const storedValue = window.localStorage.getItem(key);
+
+    if (storedValue === null) {
+      return {
+        value: null,
+        shouldMigrate: false,
+      };
+    }
+
+    return {
+      value: JSON.parse(storedValue),
+      shouldMigrate: true,
+    };
+  } catch {
+    return {
+      value: null,
+      shouldMigrate: false,
+    };
+  }
+}
+
+function isAppStatePayload(value: unknown): value is AppStatePayload {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "exists" in value &&
+    typeof (value as AppStatePayload).exists === "boolean"
+  );
+}
+
+async function loadPersistentValue(key: string): Promise<LoadedPersistentValue> {
   if (!isTauri()) {
-    return memoryStateStore.has(key) ? memoryStateStore.get(key) ?? null : null;
+    return {
+      value: memoryStateStore.has(key) ? memoryStateStore.get(key) ?? null : null,
+      shouldMigrate: false,
+    };
   }
 
-  return invoke<unknown | null>("load_app_state", { key });
+  const storedValue = await invoke<AppStatePayload | unknown | null>("load_app_state", { key });
+
+  if (isAppStatePayload(storedValue)) {
+    if (!storedValue.exists) {
+      return loadLegacyLocalStorageValue(key);
+    }
+
+    return {
+      value: storedValue.value ?? null,
+      shouldMigrate: false,
+    };
+  }
+
+  if (storedValue !== null) {
+    return {
+      value: storedValue,
+      shouldMigrate: false,
+    };
+  }
+
+  return loadLegacyLocalStorageValue(key);
 }
 
 async function savePersistentValue(key: string, value: unknown) {
@@ -38,6 +103,7 @@ export function usePersistentState<T>(
   const reviverRef = useRef(reviver);
   const serializerRef = useRef(serializer);
   const skipNextSaveRef = useRef(true);
+  const migrateNextSaveRef = useRef(false);
   const [value, setValue] = useState<T>(() => {
     return initialValue;
   });
@@ -55,6 +121,7 @@ export function usePersistentState<T>(
     let cancelled = false;
     setIsHydrated(false);
     skipNextSaveRef.current = true;
+    migrateNextSaveRef.current = false;
 
     void loadPersistentValue(key)
       .then((storedValue) => {
@@ -62,7 +129,8 @@ export function usePersistentState<T>(
           return;
         }
 
-        setValue(reviveValue(storedValue, initialValueRef.current, reviverRef.current));
+        migrateNextSaveRef.current = storedValue.shouldMigrate;
+        setValue(reviveValue(storedValue.value, initialValueRef.current, reviverRef.current));
       })
       .catch(() => {
         if (!cancelled) {
@@ -87,9 +155,12 @@ export function usePersistentState<T>(
 
     if (skipNextSaveRef.current) {
       skipNextSaveRef.current = false;
-      return;
+      if (!migrateNextSaveRef.current) {
+        return;
+      }
     }
 
+    migrateNextSaveRef.current = false;
     const serializedValue = serializerRef.current ? serializerRef.current(value) : value;
 
     void savePersistentValue(key, serializedValue).catch(() => {

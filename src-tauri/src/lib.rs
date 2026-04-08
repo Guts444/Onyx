@@ -16,6 +16,13 @@ const XTREAM_SECRET_SERVICE: &str = "Onyx Xtream";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AppStatePayload {
+    exists: bool,
+    value: Option<Value>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct XtreamChannelPayload {
     name: String,
     group: String,
@@ -102,11 +109,14 @@ fn get_app_state_path<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathB
 }
 
 #[tauri::command]
-fn load_app_state(app: AppHandle, key: String) -> Result<Option<Value>, String> {
+fn load_app_state(app: AppHandle, key: String) -> Result<AppStatePayload, String> {
     let state_path = get_app_state_path(&app, &key)?;
 
     if !state_path.exists() {
-        return Ok(None);
+        return Ok(AppStatePayload {
+            exists: false,
+            value: None,
+        });
     }
 
     let bytes =
@@ -114,7 +124,10 @@ fn load_app_state(app: AppHandle, key: String) -> Result<Option<Value>, String> 
     let value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("Could not parse the app state: {error}"))?;
 
-    Ok(Some(value))
+    Ok(AppStatePayload {
+        exists: true,
+        value: Some(value),
+    })
 }
 
 #[tauri::command]
