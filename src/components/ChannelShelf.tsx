@@ -1,3 +1,4 @@
+import type { UIEvent } from "react";
 import type { EpgResolvedGuide } from "../domain/epg";
 import type { Channel, LibraryView } from "../domain/iptv";
 
@@ -5,6 +6,7 @@ interface ChannelShelfProps {
   activeGroupLabel: string | null;
   isFavoritesGroup: boolean;
   channels: Channel[];
+  totalChannelCount: number;
   selectedChannelId: string | null;
   activeView: LibraryView;
   searchQuery: string;
@@ -17,12 +19,14 @@ interface ChannelShelfProps {
   onSelectChannel: (channel: Channel) => void;
   onToggleFavorite: (channelId: string) => void;
   onOpenEpgMatcher: (channel: Channel) => void;
+  onLoadMoreChannels: () => void;
 }
 
 export function ChannelShelf({
   activeGroupLabel,
   isFavoritesGroup,
   channels,
+  totalChannelCount,
   selectedChannelId,
   activeView,
   searchQuery,
@@ -35,7 +39,10 @@ export function ChannelShelf({
   onSelectChannel,
   onToggleFavorite,
   onOpenEpgMatcher,
+  onLoadMoreChannels,
 }: ChannelShelfProps) {
+  const hasMoreChannels = channels.length < totalChannelCount;
+
   function formatProgrammeTime(timestamp: number) {
     return new Date(timestamp).toLocaleTimeString([], {
       hour: "numeric",
@@ -53,6 +60,18 @@ export function ChannelShelf({
     return stopLabel ? `${startLabel} - ${stopLabel}` : startLabel;
   }
 
+  function handleListScroll(event: UIEvent<HTMLDivElement>) {
+    if (!hasMoreChannels) {
+      return;
+    }
+
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+
+    if (scrollHeight - scrollTop - clientHeight < 640) {
+      onLoadMoreChannels();
+    }
+  }
+
   return (
     <section className="panel channel-shelf">
       <div className="channel-shelf__toolbar">
@@ -60,7 +79,11 @@ export function ChannelShelf({
           <span className="channel-shelf__eyebrow">Channels</span>
           <h3>{activeGroupLabel ?? "Choose a group"}</h3>
           <span className="channel-shelf__meta">
-            {activeGroupLabel ? `${channels.length} shown` : "Pick a group"}
+            {activeGroupLabel
+              ? hasMoreChannels
+                ? `${channels.length} of ${totalChannelCount} shown`
+                : `${totalChannelCount} shown`
+              : "Pick a group"}
           </span>
         </div>
 
@@ -107,7 +130,7 @@ export function ChannelShelf({
         </div>
       ) : null}
 
-      {activeGroupLabel && channels.length === 0 ? (
+      {activeGroupLabel && totalChannelCount === 0 ? (
         <div className="empty-state">
           <strong>{isFavoritesGroup ? "No favorites match this filter" : "No channels match this filter"}</strong>
           <span>
@@ -119,7 +142,7 @@ export function ChannelShelf({
       ) : null}
 
       {activeGroupLabel && channels.length > 0 ? (
-        <div className="channel-shelf__list">
+        <div className="channel-shelf__list" onScroll={handleListScroll}>
           {channels.map((channel) => {
             const isFavorite = favoriteIdSet.has(channel.id);
             const isRecent = recentIdSet.has(channel.id);
@@ -190,6 +213,15 @@ export function ChannelShelf({
               </article>
             );
           })}
+          {hasMoreChannels ? (
+            <button
+              type="button"
+              className="channel-shelf__load-more"
+              onClick={onLoadMoreChannels}
+            >
+              Show more channels
+            </button>
+          ) : null}
         </div>
       ) : null}
     </section>

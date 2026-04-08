@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.0
+
+- **Startup performance**: Uses cached playlists immediately on launch, delays saved-source refreshes, staggers startup EPG updates, and renders large channel groups incrementally so very large libraries start and browse more smoothly.
+- **Reliability**: Replaced hard 20-second total network timeouts with connect/read timeouts for playlist, Xtream, and EPG downloads so large but active responses are less likely to fail.
+- **Storage**: Moved app state from browser `localStorage` into Tauri-managed JSON files under the app local data directory.
+- **Security**: Moved saved Xtream passwords into the operating system credential store and scrubbed passwords from persisted source JSON.
+- **EPG performance**: Avoids cloning the full EPG cache when writing to disk and uses binary search for now/next programme lookups.
+- **Playback UI**: Cleaned up the player overlay by removing raw stream filenames from the title, showing just the resolution value, and adding a separate FPS badge.
+
 ## v0.4.4
 
 - **Security**: Fixed high-severity vulnerabilities related to `Math.random()`.

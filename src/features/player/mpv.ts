@@ -17,9 +17,10 @@ export const DEFAULT_PLAYER_VOLUME = 72;
 const OBSERVED_PROPERTIES = [
   ["volume", "double"],
   ["mute", "flag"],
-  ["media-title", "string", "none"],
   ["width", "int64", "none"],
   ["height", "int64", "none"],
+  ["estimated-vf-fps", "double", "none"],
+  ["container-fps", "double", "none"],
   ["paused-for-cache", "flag"],
   ["idle-active", "flag"],
 ] as const satisfies ReadonlyArray<MpvObservableProperty>;
@@ -34,9 +35,9 @@ export interface MpvPlayerState {
   status: string;
   error: string | null;
   initError: string | null;
-  currentTitle: string | null;
   videoWidth: number | null;
   videoHeight: number | null;
+  videoFps: number | null;
 }
 
 type PlayerLayoutMode = "windowed" | "fullscreen";
@@ -59,6 +60,14 @@ function normalizeVideoDimension(value: unknown) {
   }
 
   return Math.round(value);
+}
+
+function normalizeVideoFps(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return value;
 }
 
 function getMarginRatio(surface: HTMLElement) {
@@ -121,9 +130,9 @@ export function useMpvPlayer(
       : "Browser preview detected. Open the app with `npm run tauri dev` for native playback.",
     error: null,
     initError: null,
-    currentTitle: null,
     videoWidth: null,
     videoHeight: null,
+    videoFps: null,
   });
 
   useEffect(() => {
@@ -173,12 +182,6 @@ export function useMpvPlayer(
                 }));
               }
               break;
-            case "media-title":
-              setState((currentState) => ({
-                ...currentState,
-                currentTitle: typeof event.data === "string" ? event.data : null,
-              }));
-              break;
             case "width":
               setState((currentState) => ({
                 ...currentState,
@@ -191,6 +194,18 @@ export function useMpvPlayer(
                 videoHeight: normalizeVideoDimension(event.data),
               }));
               break;
+            case "estimated-vf-fps":
+            case "container-fps": {
+              const videoFps = normalizeVideoFps(event.data);
+
+              if (videoFps !== null) {
+                setState((currentState) => ({
+                  ...currentState,
+                  videoFps,
+                }));
+              }
+              break;
+            }
             case "paused-for-cache":
               if (typeof event.data === "boolean") {
                 setState((currentState) => ({
@@ -228,6 +243,7 @@ export function useMpvPlayer(
                 status: "Opening stream...",
                 videoWidth: null,
                 videoHeight: null,
+                videoFps: null,
               }));
               break;
             case "file-loaded":
@@ -251,6 +267,7 @@ export function useMpvPlayer(
                   status: "Playback stopped",
                   videoWidth: null,
                   videoHeight: null,
+                  videoFps: null,
                 }));
                 break;
               }
@@ -264,6 +281,7 @@ export function useMpvPlayer(
                   status: "The stream ended.",
                   videoWidth: null,
                   videoHeight: null,
+                  videoFps: null,
                 }));
                 break;
               }
@@ -277,6 +295,7 @@ export function useMpvPlayer(
                 status: "Playback error",
                 videoWidth: null,
                 videoHeight: null,
+                videoFps: null,
               }));
               break;
             }
@@ -384,9 +403,9 @@ export function useMpvPlayer(
         ...currentState,
         error: channel.playabilityError ?? "This channel is not playable.",
         status: "Channel unavailable",
-        currentTitle: channel.name,
         videoWidth: null,
         videoHeight: null,
+        videoFps: null,
       }));
       return false;
     }
@@ -398,6 +417,7 @@ export function useMpvPlayer(
         error: null,
         videoWidth: null,
         videoHeight: null,
+        videoFps: null,
       }));
       return false;
     }
@@ -407,9 +427,9 @@ export function useMpvPlayer(
         ...currentState,
         error: currentState.initError ?? "The native player is still starting.",
         status: "Player not ready",
-        currentTitle: channel.name,
         videoWidth: null,
         videoHeight: null,
+        videoFps: null,
       }));
       return false;
     }
@@ -423,9 +443,9 @@ export function useMpvPlayer(
       buffering: false,
       error: null,
       status: `Loading ${channel.name}...`,
-      currentTitle: channel.name,
       videoWidth: null,
       videoHeight: null,
+      videoFps: null,
     }));
 
     try {
@@ -460,6 +480,7 @@ export function useMpvPlayer(
         status: "Playback stopped",
         videoWidth: null,
         videoHeight: null,
+        videoFps: null,
       }));
     } catch (error) {
       setState((currentState) => ({

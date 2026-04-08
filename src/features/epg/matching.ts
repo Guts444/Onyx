@@ -317,8 +317,10 @@ export function searchEpgChannelsForChannel(
 ) {
   const normalizedQuery = normalizeEpgLookupText(searchQuery);
 
-  // OPTIMIZATION: Hoisted outside the iteration over the potentially large epgChannels array
-  // so we don't redundantly recompute identity terms per channel mapped.
+  if (normalizedQuery.length === 0) {
+    return epgChannels.slice(0, limit);
+  }
+
   const identityTerms = getChannelIdentityTerms(channel);
 
   return epgChannels
@@ -326,7 +328,7 @@ export function searchEpgChannelsForChannel(
       epgChannel,
       score: getSearchScore(identityTerms, epgChannel, normalizedQuery),
     }))
-    .filter(({ score }) => score > 0 || normalizedQuery.length === 0)
+    .filter(({ score }) => score > 0)
     .sort((left, right) => {
       if (right.score !== left.score) {
         return right.score - left.score;

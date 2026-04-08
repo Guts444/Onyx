@@ -20,7 +20,8 @@ use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime, State};
 
 const MAX_EPG_DOWNLOAD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EPG_XML_BYTES: usize = 192 * 1024 * 1024;
-const REQUEST_TIMEOUT_SECS: u64 = 20;
+const CONNECT_TIMEOUT_SECS: u64 = 15;
+const READ_TIMEOUT_SECS: u64 = 45;
 const EPG_CACHE_PATH: &str = "epg/cache.json";
 const GZIP_MAGIC_BYTES: [u8; 2] = [0x1f, 0x8b];
 
@@ -104,6 +105,12 @@ struct EpgCacheStore {
     caches: HashMap<String, EpgCache>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EpgCacheStoreRef<'a> {
+    caches: &'a HashMap<String, EpgCache>,
+}
+
 #[derive(Default)]
 struct PendingChannel {
     id: String,
@@ -163,12 +170,13 @@ fn split_epg_channel_key(raw_key: &str) -> Option<(String, String)> {
         return None;
     }
 
-    Some((trimmed_source_url.to_string(), trimmed_channel_id.to_string()))
+    Some((
+        trimmed_source_url.to_string(),
+        trimmed_channel_id.to_string(),
+    ))
 }
 
-fn normalize_epg_cache_map(
-    caches: HashMap<String, EpgCache>,
-) -> HashMap<String, EpgCache> {
+fn normalize_epg_cache_map(caches: HashMap<String, EpgCache>) -> HashMap<String, EpgCache> {
     let mut normalized_caches = HashMap::new();
 
     for (_, cache) in caches {
@@ -190,7 +198,8 @@ fn normalize_epg_cache_map(
 
 fn build_http_client() -> Result<Client, String> {
     Client::builder()
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .read_timeout(Duration::from_secs(READ_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::limited(5))
         .user_agent("onyx/0.1 epg")
         .build()
@@ -251,11 +260,12 @@ async fn fetch_bytes_with_limit(
 
     let mut body = Vec::new();
 
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("Could not read the server response: {}", error.without_url()))?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        format!(
+            "Could not read the server response: {}",
+            error.without_url()
+        )
+    })? {
         if body.len() + chunk.len() > byte_limit {
             return Err("The EPG response is too large to import safely.".to_string());
         }
@@ -743,10 +753,8 @@ fn write_epg_caches_to_disk<R: Runtime>(
             .map_err(|error| format!("Could not create the EPG cache directory: {error}"))?;
     }
 
-    let serialized = serde_json::to_vec(&EpgCacheStore {
-        caches: caches.clone(),
-    })
-    .map_err(|error| format!("Could not serialize the EPG cache store: {error}"))?;
+    let serialized = serde_json::to_vec(&EpgCacheStoreRef { caches })
+        .map_err(|error| format!("Could not serialize the EPG cache store: {error}"))?;
 
     fs::write(cache_path, serialized)
         .map_err(|error| format!("Could not write the EPG cache store to disk: {error}"))?;
@@ -815,29 +823,25 @@ fn get_programme_snapshots_for_channel(
     programmes: &[EpgProgramme],
     now_ms: i64,
 ) -> (Option<EpgProgrammeSummary>, Option<EpgProgrammeSummary>) {
-    let mut current = None;
-    let mut next = None;
+    let next_index = programmes.partition_point(|programme| programme.start_ms <= now_ms);
 
-    for (index, programme) in programmes.iter().enumerate() {
+    if let Some(current_index) = next_index.checked_sub(1) {
+        let programme = &programmes[current_index];
         let inferred_stop = programme.stop_ms.or_else(|| {
             programmes
-                .get(index + 1)
+                .get(current_index + 1)
                 .map(|candidate| candidate.start_ms)
         });
 
-        if programme.start_ms <= now_ms && inferred_stop.map_or(true, |stop_ms| now_ms < stop_ms) {
-            current = Some(programme_to_summary(programme));
-            next = programmes.get(index + 1).map(programme_to_summary);
-            break;
-        }
-
-        if programme.start_ms > now_ms {
-            next = Some(programme_to_summary(programme));
-            break;
+        if inferred_stop.map_or(true, |stop_ms| now_ms < stop_ms) {
+            return (
+                Some(programme_to_summary(programme)),
+                programmes.get(current_index + 1).map(programme_to_summary),
+            );
         }
     }
 
-    (current, next)
+    (None, programmes.get(next_index).map(programme_to_summary))
 }
 
 #[tauri::command]

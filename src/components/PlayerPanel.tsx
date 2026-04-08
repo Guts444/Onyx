@@ -95,7 +95,7 @@ export function PlayerPanel({
     player.error !== null ||
     player.loading ||
     player.buffering;
-  const currentTitle = player.currentTitle ?? selectedChannel?.name ?? "Nothing selected";
+  const currentTitle = selectedChannel?.name ?? "Nothing selected";
   const currentMeta = selectedChannel
     ? `${selectedChannel.group}${selectedChannel.isPlayable ? "" : " - unavailable"}`
     : "Choose a group, then pick a channel to begin playback.";
@@ -103,6 +103,7 @@ export function PlayerPanel({
     player.videoWidth !== null && player.videoHeight !== null
       ? `${player.videoWidth}x${player.videoHeight}`
       : "Detecting...";
+  const fpsLabel = player.videoFps !== null ? `${Math.round(player.videoFps)} fps` : "Detecting...";
   const shouldRenderChrome = selectedChannel !== null;
   const shouldHideCursor = isFullscreen && !showPlayerChrome && !shouldShowStatusCard;
 
@@ -227,7 +228,8 @@ export function PlayerPanel({
 
               <div className="player-chrome__controls">
                 <div className="control-row">
-                  <span className="control-metric">Resolution {resolutionLabel}</span>
+                  <span className="control-metric">{resolutionLabel}</span>
+                  <span className="control-metric">{fpsLabel}</span>
                   <button
                     type="button"
                     className="control-button"

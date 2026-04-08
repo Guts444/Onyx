@@ -1,66 +1,68 @@
 # Onyx
 
-Onyx is a local-first Windows IPTV player with native `libmpv` playback, saved source profiles, favorites, recents, and multi-source XMLTV EPG support in a desktop interface built for browsing and watching instead of juggling raw playlist links and browser tabs.
+Onyx is a local-first Windows IPTV player built with Tauri, React, TypeScript, and native `libmpv` playback.
 
-Built with Tauri, React, and TypeScript.
+It is meant for people who already have their own playlists, Xtream accounts, and XMLTV guide URLs, and want a desktop app that can keep large libraries usable without pushing their data through a cloud account.
 
-Windows is currently the primary supported platform.
+Windows is the primary supported platform.
 
 ## Download
 
 Download the latest Windows installer from [GitHub Releases](https://github.com/Guts444/Onyx/releases).
 
-If you install Onyx from a release build:
+Release builds include the native playback dependencies. You do not need Node.js, Rust, or the mpv DLLs unless you are building Onyx from source.
 
-- you do **not** need Rust
-- you do **not** need Node.js
-- you do **not** need to manually install the mpv DLLs
+## What Onyx Does
 
-Those requirements only apply if you want to build Onyx from source.
+- Loads local `.m3u` / `.m3u8` files, remote M3U URLs, and Xtream live TV accounts.
+- Saves source profiles so you can reload a provider without re-entering the same details.
+- Browses large channel libraries by group, favorites, recents, and search.
+- Lets you hide noisy groups and collapse source/group sections.
+- Loads one or more XMLTV EPG guides.
+- Caches guide data locally for matching and now/next programme display.
+- Supports manual EPG matching when automatic matching is not enough.
+- Plays streams through native `libmpv`.
+- Provides reload, stop, mute, volume, fullscreen, resume, resolution, and FPS controls in the player overlay.
 
-## Features
+## Large Library Behavior
 
-- Sources that stay organized: import local `.m3u` / `.m3u8` files, remote M3U playlist URLs, and Xtream accounts, then switch between saved source profiles without re-entering everything each time.
-- A better browsing library: browse channels by group, keep Favorites pinned, revisit Recents, hide noisy groups, search faster, and collapse the current source from the sidebar.
-- EPG you can actually control: load one or more XMLTV guides, enable or disable each guide independently, refresh them on demand or on a schedule, and manually match channels when automatic lookup is not enough.
-- Native playback that feels like a desktop app: `libmpv` playback with reload, stop, mute, volume, fullscreen, and startup restore for the last channel and volume.
+Onyx is built around large IPTV libraries. Recent startup and browsing work focuses on cases with tens of thousands of playlist channels and many EPG programmes:
+
+- cached playlists can appear immediately while saved remote sources refresh later
+- startup EPG refreshes are delayed until cached guide directories have loaded
+- multiple startup EPG refreshes are staggered instead of launched all at once
+- the channel shelf renders large groups incrementally instead of trying to mount every visible channel card in one pass
+- EPG now/next lookup uses faster indexed programme searches
+
+## Privacy And Storage
+
+Onyx has no cloud backend, analytics, telemetry, or account sync.
+
+Local app state is stored by Tauri in the app local data directory. This includes saved source metadata, guide settings, favorites, recents, hidden groups, playback session data, volume, and cached playlist snapshots.
+
+Xtream passwords are stored separately in the operating system credential store through the Rust `keyring` integration. Saved source JSON is scrubbed so Xtream passwords are not written into the app-state JSON files.
+
+EPG cache data is also stored locally by the Tauri backend.
+
+## Security Notes
+
+- Playlist metadata is treated as untrusted text and rendered without HTML injection.
+- Stream URLs are normalized and restricted to supported protocols or local file paths.
+- Remote playlist and XMLTV guide imports are fetched in Rust to avoid browser CORS limitations and to enforce size limits.
+- Xtream passwords are stored in the OS credential store rather than browser storage or app-state JSON.
+- No shell execution is driven by playlist data.
 
 ## Screenshots
 
-### Clean home screen
-
-Open Settings, add a source, and start browsing without a crowded layout slowing you down.
+### Home
 
 ![Onyx home screen](docs/screenshots/home.png)
 
-### Settings tabs
-
-The Settings drawer keeps Library, EPG, and Sources side by side so you can manage browsing, guide data, and saved logins from one place.
+### Settings
 
 | Library | EPG | Sources |
 | --- | --- | --- |
 | ![Onyx library settings](docs/screenshots/library-settings.png) | ![Onyx EPG settings](docs/screenshots/epg-settings.png) | ![Onyx saved sources](docs/screenshots/saved-sources.png) |
-
-## Privacy
-
-Onyx has no cloud backend, analytics, telemetry, or account sync.
-
-Your playlists, Xtream details, guide settings, favorites, recents, and playback preferences stay on the device running the app.
-
-## Security
-
-- Playlist metadata is treated as untrusted text and rendered without HTML injection.
-- Stream URLs are normalized and restricted to supported protocols or local file paths.
-- Remote URL imports and XMLTV guide imports are fetched in Rust to avoid browser CORS limitations.
-- No shell execution is driven by playlist data.
-
-## Disclaimer
-
-Onyx is a client application for loading and playing user-supplied playlists, streams, guide URLs, and related credentials. It does not provide any channels, playlists, stream URLs, guide data, or service access.
-
-Users are responsible for ensuring they are authorized to use any playlists, streams, Xtream accounts, credentials, EPG URLs, and other third-party services or content loaded by Onyx, and that their use complies with applicable law and the terms of the relevant provider.
-
-Onyx is not affiliated with, endorsed by, or responsible for third-party content or services loaded by users.
 
 ## Build From Source
 
@@ -85,8 +87,10 @@ npx tauri-plugin-libmpv-api setup-lib
 
 Or place these files in `src-tauri/lib/` yourself:
 
-- `libmpv-wrapper.dll`
-- `libmpv-2.dll`
+```text
+libmpv-wrapper.dll
+libmpv-2.dll
+```
 
 Start development mode:
 
@@ -96,19 +100,23 @@ npm run tauri dev
 
 Or double-click:
 
-- `Start Onyx Dev.cmd`
+```text
+Start Onyx Dev.cmd
+```
 
-If you only run `npm run dev`, the app opens in a browser preview and native playback will be disabled.
+If you only run `npm run dev`, the app opens in a browser preview and native playback is disabled.
 
-For release builds, the DLLs only need to exist locally when you build. The Tauri bundle config includes them as resources, so when they are present during the build they are bundled into the installer.
-
-To build a release:
+Build a release:
 
 ```bash
 npm run tauri build
 ```
 
-Or double-click `Build Onyx Release.cmd`.
+Or double-click:
+
+```text
+Build Onyx Release.cmd
+```
 
 Release artifacts are generated in:
 
@@ -116,9 +124,17 @@ Release artifacts are generated in:
 src-tauri/target/release/bundle
 ```
 
+## Disclaimer
+
+Onyx is a client application for loading and playing user-supplied playlists, streams, guide URLs, and related credentials. It does not provide channels, playlists, stream URLs, guide data, or service access.
+
+Users are responsible for ensuring they are authorized to use any playlists, streams, Xtream accounts, credentials, EPG URLs, and other third-party services or content loaded by Onyx, and that their use complies with applicable law and the terms of the relevant provider.
+
+Onyx is not affiliated with, endorsed by, or responsible for third-party content or services loaded by users.
+
 ## Donations
 
-If you're enjoying this project, please consider donating. It helps me continue improving it and spending more time on updates, fixes, and new features.
+If you enjoy Onyx, donations help support continued fixes and improvements.
 
 Bitcoin:
 

@@ -43,8 +43,14 @@ import {
   createXtreamSource,
   isSourceProfileReady,
   markSourceLoaded,
+  scrubSourceProfileSecrets,
   updateSourceProfile,
 } from "./features/sources/profiles";
+import {
+  deleteXtreamPassword,
+  loadXtreamPassword,
+  saveXtreamPassword,
+} from "./features/sources/secrets";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { hashString } from "./utils/hash";
 import "./App.css";
@@ -57,25 +63,19 @@ const SAVED_SOURCES_STORAGE_KEY = "iptv-player:saved-sources";
 const ACTIVE_SOURCE_STORAGE_KEY = "iptv-player:active-source";
 const PLAYLIST_SNAPSHOT_STORAGE_KEY = "iptv-player:playlist-snapshot";
 const COLLAPSED_SOURCE_CARDS_STORAGE_KEY = "iptv-player:collapsed-source-cards";
-const LEGACY_EPG_SETTINGS_STORAGE_KEY = "iptv-player:epg-settings";
 const EPG_SOURCES_STORAGE_KEY = "iptv-player:epg-sources";
 const EPG_MANUAL_MATCHES_STORAGE_KEY = "iptv-player:epg-manual-matches";
 const PLAYER_RESUME_STORAGE_KEY = "iptv-player:playback-session";
 const PLAYER_VOLUME_STORAGE_KEY = "iptv-player:player-volume";
 const RECENT_CHANNEL_LIMIT = 12;
 const FAVORITES_GROUP_ID = "__iptv_player_favorites__";
+const CHANNEL_RENDER_INITIAL_LIMIT = 320;
+const CHANNEL_RENDER_BATCH_SIZE = 320;
 
 interface PlaybackSession {
   sourceId: string | null;
   channelId: string | null;
   shouldResume: boolean;
-}
-
-interface LegacyEpgSettings {
-  url?: string;
-  autoUpdateEnabled?: boolean;
-  updateOnStartup?: boolean;
-  updateIntervalHours?: number;
 }
 
 function pushRecentId(recentIds: string[], channelId: string) {
@@ -138,30 +138,6 @@ function getUniqueReadyEpgSources(sources: EpgSource[], enabledOnly = false) {
   return uniqueSources;
 }
 
-function readLegacyEpgSource() {
-  try {
-    const rawValue = window.localStorage.getItem(LEGACY_EPG_SETTINGS_STORAGE_KEY);
-
-    if (!rawValue) {
-      return null;
-    }
-
-    const parsedValue = JSON.parse(rawValue) as LegacyEpgSettings;
-
-    if (typeof parsedValue.url !== "string" || parsedValue.url.trim().length === 0) {
-      return null;
-    }
-
-    return createEpgSource(parsedValue.url, {
-      autoUpdateEnabled: parsedValue.autoUpdateEnabled === true,
-      updateOnStartup: parsedValue.updateOnStartup !== false,
-      updateIntervalHours: parsedValue.updateIntervalHours,
-    });
-  } catch {
-    return null;
-  }
-}
-
 function removeMappingsForGuideUrl(
   currentMappings: SavedEpgMappingStore,
   guideUrl: string,
@@ -179,61 +155,59 @@ function removeMappingsForGuideUrl(
 }
 
 function App() {
-  const [favoriteIds, setFavoriteIds] = usePersistentState<string[]>(FAVORITES_STORAGE_KEY, []);
-  const [recentIds, setRecentIds] = usePersistentState<string[]>(RECENTS_STORAGE_KEY, []);
-  const [hiddenGroupsByLibrary, setHiddenGroupsByLibrary] = usePersistentState<Record<string, string[]>>(
-    GROUP_VISIBILITY_STORAGE_KEY,
-    {},
-  );
-  const [collapsedGroupsByLibrary, setCollapsedGroupsByLibrary] = usePersistentState<
-    Record<string, boolean>
-  >(COLLAPSED_GROUPS_STORAGE_KEY, {});
-  const [collapsedSourceIds, setCollapsedSourceIds] = usePersistentState<string[]>(
-    COLLAPSED_SOURCE_CARDS_STORAGE_KEY,
+  const [favoriteIds, setFavoriteIds, favoriteIdsHydrated] = usePersistentState<string[]>(
+    FAVORITES_STORAGE_KEY,
     [],
   );
-  const [savedSources, setSavedSources] = usePersistentState<Record<string, SavedPlaylistSource>>(
-    SAVED_SOURCES_STORAGE_KEY,
-    {},
-    (parsedValue) => {
-      if (Array.isArray(parsedValue)) {
-        const record: Record<string, SavedPlaylistSource> = {};
-        for (const source of parsedValue) {
-          record[source.id] = source as SavedPlaylistSource;
-        }
-        return record;
+  const [recentIds, setRecentIds, recentIdsHydrated] = usePersistentState<string[]>(
+    RECENTS_STORAGE_KEY,
+    [],
+  );
+  const [hiddenGroupsByLibrary, setHiddenGroupsByLibrary, hiddenGroupsHydrated] =
+    usePersistentState<Record<string, string[]>>(GROUP_VISIBILITY_STORAGE_KEY, {});
+  const [collapsedGroupsByLibrary, setCollapsedGroupsByLibrary, collapsedGroupsHydrated] = usePersistentState<
+    Record<string, boolean>
+  >(COLLAPSED_GROUPS_STORAGE_KEY, {});
+  const [collapsedSourceIds, setCollapsedSourceIds, collapsedSourceIdsHydrated] =
+    usePersistentState<string[]>(COLLAPSED_SOURCE_CARDS_STORAGE_KEY, []);
+  const [savedSources, setSavedSources, savedSourcesHydrated] =
+    usePersistentState<Record<string, SavedPlaylistSource>>(
+      SAVED_SOURCES_STORAGE_KEY,
+      {},
+      (parsedValue) => {
+        if (Array.isArray(parsedValue)) {
+          const record: Record<string, SavedPlaylistSource> = {};
+          for (const source of parsedValue) {
+            record[source.id] = source as SavedPlaylistSource;
+          }
+          return record;
       }
       return parsedValue as Record<string, SavedPlaylistSource>;
-    }
+    },
+    scrubSourceProfileSecrets,
   );
-  const [activeSourceId, setActiveSourceId] = usePersistentState<string | null>(
+  const [activeSourceId, setActiveSourceId, activeSourceIdHydrated] = usePersistentState<string | null>(
     ACTIVE_SOURCE_STORAGE_KEY,
     null,
   );
-  const [epgSources, setEpgSources] = usePersistentState<EpgSource[]>(
+  const [epgSources, setEpgSources, epgSourcesHydrated] = usePersistentState<EpgSource[]>(
     EPG_SOURCES_STORAGE_KEY,
     [],
   );
-  const [savedEpgMappings, setSavedEpgMappings] = usePersistentState<SavedEpgMappingStore>(
-    EPG_MANUAL_MATCHES_STORAGE_KEY,
-    {},
-  );
-  const [playbackSession, setPlaybackSession] = usePersistentState<PlaybackSession>(
-    PLAYER_RESUME_STORAGE_KEY,
-    {
+  const [savedEpgMappings, setSavedEpgMappings, savedEpgMappingsHydrated] =
+    usePersistentState<SavedEpgMappingStore>(EPG_MANUAL_MATCHES_STORAGE_KEY, {});
+  const [playbackSession, setPlaybackSession, playbackSessionHydrated] =
+    usePersistentState<PlaybackSession>(PLAYER_RESUME_STORAGE_KEY, {
       sourceId: null,
       channelId: null,
       shouldResume: false,
-    },
-  );
-  const [savedVolume, setSavedVolume] = usePersistentState<number>(
+    });
+  const [savedVolume, setSavedVolume, savedVolumeHydrated] = usePersistentState<number>(
     PLAYER_VOLUME_STORAGE_KEY,
     DEFAULT_PLAYER_VOLUME,
   );
-  const [playlistSnapshot, setPlaylistSnapshot] = usePersistentState<PlaylistSnapshot | null>(
-    PLAYLIST_SNAPSHOT_STORAGE_KEY,
-    null,
-  );
+  const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated] =
+    usePersistentState<PlaylistSnapshot | null>(PLAYLIST_SNAPSHOT_STORAGE_KEY, null);
   const [playlist, setPlaylist] = useState<PlaylistImport | null>(() => playlistSnapshot?.playlist ?? null);
   const [activeView, setActiveView] = useState<LibraryView>("all");
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
@@ -242,6 +216,7 @@ function App() {
     () => playlistSnapshot?.selectedChannelId ?? playlistSnapshot?.playlist.channels[0]?.id ?? null,
   );
   const [loadingSourceId, setLoadingSourceId] = useState<string | null>(null);
+  const [channelRenderLimit, setChannelRenderLimit] = useState(CHANNEL_RENDER_INITIAL_LIMIT);
   const [isImportingFile, setIsImportingFile] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -255,6 +230,8 @@ function App() {
     Record<string, EpgProgrammeSnapshot>
   >({});
   const [updatingEpgSourceIds, setUpdatingEpgSourceIds] = useState<string[]>([]);
+  const [hasLoadedEpgCacheDirectories, setHasLoadedEpgCacheDirectories] = useState(false);
+  const [savedSourcePasswordsHydrated, setSavedSourcePasswordsHydrated] = useState(false);
   const [epgStatusMessage, setEpgStatusMessage] = useState<string | null>(null);
   const [matcherChannel, setMatcherChannel] = useState<Channel | null>(null);
   const deferredSearchQuery = useDeferredValue(searchQuery);
@@ -262,32 +239,193 @@ function App() {
   const playerSurfaceRef = useRef<HTMLDivElement>(null);
   const startupRestoreAttemptedRef = useRef(false);
   const startupPlaybackRestoreKeyRef = useRef<string | null>(null);
-  const migratedLegacyEpgSettingsRef = useRef(false);
+  const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
+  const hydratedPlaylistSnapshotAppliedRef = useRef(false);
+  const hydratedVolumeAppliedRef = useRef(false);
+  const savedXtreamPasswordsRef = useRef<Record<string, string>>({});
   const startupEpgRefreshAttemptedRef = useRef<Set<string>>(new Set());
   const epgRefreshPromiseRef = useRef<Map<string, Promise<EpgDirectoryResponse | null>>>(
     new Map(),
   );
+  const hasHydratedPersistentState =
+    favoriteIdsHydrated &&
+    recentIdsHydrated &&
+    hiddenGroupsHydrated &&
+    collapsedGroupsHydrated &&
+    collapsedSourceIdsHydrated &&
+    savedSourcesHydrated &&
+    activeSourceIdHydrated &&
+    savedSourcePasswordsHydrated &&
+    epgSourcesHydrated &&
+    savedEpgMappingsHydrated &&
+    playbackSessionHydrated &&
+    savedVolumeHydrated &&
+    playlistSnapshotHydrated;
   const { player, playChannel, reloadPlayback, setVolumeLevel, stopPlayback, toggleMute } =
     useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
 
   useEffect(() => {
-    if (migratedLegacyEpgSettingsRef.current) {
+    selectedChannelIdRef.current = selectedChannelId;
+  }, [selectedChannelId]);
+
+  const xtreamSourceIdsKey = useMemo(
+    () =>
+      Object.values(savedSources)
+        .filter((source) => source.kind === "xtream")
+        .map((source) => source.id)
+        .sort((left, right) => left.localeCompare(right))
+        .join("\u0001"),
+    [savedSources],
+  );
+
+  useEffect(() => {
+    if (!savedSourcesHydrated) {
       return;
     }
 
-    migratedLegacyEpgSettingsRef.current = true;
+    let cancelled = false;
+    setSavedSourcePasswordsHydrated(false);
 
-    setEpgSources((currentSources) => {
-      const normalizedSources = normalizeEpgSources(currentSources);
+    const xtreamSources = Object.values(savedSources).filter(
+      (source): source is SavedPlaylistSource & { kind: "xtream" } => source.kind === "xtream",
+    );
 
-      if (normalizedSources.length > 0 || currentSources.length > 0) {
-        return normalizedSources;
+    void Promise.all(
+      xtreamSources.map(async (source) => ({
+        sourceId: source.id,
+        password: await loadXtreamPassword(source.id),
+      })),
+    )
+      .then((loadedPasswords) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextPasswordSnapshot: Record<string, string> = {};
+
+        for (const { sourceId, password } of loadedPasswords) {
+          nextPasswordSnapshot[sourceId] = password ?? "";
+        }
+
+        savedXtreamPasswordsRef.current = nextPasswordSnapshot;
+
+        setSavedSources((currentSources) => {
+          let hasChanges = false;
+          const nextSources = { ...currentSources };
+
+          for (const { sourceId, password } of loadedPasswords) {
+            const source = nextSources[sourceId];
+
+            if (!source || source.kind !== "xtream") {
+              continue;
+            }
+
+            if (password !== null && source.password !== password) {
+              nextSources[sourceId] = {
+                ...source,
+                password,
+              };
+              hasChanges = true;
+              continue;
+            }
+
+            if (password === null && source.password.length === 0) {
+              continue;
+            }
+
+            // Rewrite legacy in-file passwords through the scrubbed serializer.
+            nextSources[sourceId] = {
+              ...source,
+            };
+            hasChanges = true;
+          }
+
+          return hasChanges ? nextSources : currentSources;
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        const errorMessage =
+          error instanceof Error ? error.message : "Saved Xtream passwords could not be loaded.";
+        setMessage(errorMessage);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSavedSourcePasswordsHydrated(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [savedSourcesHydrated, setSavedSources, xtreamSourceIdsKey]);
+
+  useEffect(() => {
+    if (!savedSourcesHydrated || !savedSourcePasswordsHydrated) {
+      return;
+    }
+
+    const nextPasswordSnapshot: Record<string, string> = {};
+
+    for (const source of Object.values(savedSources)) {
+      if (source.kind === "xtream") {
+        nextPasswordSnapshot[source.id] = source.password;
+      }
+    }
+
+    const previousPasswordSnapshot = savedXtreamPasswordsRef.current;
+    savedXtreamPasswordsRef.current = nextPasswordSnapshot;
+
+    for (const [sourceId, password] of Object.entries(nextPasswordSnapshot)) {
+      if (previousPasswordSnapshot[sourceId] === password) {
+        continue;
       }
 
-      const legacySource = readLegacyEpgSource();
-      return legacySource ? [legacySource] : normalizedSources;
+      void saveXtreamPassword(sourceId, password).catch((error) => {
+        const errorMessage =
+          error instanceof Error ? error.message : "The Xtream password could not be saved.";
+        setMessage(errorMessage);
+      });
+    }
+
+    for (const sourceId of Object.keys(previousPasswordSnapshot)) {
+      if (Object.prototype.hasOwnProperty.call(nextPasswordSnapshot, sourceId)) {
+        continue;
+      }
+
+      void deleteXtreamPassword(sourceId).catch(() => {
+        // Removing stale saved credentials is best-effort.
+      });
+    }
+  }, [savedSourcePasswordsHydrated, savedSources, savedSourcesHydrated]);
+
+  useEffect(() => {
+    if (!playlistSnapshotHydrated || hydratedPlaylistSnapshotAppliedRef.current) {
+      return;
+    }
+
+    hydratedPlaylistSnapshotAppliedRef.current = true;
+
+    if (!playlistSnapshot) {
+      return;
+    }
+
+    const nextSelectedChannelId =
+      playlistSnapshot.selectedChannelId &&
+      playlistSnapshot.playlist.channels.some(
+        (channel) => channel.id === playlistSnapshot.selectedChannelId,
+      )
+        ? playlistSnapshot.selectedChannelId
+        : playlistSnapshot.playlist.channels[0]?.id ?? null;
+
+    startTransition(() => {
+      setPlaylist(playlistSnapshot.playlist);
+      setSelectedChannelId(nextSelectedChannelId);
     });
-  }, [setEpgSources]);
+  }, [playlistSnapshot, playlistSnapshotHydrated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -347,6 +485,20 @@ function App() {
     setSavedVolume((currentValue) => (currentValue === nextVolume ? currentValue : nextVolume));
   }, [player.volume, setSavedVolume]);
 
+  useEffect(() => {
+    if (
+      hydratedVolumeAppliedRef.current ||
+      !savedVolumeHydrated ||
+      player.environment !== "tauri" ||
+      !player.ready
+    ) {
+      return;
+    }
+
+    hydratedVolumeAppliedRef.current = true;
+    void setVolumeLevel(savedVolume);
+  }, [player.environment, player.ready, savedVolume, savedVolumeHydrated, setVolumeLevel]);
+
   function schedulePlayerLayoutSync() {
     const syncDelays = [40, 140, 280];
 
@@ -363,6 +515,7 @@ function App() {
       sourceId?: string | null;
       preferredChannelId?: string | null;
       preservePlaybackSession?: boolean;
+      keepPlaybackRunning?: boolean;
     },
   ) {
     const nextSelectedChannelId =
@@ -372,7 +525,10 @@ function App() {
         : importedPlaylist.channels[0]?.id ?? null;
     const nextSourceId = options?.sourceId ?? null;
 
-    await stopPlayback();
+    if (!options?.keepPlaybackRunning) {
+      await stopPlayback();
+    }
+
     setPlaylistSnapshot({
       sourceId: nextSourceId,
       playlist: importedPlaylist,
@@ -418,6 +574,7 @@ function App() {
     source: SavedPlaylistSource,
     options?: {
       preservePlaybackSession?: boolean;
+      keepPlaybackRunning?: boolean;
     },
   ) {
     let importedPlaylist: PlaylistImport;
@@ -432,8 +589,11 @@ function App() {
     await applyImportedPlaylist(importedPlaylist, {
       sourceId: source.id,
       preferredChannelId:
-        playlistSnapshot?.sourceId === source.id ? playlistSnapshot.selectedChannelId : null,
+        playlistSnapshot?.sourceId === source.id
+          ? selectedChannelIdRef.current ?? playlistSnapshot.selectedChannelId
+          : null,
       preservePlaybackSession: options?.preservePlaybackSession,
+      keepPlaybackRunning: options?.keepPlaybackRunning,
     });
     setSavedSources((currentSources) => {
       const currentSource = currentSources[source.id];
@@ -449,10 +609,20 @@ function App() {
     activeSourceId && savedSources[activeSourceId] && isSourceProfileReady(savedSources[activeSourceId])
       ? savedSources[activeSourceId]
       : null;
+  const hasCachedStartupPlaylist =
+    startupSourceToRestore !== null &&
+    playlistSnapshot?.sourceId === startupSourceToRestore.id &&
+    playlistSnapshot.playlist.channels.length > 0;
   const shouldDelayResumeForStartupRestore =
-    !startupRestoreAttemptedRef.current && startupSourceToRestore !== null;
+    !startupRestoreAttemptedRef.current &&
+    startupSourceToRestore !== null &&
+    !hasCachedStartupPlaylist;
 
   useEffect(() => {
+    if (!hasHydratedPersistentState) {
+      return;
+    }
+
     if (startupRestoreAttemptedRef.current) {
       return;
     }
@@ -463,20 +633,36 @@ function App() {
       return;
     }
 
-    setIsRestoringStartupSource(true);
-
-    void importFromSavedSource(startupSourceToRestore, {
-      preservePlaybackSession: true,
-    })
-      .catch((error) => {
+    const restoreStartupSource = () =>
+      importFromSavedSource(startupSourceToRestore, {
+        preservePlaybackSession: true,
+        keepPlaybackRunning: hasCachedStartupPlaylist,
+      }).catch((error) => {
         const errorMessage =
           error instanceof Error ? error.message : "The saved source could not be refreshed.";
-        setMessage(errorMessage);
-      })
-      .finally(() => {
-        setIsRestoringStartupSource(false);
+        setMessage(
+          hasCachedStartupPlaylist
+            ? `Using the cached library. ${errorMessage}`
+            : errorMessage,
+        );
       });
-  }, [startupSourceToRestore]);
+
+    if (hasCachedStartupPlaylist) {
+      const timerId = window.setTimeout(() => {
+        void restoreStartupSource();
+      }, 1500);
+
+      return () => {
+        window.clearTimeout(timerId);
+      };
+    }
+
+    setIsRestoringStartupSource(true);
+
+    void restoreStartupSource().finally(() => {
+      setIsRestoringStartupSource(false);
+    });
+  }, [hasCachedStartupPlaylist, hasHydratedPersistentState, startupSourceToRestore]);
 
   async function handleImportFile(file: File) {
     setIsImportingFile(true);
@@ -1049,11 +1235,41 @@ function App() {
     normalizedSearchQuery,
   ]);
 
+  useEffect(() => {
+    setChannelRenderLimit(CHANNEL_RENDER_INITIAL_LIMIT);
+  }, [activeGroup, activeView, normalizedSearchQuery, playlist?.importedAt]);
+
+  useEffect(() => {
+    if (!selectedChannelId) {
+      return;
+    }
+
+    const selectedIndex = visibleChannels.findIndex((channel) => channel.id === selectedChannelId);
+
+    if (selectedIndex < channelRenderLimit) {
+      return;
+    }
+
+    setChannelRenderLimit(
+      Math.min(visibleChannels.length, selectedIndex + 1 + CHANNEL_RENDER_BATCH_SIZE),
+    );
+  }, [channelRenderLimit, selectedChannelId, visibleChannels]);
+
+  const renderedChannels = useMemo(
+    () => visibleChannels.slice(0, channelRenderLimit),
+    [channelRenderLimit, visibleChannels],
+  );
+  const handleLoadMoreVisibleChannels = useCallback(() => {
+    setChannelRenderLimit((currentLimit) =>
+      Math.min(visibleChannels.length, currentLimit + CHANNEL_RENDER_BATCH_SIZE),
+    );
+  }, [visibleChannels.length]);
+
   const selectedGuide = selectedChannel ? getGuideByChannelId(selectedChannel.id) ?? null : null;
   const visibleEpgChannelKeys = useMemo(() => {
     const keys = new Set<string>();
 
-    for (const channel of visibleChannels) {
+    for (const channel of renderedChannels) {
       const uniqueId = resolvedEpgMatchesByChannelId[channel.id]?.epgChannel.uniqueId;
       if (uniqueId) {
         keys.add(uniqueId);
@@ -1065,7 +1281,7 @@ function App() {
     }
 
     return [...keys];
-  }, [visibleChannels, resolvedEpgMatchesByChannelId, selectedGuide]);
+  }, [renderedChannels, resolvedEpgMatchesByChannelId, selectedGuide]);
   const visibleEpgChannelKeysKey = visibleEpgChannelKeys.join("\u0001");
   const favoritesCount = favoriteChannels.length;
   const groupsCollapsed = playlistPreferenceKey
@@ -1202,6 +1418,7 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    setHasLoadedEpgCacheDirectories(false);
 
     void loadEpgCacheDirectories()
       .then((cachedDirectories) => {
@@ -1231,6 +1448,11 @@ function App() {
         const errorMessage =
           error instanceof Error ? error.message : "The saved guide cache could not be loaded.";
         setEpgStatusMessage(errorMessage);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setHasLoadedEpgCacheDirectories(true);
+        }
       });
 
     return () => {
@@ -1239,7 +1461,13 @@ function App() {
   }, [epgSourceUrlsKey]);
 
   useEffect(() => {
-    for (const source of enabledReadyEpgSources) {
+    if (!hasHydratedPersistentState || !hasLoadedEpgCacheDirectories) {
+      return undefined;
+    }
+
+    const timerIds: number[] = [];
+
+    for (const [index, source] of enabledReadyEpgSources.entries()) {
       const startupKey = `${source.id}\u0001${normalizeEpgUrlKey(source.url)}\u0001${
         source.updateOnStartup ? "enabled" : "disabled"
       }`;
@@ -1248,15 +1476,29 @@ function App() {
         continue;
       }
 
-      startupEpgRefreshAttemptedRef.current.add(startupKey);
-
       if (!source.updateOnStartup) {
+        startupEpgRefreshAttemptedRef.current.add(startupKey);
         continue;
       }
 
-      void refreshEpgGuideForSource(source, "startup");
+      const timerId = window.setTimeout(() => {
+        if (startupEpgRefreshAttemptedRef.current.has(startupKey)) {
+          return;
+        }
+
+        startupEpgRefreshAttemptedRef.current.add(startupKey);
+        void refreshEpgGuideForSource(source, "startup");
+      }, index * 1500);
+
+      timerIds.push(timerId);
     }
-  }, [enabledReadyEpgSources]);
+
+    return () => {
+      timerIds.forEach((timerId) => {
+        window.clearTimeout(timerId);
+      });
+    };
+  }, [enabledReadyEpgSources, hasHydratedPersistentState, hasLoadedEpgCacheDirectories]);
 
   const autoUpdatingGuideKey = useMemo(
     () =>
@@ -1345,6 +1587,7 @@ function App() {
   useEffect(() => {
     if (
       !playlist ||
+      !hasHydratedPersistentState ||
       playbackSession.channelId === null ||
       !playbackSession.shouldResume ||
       player.environment !== "tauri" ||
@@ -1387,6 +1630,7 @@ function App() {
   }, [
     activeSourceId,
     channelsById,
+    hasHydratedPersistentState,
     isRestoringStartupSource,
     playbackSession,
     player.environment,
@@ -1396,6 +1640,17 @@ function App() {
     setRecentIds,
     shouldDelayResumeForStartupRestore,
   ]);
+
+  if (!hasHydratedPersistentState) {
+    return (
+      <main className={`app-shell ${isFullscreen ? "app-shell--fullscreen" : ""}`}>
+        <div className="panel empty-state">
+          <strong>Loading library</strong>
+          <span>Opening saved app data...</span>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className={`app-shell ${isFullscreen ? "app-shell--fullscreen" : ""}`}>
@@ -1476,7 +1731,8 @@ function App() {
             <ChannelShelf
               activeGroupLabel={activeGroupLabel}
               isFavoritesGroup={activeView !== "recents" && isFavoritesGroupActive}
-              channels={visibleChannels}
+              channels={renderedChannels}
+              totalChannelCount={visibleChannels.length}
               selectedChannelId={selectedChannel?.id ?? null}
               activeView={activeView}
               searchQuery={searchQuery}
@@ -1489,6 +1745,7 @@ function App() {
               onSelectChannel={handleSelectChannel}
               onToggleFavorite={handleToggleFavorite}
               onOpenEpgMatcher={handleOpenEpgMatcher}
+              onLoadMoreChannels={handleLoadMoreVisibleChannels}
             />
           </section>
         </div>

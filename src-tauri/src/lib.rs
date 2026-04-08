@@ -1,14 +1,18 @@
 mod epg;
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
 
 use reqwest::{Client, Url};
 use serde::Serialize;
 use serde_json::Value;
+use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime};
 
 const MAX_PLAYLIST_BYTES: usize = 32 * 1024 * 1024;
 const MAX_XTREAM_BYTES: usize = 32 * 1024 * 1024;
-const REQUEST_TIMEOUT_SECS: u64 = 20;
+const CONNECT_TIMEOUT_SECS: u64 = 15;
+const READ_TIMEOUT_SECS: u64 = 45;
+const APP_STATE_DIRECTORY: &str = "state";
+const XTREAM_SECRET_SERVICE: &str = "Onyx Xtream";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,11 +34,140 @@ struct XtreamImportResponse {
 
 fn build_http_client() -> Result<Client, String> {
     Client::builder()
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .read_timeout(Duration::from_secs(READ_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::limited(5))
         .user_agent("onyx/0.1")
         .build()
         .map_err(|error| format!("Could not initialize the network client: {error}"))
+}
+
+fn validate_app_state_key(key: &str) -> Result<(), String> {
+    if key.is_empty() || key.len() > 160 {
+        return Err("The app state key is not valid.".to_string());
+    }
+
+    if key
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
+    {
+        return Ok(());
+    }
+
+    Err("The app state key contains unsupported characters.".to_string())
+}
+
+fn validate_source_id(source_id: &str) -> Result<(), String> {
+    if source_id.is_empty() || source_id.len() > 160 {
+        return Err("The source id is not valid.".to_string());
+    }
+
+    if source_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
+    {
+        return Ok(());
+    }
+
+    Err("The source id contains unsupported characters.".to_string())
+}
+
+fn map_secret_error(error: keyring::Error) -> String {
+    format!("Could not access the OS credential store: {error}")
+}
+
+fn get_xtream_secret_entry(source_id: &str) -> Result<keyring::Entry, String> {
+    validate_source_id(source_id)?;
+    keyring::Entry::new(XTREAM_SECRET_SERVICE, source_id).map_err(map_secret_error)
+}
+
+fn encode_app_state_file_name(key: &str) -> String {
+    key.as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn get_app_state_path<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathBuf, String> {
+    validate_app_state_key(key)?;
+    app.path()
+        .resolve(
+            format!(
+                "{APP_STATE_DIRECTORY}/{}.json",
+                encode_app_state_file_name(key)
+            ),
+            BaseDirectory::AppLocalData,
+        )
+        .map_err(|error| format!("Could not resolve the app state path: {error}"))
+}
+
+#[tauri::command]
+fn load_app_state(app: AppHandle, key: String) -> Result<Option<Value>, String> {
+    let state_path = get_app_state_path(&app, &key)?;
+
+    if !state_path.exists() {
+        return Ok(None);
+    }
+
+    let bytes =
+        fs::read(state_path).map_err(|error| format!("Could not read the app state: {error}"))?;
+    let value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Could not parse the app state: {error}"))?;
+
+    Ok(Some(value))
+}
+
+#[tauri::command]
+fn save_app_state(app: AppHandle, key: String, value: Value) -> Result<(), String> {
+    let state_path = get_app_state_path(&app, &key)?;
+
+    if let Some(parent_directory) = state_path.parent() {
+        fs::create_dir_all(parent_directory)
+            .map_err(|error| format!("Could not create the app state directory: {error}"))?;
+    }
+
+    let serialized = serde_json::to_vec(&value)
+        .map_err(|error| format!("Could not serialize the app state: {error}"))?;
+
+    fs::write(state_path, serialized)
+        .map_err(|error| format!("Could not write the app state: {error}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn load_xtream_password(source_id: String) -> Result<Option<String>, String> {
+    let entry = get_xtream_secret_entry(&source_id)?;
+
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(map_secret_error(error)),
+    }
+}
+
+#[tauri::command]
+fn save_xtream_password(source_id: String, password: String) -> Result<(), String> {
+    let entry = get_xtream_secret_entry(&source_id)?;
+
+    if password.is_empty() {
+        return match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(map_secret_error(error)),
+        };
+    }
+
+    entry.set_password(&password).map_err(map_secret_error)
+}
+
+#[tauri::command]
+fn delete_xtream_password(source_id: String) -> Result<(), String> {
+    let entry = get_xtream_secret_entry(&source_id)?;
+
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(map_secret_error(error)),
+    }
 }
 
 fn normalize_playlist_url_input(raw_input: &str) -> Result<Url, String> {
@@ -122,11 +255,12 @@ async fn fetch_text_with_limit(
 
     let mut body = Vec::new();
 
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("Could not read the server response: {}", error.without_url()))?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        format!(
+            "Could not read the server response: {}",
+            error.without_url()
+        )
+    })? {
         if body.len() + chunk.len() > byte_limit {
             return Err("The response is too large to import safely.".to_string());
         }
@@ -459,6 +593,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fetch_playlist_from_url,
             fetch_xtream_live_channels,
+            load_app_state,
+            save_app_state,
+            load_xtream_password,
+            save_xtream_password,
+            delete_xtream_password,
             epg::refresh_epg_cache,
             epg::load_epg_cache_directories,
             epg::delete_epg_cache,

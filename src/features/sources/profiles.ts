@@ -89,3 +89,21 @@ export function updateSourceProfile(
   } as SavedPlaylistSource;
 }
 
+export function scrubSourceProfileSecrets(
+  sources: Record<string, SavedPlaylistSource>,
+): Record<string, SavedPlaylistSource> {
+  const scrubbedSources: Record<string, SavedPlaylistSource> = {};
+
+  for (const [sourceId, source] of Object.entries(sources)) {
+    scrubbedSources[sourceId] =
+      source.kind === "xtream"
+        ? {
+            ...source,
+            password: "",
+          }
+        : source;
+  }
+
+  return scrubbedSources;
+}
+
