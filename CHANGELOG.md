@@ -2,20 +2,13 @@
 
 ## v0.5.3
 
-- **Fullscreen stability**: Startup fullscreen restore now runs only once during launch, so exiting fullscreen no longer gets overridden by the startup resume flow.
-- **Player controls**: Double-clicking the mini player to enter fullscreen no longer reloads the already-playing channel.
-- **Live TV library**: Kept the Live TV groups panel scrollable after the fullscreen resume fix.
-
-## v0.5.2
-
-- **Startup playback**: Saved fullscreen playback now restores both the channel and fullscreen mode on launch.
-- **Live TV navigation**: Fixed the Live TV group browser so large group lists scroll correctly again.
-
-## v0.5.1
-
-- **Playback startup**: Startup restore now only resumes the last channel that was promoted into fullscreen, so guide browsing in the mini player no longer overwrites the startup channel.
-- **Player visibility**: Restored transparent root and body backgrounds required by the libmpv host layer so native video stays visible in the guide preview and fullscreen player.
-- **UI polish**: Removed leftover prototype wording, removed the `tv` rail label, and replaced the settings icon with a centered gear.
+- **Guide-first UI**: Reworked the main experience into a faster Live TV layout with a collapsible left rail, group browser, larger 16:9 mini player, richer programme details, and a full-width guide view that feels much closer to a dedicated IPTV app.
+- **Navigation flow**: Added the new `Search`, `Live TV`, and `Settings` rail, with the sidebar and library panels hidden until needed and `Esc` stepping back through groups and then the main menu.
+- **TV guide improvements**: Added a proper timeline grid with a moving now line, better time tracking, larger preview area, and guide rows built for quick browsing of large channel lists.
+- **Channel actions**: Right-click channel rows to favorite or unfavorite them and open manual EPG assignment directly from the guide.
+- **Source management**: Added full source removal from Settings, including cleanup of source-scoped library data, startup playback state, favorites and recents references, manual EPG mappings, and saved Xtream secrets.
+- **Playback polish**: Startup resume now restores the last fullscreen channel correctly, fullscreen enter and exit no longer fight the UI, double-click fullscreen does not reload an already playing stream, and the embedded player remains visible in both guide and fullscreen layouts.
+- **UI cleanup**: Removed prototype branding mentions, tightened icon alignment and scaling in the rail and settings views, and kept the app focused on fast Live TV playback without adding heavy movies or TV show sections.
 
 ## v0.5.0
 
