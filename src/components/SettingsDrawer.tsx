@@ -43,6 +43,7 @@ interface SettingsDrawerProps {
   onToggleSourceCollapsed: (sourceId: string) => void;
   onToggleSourceEnabled: (sourceId: string) => void;
   onLoadSource: (sourceId: string) => void;
+  onRemoveSource: (sourceId: string) => void;
   onUpdateSource: (sourceId: string, patch: Partial<SavedPlaylistSource>) => void;
 }
 
@@ -82,6 +83,7 @@ export function SettingsDrawer({
   onToggleSourceCollapsed,
   onToggleSourceEnabled,
   onLoadSource,
+  onRemoveSource,
   onUpdateSource,
 }: SettingsDrawerProps) {
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
@@ -262,6 +264,7 @@ export function SettingsDrawer({
             onToggleCollapsed={onToggleSourceCollapsed}
             onToggleEnabled={onToggleSourceEnabled}
             onLoadSource={onLoadSource}
+            onRemoveSource={onRemoveSource}
             onUpdateSource={onUpdateSource}
           />
         )}

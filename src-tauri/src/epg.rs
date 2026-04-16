@@ -99,6 +99,13 @@ pub struct EpgProgrammeSnapshot {
     next: Option<EpgProgrammeSummary>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpgProgrammeWindow {
+    epg_channel_key: String,
+    programmes: Vec<EpgProgrammeSummary>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EpgCacheStore {
@@ -844,6 +851,37 @@ fn get_programme_snapshots_for_channel(
     (None, programmes.get(next_index).map(programme_to_summary))
 }
 
+fn get_programmes_for_window(
+    programmes: &[EpgProgramme],
+    window_start_ms: i64,
+    window_end_ms: i64,
+) -> Vec<EpgProgrammeSummary> {
+    let mut matching_programmes = Vec::new();
+
+    for (index, programme) in programmes.iter().enumerate() {
+        let inferred_stop_ms = programme
+            .stop_ms
+            .or_else(|| {
+                programmes
+                    .get(index + 1)
+                    .map(|candidate| candidate.start_ms)
+            })
+            .unwrap_or(window_end_ms);
+
+        if programme.start_ms >= window_end_ms {
+            break;
+        }
+
+        if inferred_stop_ms <= window_start_ms {
+            continue;
+        }
+
+        matching_programmes.push(programme_to_summary(programme));
+    }
+
+    matching_programmes
+}
+
 #[tauri::command]
 pub async fn refresh_epg_cache(
     app: AppHandle,
@@ -977,4 +1015,57 @@ pub fn get_epg_programme_snapshots(
     }
 
     Ok(snapshots)
+}
+
+#[tauri::command]
+pub fn get_epg_programme_windows(
+    app: AppHandle,
+    state: State<'_, EpgState>,
+    epg_channel_keys: Vec<String>,
+    window_start_ms: i64,
+    window_end_ms: i64,
+) -> Result<Vec<EpgProgrammeWindow>, String> {
+    if window_end_ms <= window_start_ms {
+        return Err("The guide window is not valid.".to_string());
+    }
+
+    ensure_epg_caches_loaded(&app, &state)?;
+
+    let cache_guard = state
+        .caches
+        .lock()
+        .map_err(|_| "Could not access the saved EPG cache.".to_string())?;
+    let Some(caches) = cache_guard.as_ref() else {
+        return Ok(Vec::new());
+    };
+
+    let mut seen_channel_keys = HashSet::new();
+    let mut windows = Vec::new();
+
+    for epg_channel_key in epg_channel_keys {
+        let Some((source_url, channel_id)) = split_epg_channel_key(&epg_channel_key) else {
+            continue;
+        };
+        let normalized_url = normalize_epg_url_input(&source_url)?.to_string();
+        let unique_channel_key = create_epg_channel_key(&normalized_url, &channel_id);
+
+        if !seen_channel_keys.insert(unique_channel_key.clone()) {
+            continue;
+        }
+
+        let Some(cache) = caches.get(&normalized_url) else {
+            continue;
+        };
+
+        let Some(programmes) = cache.programmes_by_channel.get(&channel_id) else {
+            continue;
+        };
+
+        windows.push(EpgProgrammeWindow {
+            epg_channel_key: unique_channel_key,
+            programmes: get_programmes_for_window(programmes, window_start_ms, window_end_ms),
+        });
+    }
+
+    Ok(windows)
 }

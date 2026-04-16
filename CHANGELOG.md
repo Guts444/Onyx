@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.3
+
+- **Fullscreen stability**: Startup fullscreen restore now runs only once during launch, so exiting fullscreen no longer gets overridden by the startup resume flow.
+- **Player controls**: Double-clicking the mini player to enter fullscreen no longer reloads the already-playing channel.
+- **Live TV library**: Kept the Live TV groups panel scrollable after the fullscreen resume fix.
+
+## v0.5.2
+
+- **Startup playback**: Saved fullscreen playback now restores both the channel and fullscreen mode on launch.
+- **Live TV navigation**: Fixed the Live TV group browser so large group lists scroll correctly again.
+
+## v0.5.1
+
+- **Playback startup**: Startup restore now only resumes the last channel that was promoted into fullscreen, so guide browsing in the mini player no longer overwrites the startup channel.
+- **Player visibility**: Restored transparent root and body backgrounds required by the libmpv host layer so native video stays visible in the guide preview and fullscreen player.
+- **UI polish**: Removed leftover prototype wording, removed the `tv` rail label, and replaced the settings icon with a centered gear.
+
 ## v0.5.0
 
 - **Startup performance**: Uses cached playlists immediately on launch, delays saved-source refreshes, staggers startup EPG updates, and renders large channel groups incrementally so very large libraries start and browse more smoothly.

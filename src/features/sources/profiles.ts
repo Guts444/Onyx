@@ -1,6 +1,7 @@
 import type {
   SavedM3uUrlSource,
   SavedPlaylistSource,
+  SourceLibraryIndexEntry,
   SavedXtreamSource,
 } from "../../domain/sourceProfiles";
 interface BaseSourceDraft<K extends SavedPlaylistSource["kind"]> {
@@ -105,5 +106,29 @@ export function scrubSourceProfileSecrets(
   }
 
   return scrubbedSources;
+}
+
+export function mergeSourceLibraryIndexEntry(
+  currentEntry: SourceLibraryIndexEntry | undefined,
+  channelIds: string[],
+  playlistPreferenceKey: string | null,
+): SourceLibraryIndexEntry {
+  const nextChannelIds = new Set(currentEntry?.channelIds ?? []);
+  const nextPlaylistPreferenceKeys = new Set(currentEntry?.playlistPreferenceKeys ?? []);
+
+  for (const channelId of channelIds) {
+    nextChannelIds.add(channelId);
+  }
+
+  if (playlistPreferenceKey) {
+    nextPlaylistPreferenceKeys.add(playlistPreferenceKey);
+  }
+
+  return {
+    channelIds: [...nextChannelIds].sort((left, right) => left.localeCompare(right)),
+    playlistPreferenceKeys: [...nextPlaylistPreferenceKeys].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+  };
 }
 

@@ -150,6 +150,11 @@ export interface EpgProgrammeSnapshot {
   next: EpgProgrammeSummary | null;
 }
 
+export interface EpgChannelProgrammeWindow {
+  epgChannelKey: string;
+  programmes: EpgProgrammeSummary[];
+}
+
 export interface EpgResolvedChannel {
   epgChannel: EpgDirectoryChannel;
   matchSource: "manual" | "auto";
@@ -161,3 +166,40 @@ export interface EpgResolvedGuide extends EpgResolvedChannel {
 }
 
 export type SavedEpgMappingStore = Record<string, Record<string, string>>;
+
+export function getProgrammeStopMs(
+  programmes: EpgProgrammeSummary[],
+  index: number,
+  fallbackStopMs: number | null = null,
+) {
+  return programmes[index]?.stopMs ?? programmes[index + 1]?.startMs ?? fallbackStopMs;
+}
+
+export function getProgrammeSnapshot(
+  programmes: EpgProgrammeSummary[],
+  atMs: number,
+): Pick<EpgResolvedGuide, "current" | "next"> {
+  for (let index = 0; index < programmes.length; index += 1) {
+    const programme = programmes[index];
+    const inferredStopMs = getProgrammeStopMs(programmes, index);
+
+    if (programme.startMs <= atMs && (inferredStopMs === null || atMs < inferredStopMs)) {
+      return {
+        current: programme,
+        next: programmes[index + 1] ?? null,
+      };
+    }
+
+    if (programme.startMs > atMs) {
+      return {
+        current: null,
+        next: programme,
+      };
+    }
+  }
+
+  return {
+    current: null,
+    next: null,
+  };
+}

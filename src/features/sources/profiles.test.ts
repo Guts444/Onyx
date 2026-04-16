@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import type { SavedPlaylistSource } from "../../domain/sourceProfiles.ts";
-import { scrubSourceProfileSecrets } from "./profiles.ts";
+import type {
+  SavedPlaylistSource,
+  SourceLibraryIndexEntry,
+} from "../../domain/sourceProfiles.ts";
+import { mergeSourceLibraryIndexEntry, scrubSourceProfileSecrets } from "./profiles.ts";
 
 test("scrubSourceProfileSecrets removes Xtream passwords before persistence", () => {
   const sources: Record<string, SavedPlaylistSource> = {
@@ -36,4 +39,19 @@ test("scrubSourceProfileSecrets removes Xtream passwords before persistence", ()
       password: "",
     },
   });
+});
+
+test("mergeSourceLibraryIndexEntry unions known channel ids and playlist keys", () => {
+  const currentEntry: SourceLibraryIndexEntry = {
+    channelIds: ["channel_2", "channel_1"],
+    playlistPreferenceKeys: ["library_b"],
+  };
+
+  assert.deepStrictEqual(
+    mergeSourceLibraryIndexEntry(currentEntry, ["channel_3", "channel_1"], "library_a"),
+    {
+      channelIds: ["channel_1", "channel_2", "channel_3"],
+      playlistPreferenceKeys: ["library_a", "library_b"],
+    },
+  );
 });

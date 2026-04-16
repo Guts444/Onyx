@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EpgDirectoryResponse, EpgProgrammeSnapshot } from "../../domain/epg";
+import type {
+  EpgChannelProgrammeWindow,
+  EpgDirectoryResponse,
+  EpgProgrammeSnapshot,
+} from "../../domain/epg";
 
 export function refreshEpgCache(url: string) {
   return invoke<EpgDirectoryResponse>("refresh_epg_cache", {
@@ -20,5 +24,17 @@ export function deleteEpgCache(url: string) {
 export function getEpgProgrammeSnapshots(epgChannelKeys: string[]) {
   return invoke<EpgProgrammeSnapshot[]>("get_epg_programme_snapshots", {
     epgChannelKeys,
+  });
+}
+
+export function getEpgProgrammeWindows(
+  epgChannelKeys: string[],
+  windowStartMs: number,
+  windowEndMs: number,
+) {
+  return invoke<EpgChannelProgrammeWindow[]>("get_epg_programme_windows", {
+    epgChannelKeys,
+    windowStartMs,
+    windowEndMs,
   });
 }

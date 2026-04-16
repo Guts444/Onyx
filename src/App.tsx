@@ -3,27 +3,32 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelEpgMatchDialog } from "./components/ChannelEpgMatchDialog";
 import { ChannelShelf } from "./components/ChannelShelf";
-import { ChannelSidebar } from "./components/ChannelSidebar";
+import { ChannelSidebar, type NavigationSection } from "./components/ChannelSidebar";
 import { PlayerPanel } from "./components/PlayerPanel";
 import { SettingsDrawer, type SettingsTab } from "./components/SettingsDrawer";
 import {
   createEpgSource,
   getEpgSourceLabel,
+  getProgrammeSnapshot,
   isEpgSourceReady,
   normalizeEpgSources,
   updateEpgSource,
   type EpgDirectoryChannel,
   type EpgDirectoryResponse,
-  type EpgProgrammeSnapshot,
+  type EpgProgrammeSummary,
   type EpgResolvedGuide,
   type EpgSource,
   type SavedEpgMappingStore,
 } from "./domain/epg";
-import type { Channel, LibraryView, PlaylistImport } from "./domain/iptv";
-import type { PlaylistSnapshot, SavedPlaylistSource } from "./domain/sourceProfiles";
+import type { Channel, PlaylistImport } from "./domain/iptv";
+import type {
+  PlaylistSnapshot,
+  SavedPlaylistSource,
+  SourceLibraryIndex,
+} from "./domain/sourceProfiles";
 import {
   deleteEpgCache,
-  getEpgProgrammeSnapshots,
+  getEpgProgrammeWindows,
   loadEpgCacheDirectories,
   refreshEpgCache,
 } from "./features/epg/api";
@@ -42,6 +47,7 @@ import {
   createM3uUrlSource,
   createXtreamSource,
   isSourceProfileReady,
+  mergeSourceLibraryIndexEntry,
   markSourceLoaded,
   scrubSourceProfileSecrets,
   updateSourceProfile,
@@ -60,6 +66,7 @@ const RECENTS_STORAGE_KEY = "iptv-player:recents";
 const GROUP_VISIBILITY_STORAGE_KEY = "iptv-player:hidden-groups";
 const COLLAPSED_GROUPS_STORAGE_KEY = "iptv-player:collapsed-groups";
 const SAVED_SOURCES_STORAGE_KEY = "iptv-player:saved-sources";
+const SOURCE_LIBRARY_INDEX_STORAGE_KEY = "iptv-player:source-library-index";
 const ACTIVE_SOURCE_STORAGE_KEY = "iptv-player:active-source";
 const PLAYLIST_SNAPSHOT_STORAGE_KEY = "iptv-player:playlist-snapshot";
 const COLLAPSED_SOURCE_CARDS_STORAGE_KEY = "iptv-player:collapsed-source-cards";
@@ -68,14 +75,22 @@ const EPG_MANUAL_MATCHES_STORAGE_KEY = "iptv-player:epg-manual-matches";
 const PLAYER_RESUME_STORAGE_KEY = "iptv-player:playback-session";
 const PLAYER_VOLUME_STORAGE_KEY = "iptv-player:player-volume";
 const RECENT_CHANNEL_LIMIT = 12;
+const ALL_CHANNELS_GROUP_ID = "__iptv_player_all__";
 const FAVORITES_GROUP_ID = "__iptv_player_favorites__";
 const CHANNEL_RENDER_INITIAL_LIMIT = 320;
 const CHANNEL_RENDER_BATCH_SIZE = 320;
+const GUIDE_SLOT_MINUTES = 30;
+const GUIDE_VISIBLE_SLOT_COUNT = 4;
+const GUIDE_CLOCK_REFRESH_MS = 30 * 1000;
+type SidebarMode = "hidden" | "groups" | "menu";
 
 interface PlaybackSession {
   sourceId: string | null;
   channelId: string | null;
   shouldResume: boolean;
+  resumeSourceId: string | null;
+  resumeChannelId: string | null;
+  resumeInFullscreen: boolean;
 }
 
 function pushRecentId(recentIds: string[], channelId: string) {
@@ -154,12 +169,27 @@ function removeMappingsForGuideUrl(
   return nextMappings;
 }
 
+function removeMappingsForSourceScope(
+  currentMappings: SavedEpgMappingStore,
+  sourceScopeId: string,
+) {
+  const nextMappings = { ...currentMappings };
+
+  for (const mappingScope of Object.keys(nextMappings)) {
+    if (mappingScope.endsWith(`\u0001${sourceScopeId}`)) {
+      delete nextMappings[mappingScope];
+    }
+  }
+
+  return nextMappings;
+}
+
 function App() {
   const [favoriteIds, setFavoriteIds, favoriteIdsHydrated] = usePersistentState<string[]>(
     FAVORITES_STORAGE_KEY,
     [],
   );
-  const [recentIds, setRecentIds, recentIdsHydrated] = usePersistentState<string[]>(
+  const [, setRecentIds, recentIdsHydrated] = usePersistentState<string[]>(
     RECENTS_STORAGE_KEY,
     [],
   );
@@ -186,6 +216,8 @@ function App() {
     },
     scrubSourceProfileSecrets,
   );
+  const [sourceLibraryIndex, setSourceLibraryIndex, sourceLibraryIndexHydrated] =
+    usePersistentState<SourceLibraryIndex>(SOURCE_LIBRARY_INDEX_STORAGE_KEY, {});
   const [activeSourceId, setActiveSourceId, activeSourceIdHydrated] = usePersistentState<string | null>(
     ACTIVE_SOURCE_STORAGE_KEY,
     null,
@@ -201,6 +233,9 @@ function App() {
       sourceId: null,
       channelId: null,
       shouldResume: false,
+      resumeSourceId: null,
+      resumeChannelId: null,
+      resumeInFullscreen: false,
     });
   const [savedVolume, setSavedVolume, savedVolumeHydrated] = usePersistentState<number>(
     PLAYER_VOLUME_STORAGE_KEY,
@@ -209,7 +244,10 @@ function App() {
   const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated] =
     usePersistentState<PlaylistSnapshot | null>(PLAYLIST_SNAPSHOT_STORAGE_KEY, null);
   const [playlist, setPlaylist] = useState<PlaylistImport | null>(() => playlistSnapshot?.playlist ?? null);
-  const [activeView, setActiveView] = useState<LibraryView>("all");
+  const [navigationSection, setNavigationSection] = useState<NavigationSection>("tv");
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
+    playlistSnapshot?.playlist.channels.length ? "groups" : "menu",
+  );
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
@@ -226,19 +264,22 @@ function App() {
   const [epgDirectoriesByUrlKey, setEpgDirectoriesByUrlKey] = useState<
     Record<string, EpgDirectoryResponse>
   >({});
-  const [epgSnapshotsByChannelKey, setEpgSnapshotsByChannelKey] = useState<
-    Record<string, EpgProgrammeSnapshot>
+  const [guideProgrammesByChannelKey, setGuideProgrammesByChannelKey] = useState<
+    Record<string, EpgProgrammeSummary[]>
   >({});
   const [updatingEpgSourceIds, setUpdatingEpgSourceIds] = useState<string[]>([]);
   const [hasLoadedEpgCacheDirectories, setHasLoadedEpgCacheDirectories] = useState(false);
   const [savedSourcePasswordsHydrated, setSavedSourcePasswordsHydrated] = useState(false);
   const [epgStatusMessage, setEpgStatusMessage] = useState<string | null>(null);
   const [matcherChannel, setMatcherChannel] = useState<Channel | null>(null);
+  const [guideNowMs, setGuideNowMs] = useState(() => Date.now());
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const playerShellRef = useRef<HTMLDivElement>(null);
   const playerSurfaceRef = useRef<HTMLDivElement>(null);
   const startupRestoreAttemptedRef = useRef(false);
   const startupPlaybackRestoreKeyRef = useRef<string | null>(null);
+  const startupPlaybackRestoreCompletedRef = useRef(false);
+  const startupPlaybackSessionRef = useRef<PlaybackSession | null>(null);
   const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
   const hydratedPlaylistSnapshotAppliedRef = useRef(false);
   const hydratedVolumeAppliedRef = useRef(false);
@@ -254,6 +295,7 @@ function App() {
     collapsedGroupsHydrated &&
     collapsedSourceIdsHydrated &&
     savedSourcesHydrated &&
+    sourceLibraryIndexHydrated &&
     activeSourceIdHydrated &&
     savedSourcePasswordsHydrated &&
     epgSourcesHydrated &&
@@ -267,6 +309,14 @@ function App() {
   useEffect(() => {
     selectedChannelIdRef.current = selectedChannelId;
   }, [selectedChannelId]);
+
+  useEffect(() => {
+    if (!playbackSessionHydrated || startupPlaybackSessionRef.current !== null) {
+      return;
+    }
+
+    startupPlaybackSessionRef.current = playbackSession;
+  }, [playbackSession, playbackSessionHydrated]);
 
   const xtreamSourceIdsKey = useMemo(
     () =>
@@ -480,10 +530,62 @@ function App() {
   }, [isFullscreen]);
 
   useEffect(() => {
+    if (isFullscreen || isSettingsOpen || matcherChannel !== null) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (!playlist) {
+        setNavigationSection("search");
+        setSidebarMode("menu");
+        return;
+      }
+
+      event.preventDefault();
+      if (sidebarMode === "hidden") {
+        setNavigationSection("tv");
+        setSidebarMode("groups");
+        return;
+      }
+
+      if (sidebarMode === "groups") {
+        setNavigationSection("search");
+        setSidebarMode("menu");
+        return;
+      }
+
+      setNavigationSection("search");
+      setSidebarMode("menu");
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isFullscreen, isSettingsOpen, matcherChannel, playlist, sidebarMode]);
+
+  useEffect(() => {
     const nextVolume = Math.max(0, Math.min(100, Math.round(player.volume)));
 
     setSavedVolume((currentValue) => (currentValue === nextVolume ? currentValue : nextVolume));
   }, [player.volume, setSavedVolume]);
+
+  useEffect(() => {
+    setGuideNowMs(Date.now());
+
+    const timerId = window.setInterval(() => {
+      setGuideNowMs(Date.now());
+    }, GUIDE_CLOCK_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -499,8 +601,15 @@ function App() {
     void setVolumeLevel(savedVolume);
   }, [player.environment, player.ready, savedVolume, savedVolumeHydrated, setVolumeLevel]);
 
+  useEffect(() => {
+    if (!playlist) {
+      setNavigationSection("search");
+      setSidebarMode("menu");
+    }
+  }, [playlist]);
+
   function schedulePlayerLayoutSync() {
-    const syncDelays = [40, 140, 280];
+    const syncDelays = [0, 40, 140, 280, 520];
 
     syncDelays.forEach((delay) => {
       window.setTimeout(() => {
@@ -508,6 +617,14 @@ function App() {
       }, delay);
     });
   }
+
+  useEffect(() => {
+    if (isFullscreen) {
+      return;
+    }
+
+    schedulePlayerLayoutSync();
+  }, [isFullscreen, sidebarMode]);
 
   async function applyImportedPlaylist(
     importedPlaylist: PlaylistImport,
@@ -543,14 +660,31 @@ function App() {
         sourceId: nextSourceId,
         channelId: nextSelectedChannelId,
         shouldResume: false,
+        resumeSourceId: null,
+        resumeChannelId: null,
+        resumeInFullscreen: false,
+      }));
+    }
+
+    if (nextSourceId) {
+      const nextPlaylistPreferenceKey = getPlaylistPreferenceKey(importedPlaylist);
+
+      setSourceLibraryIndex((currentIndex) => ({
+        ...currentIndex,
+        [nextSourceId]: mergeSourceLibraryIndexEntry(
+          currentIndex[nextSourceId],
+          importedPlaylist.channels.map((channel) => channel.id),
+          nextPlaylistPreferenceKey,
+        ),
       }));
     }
 
     startTransition(() => {
       setPlaylist(importedPlaylist);
       setSelectedChannelId(nextSelectedChannelId);
-      setActiveView("all");
-      setActiveGroup(null);
+      setNavigationSection("tv");
+      setActiveGroup(ALL_CHANNELS_GROUP_ID);
+      setSidebarMode("groups");
       setSearchQuery("");
       setMessage(null);
       setIsSettingsOpen(false);
@@ -706,13 +840,12 @@ function App() {
       return;
     }
 
-    const didStartPlayback = await playChannel(channel);
+    await playChannel(channel);
 
     setPlaybackSession((currentSession) => ({
       ...currentSession,
       sourceId: activeSourceId,
       channelId: channel.id,
-      shouldResume: didStartPlayback,
     }));
   }
 
@@ -722,6 +855,9 @@ function App() {
       sourceId: activeSourceId,
       channelId: selectedChannelId,
       shouldResume: false,
+      resumeSourceId: null,
+      resumeChannelId: null,
+      resumeInFullscreen: false,
     }));
 
     await stopPlayback();
@@ -734,6 +870,17 @@ function App() {
         const nextFullscreen = !(await appWindow.isFullscreen());
 
         await appWindow.setFullscreen(nextFullscreen);
+        if (nextFullscreen && selectedChannel?.isPlayable) {
+          setPlaybackSession((currentSession) => ({
+            ...currentSession,
+            sourceId: activeSourceId,
+            channelId: selectedChannel.id,
+            shouldResume: true,
+            resumeSourceId: activeSourceId,
+            resumeChannelId: selectedChannel.id,
+            resumeInFullscreen: true,
+          }));
+        }
         setIsFullscreen(nextFullscreen);
         schedulePlayerLayoutSync();
         return;
@@ -751,6 +898,17 @@ function App() {
       }
 
       await playerShellRef.current.requestFullscreen();
+      if (selectedChannel?.isPlayable) {
+        setPlaybackSession((currentSession) => ({
+          ...currentSession,
+          sourceId: activeSourceId,
+          channelId: selectedChannel.id,
+          shouldResume: true,
+          resumeSourceId: activeSourceId,
+          resumeChannelId: selectedChannel.id,
+          resumeInFullscreen: true,
+        }));
+      }
       setIsFullscreen(true);
       schedulePlayerLayoutSync();
     } catch (error) {
@@ -825,7 +983,118 @@ function App() {
     });
   }
 
+  async function handleRemoveSource(sourceId: string) {
+    const source = savedSources[sourceId];
+
+    if (!source) {
+      return;
+    }
+
+    const cleanupEntry = sourceLibraryIndex[sourceId];
+    const trackedChannelIds = new Set(cleanupEntry?.channelIds ?? []);
+    const trackedPlaylistPreferenceKeys = cleanupEntry?.playlistPreferenceKeys ?? [];
+    const hasTrackedCollapsedGroups = trackedPlaylistPreferenceKeys.some((preferenceKey) =>
+      Object.prototype.hasOwnProperty.call(collapsedGroupsByLibrary, preferenceKey),
+    );
+    const shouldClearLoadedPlaylist =
+      activeSourceId === sourceId || playlistSnapshot?.sourceId === sourceId;
+    const sourceLabel = source.name.trim().length > 0 ? source.name.trim() : "Saved source";
+
+    if (shouldClearLoadedPlaylist) {
+      await stopPlayback();
+    }
+
+    setSavedSources((currentSources) => {
+      const nextSources = { ...currentSources };
+      delete nextSources[sourceId];
+      return nextSources;
+    });
+    setSourceLibraryIndex((currentIndex) => {
+      const nextIndex = { ...currentIndex };
+      delete nextIndex[sourceId];
+      return nextIndex;
+    });
+    setCollapsedSourceIds((currentIds) =>
+      currentIds.filter((currentId) => currentId !== sourceId),
+    );
+    setLoadingSourceId((currentId) => (currentId === sourceId ? null : currentId));
+    setFavoriteIds((currentIds) =>
+      currentIds.filter((channelId) => !trackedChannelIds.has(channelId)),
+    );
+    setRecentIds((currentIds) =>
+      currentIds.filter((channelId) => !trackedChannelIds.has(channelId)),
+    );
+    setHiddenGroupsByLibrary((currentValue) => {
+      if (trackedPlaylistPreferenceKeys.length === 0) {
+        return currentValue;
+      }
+
+      const nextValue = { ...currentValue };
+
+      for (const preferenceKey of trackedPlaylistPreferenceKeys) {
+        delete nextValue[preferenceKey];
+      }
+
+      return nextValue;
+    });
+    setCollapsedGroupsByLibrary((currentValue) => {
+      if (trackedPlaylistPreferenceKeys.length === 0 || !hasTrackedCollapsedGroups) {
+        return currentValue;
+      }
+
+      const nextValue = { ...currentValue };
+
+      for (const preferenceKey of trackedPlaylistPreferenceKeys) {
+        delete nextValue[preferenceKey];
+      }
+
+      return nextValue;
+    });
+    setSavedEpgMappings((currentMappings) =>
+      removeMappingsForSourceScope(currentMappings, sourceId),
+    );
+    setPlaybackSession((currentSession) =>
+      currentSession.sourceId === sourceId || currentSession.resumeSourceId === sourceId
+        ? {
+            sourceId: null,
+            channelId: null,
+            shouldResume: false,
+            resumeSourceId: null,
+            resumeChannelId: null,
+            resumeInFullscreen: false,
+          }
+        : currentSession,
+    );
+
+    if (shouldClearLoadedPlaylist) {
+      setActiveSourceId(null);
+      setPlaylistSnapshot(null);
+      setGuideProgrammesByChannelKey({});
+      setMatcherChannel(null);
+
+      startTransition(() => {
+        setPlaylist(null);
+        setSelectedChannelId(null);
+        setActiveGroup(null);
+        setSidebarMode("menu");
+        setSearchQuery("");
+        setNavigationSection("search");
+      });
+    }
+
+    setMessage(`Removed ${sourceLabel} and cleared its saved data.`);
+
+    if (source.kind === "xtream") {
+      void deleteXtreamPassword(sourceId).catch((error) => {
+        const errorMessage =
+          error instanceof Error ? error.message : "The saved Xtream password could not be removed.";
+        setMessage(errorMessage);
+      });
+    }
+  }
+
   function openSettings(tab: SettingsTab) {
+    setSidebarMode("menu");
     setSettingsTab(tab);
     setIsSettingsOpen(true);
   }
@@ -855,7 +1124,7 @@ function App() {
 
     if (patch.url !== undefined && patch.url.trim().length === 0) {
       setEpgStatusMessage(null);
-      setEpgSnapshotsByChannelKey({});
+      setGuideProgrammesByChannelKey({});
     }
   }
 
@@ -892,16 +1161,16 @@ function App() {
       delete nextDirectories[removedGuideUrlKey];
       return nextDirectories;
     });
-    setEpgSnapshotsByChannelKey((currentSnapshots) => {
-      const nextSnapshots = { ...currentSnapshots };
+    setGuideProgrammesByChannelKey((currentProgrammes) => {
+      const nextProgrammes = { ...currentProgrammes };
 
-      for (const snapshotKey of Object.keys(nextSnapshots)) {
-        if (snapshotKey.startsWith(`${removedGuideUrlKey}\u0001`)) {
-          delete nextSnapshots[snapshotKey];
+      for (const programmeKey of Object.keys(nextProgrammes)) {
+        if (programmeKey.startsWith(`${removedGuideUrlKey}\u0001`)) {
+          delete nextProgrammes[programmeKey];
         }
       }
 
-      return nextSnapshots;
+      return nextProgrammes;
     });
     setSavedEpgMappings((currentMappings) =>
       removeMappingsForGuideUrl(currentMappings, sourceToRemove.url),
@@ -1077,16 +1346,25 @@ function App() {
   const selectedChannel =
     (selectedChannelId !== null ? channelsById.get(selectedChannelId) : null) ?? channels[0] ?? null;
   const normalizedSearchQuery = deferredSearchQuery.trim().toLowerCase();
+  const guideWindowStartMs = useMemo(() => {
+    const slotDurationMs = GUIDE_SLOT_MINUTES * 60 * 1000;
+    return Math.floor(guideNowMs / slotDurationMs) * slotDurationMs;
+  }, [guideNowMs]);
+  const guideWindowEndMs = guideWindowStartMs + GUIDE_VISIBLE_SLOT_COUNT * GUIDE_SLOT_MINUTES * 60 * 1000;
+  const guideQueryEndMs = guideWindowEndMs + GUIDE_SLOT_MINUTES * 60 * 1000;
   const playlistPreferenceKey = getPlaylistPreferenceKey(playlist);
   const hiddenGroups = playlistPreferenceKey ? hiddenGroupsByLibrary[playlistPreferenceKey] ?? [] : [];
   const hiddenGroupSet = useMemo(() => new Set(hiddenGroups), [hiddenGroups]);
   const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
-  const recentIdSet = useMemo(() => new Set(recentIds), [recentIds]);
   const enabledGroups = useMemo(
     () => allGroups.filter((group) => !hiddenGroupSet.has(group)),
     [allGroups, hiddenGroupSet],
   );
   const enabledGroupSet = useMemo(() => new Set(enabledGroups), [enabledGroups]);
+  const enabledChannels = useMemo(
+    () => channels.filter((channel) => enabledGroupSet.has(channel.group)),
+    [channels, enabledGroupSet],
+  );
   const favoriteChannels = useMemo(
     () => channels.filter((channel) => favoriteIdSet.has(channel.id)),
     [channels, favoriteIdSet],
@@ -1108,13 +1386,6 @@ function App() {
 
     return nextMatches;
   }, [channels, epgChannelIndex, savedMappingsForEnabledGuides]);
-  const recentChannels = useMemo(
-    () =>
-      recentIds
-        .map((recentId) => channelsById.get(recentId) ?? null)
-        .filter((channel): channel is Channel => channel !== null),
-    [channelsById, recentIds],
-  );
   const channelCountByGroup = useMemo(() => {
     const counts: Record<string, number> = {};
 
@@ -1131,19 +1402,41 @@ function App() {
       return null;
     }
 
-    const guideSnapshot = epgSnapshotsByChannelKey[resolvedMatch.epgChannel.uniqueId];
+    const programmes = guideProgrammesByChannelKey[resolvedMatch.epgChannel.uniqueId] ?? [];
+    const guideSnapshot = getProgrammeSnapshot(programmes, guideNowMs);
 
     return {
       ...resolvedMatch,
-      current: guideSnapshot?.current ?? null,
-      next: guideSnapshot?.next ?? null,
+      current: guideSnapshot.current,
+      next: guideSnapshot.next,
     };
-  }, [epgSnapshotsByChannelKey, resolvedEpgMatchesByChannelId]);
+  }, [guideNowMs, guideProgrammesByChannelKey, resolvedEpgMatchesByChannelId]);
+  const getProgrammesByChannelId = useCallback(
+    (channelId: string) => {
+      const resolvedMatch = resolvedEpgMatchesByChannelId[channelId];
+
+      if (!resolvedMatch) {
+        return [];
+      }
+
+      return guideProgrammesByChannelKey[resolvedMatch.epgChannel.uniqueId] ?? [];
+    },
+    [guideProgrammesByChannelKey, resolvedEpgMatchesByChannelId],
+  );
   const matchedEpgChannelCount = useMemo(
     () => Object.keys(resolvedEpgMatchesByChannelId).length,
     [resolvedEpgMatchesByChannelId],
   );
   const savedSourcesList = useMemo(() => Object.values(savedSources), [savedSources]);
+  const searchResults = useMemo(
+    () =>
+      normalizedSearchQuery.length === 0
+        ? []
+        : enabledChannels
+            .filter((channel) => channel.name.toLowerCase().includes(normalizedSearchQuery))
+            .slice(0, 120),
+    [enabledChannels, normalizedSearchQuery],
+  );
 
   function updateHiddenGroups(nextHiddenGroups: string[]) {
     if (!playlistPreferenceKey) {
@@ -1179,17 +1472,6 @@ function App() {
     setActiveGroup(null);
   }
 
-  function handleToggleGroupsCollapsed() {
-    if (!playlistPreferenceKey) {
-      return;
-    }
-
-    setCollapsedGroupsByLibrary((currentValue) => ({
-      ...currentValue,
-      [playlistPreferenceKey]: !(currentValue[playlistPreferenceKey] ?? false),
-    }));
-  }
-
   function handleToggleSourceCollapsed(sourceId: string) {
     setCollapsedSourceIds((currentIds) =>
       currentIds.includes(sourceId)
@@ -1198,18 +1480,34 @@ function App() {
     );
   }
 
+  function handleSelectAllChannels() {
+    setNavigationSection("tv");
+    setActiveGroup(ALL_CHANNELS_GROUP_ID);
+    setSidebarMode("hidden");
+  }
+
+  function handleSelectGroup(group: string) {
+    setNavigationSection("tv");
+    setActiveGroup(group);
+    setSidebarMode("hidden");
+  }
+
   function handleSelectFavoritesGroup() {
+    setNavigationSection("tv");
     setActiveGroup(FAVORITES_GROUP_ID);
-    setActiveView("all");
+    setSidebarMode("hidden");
   }
 
   const visibleChannels = useMemo(() => {
-    // ⚡ Bolt: Single for...of loop for visibleChannels to reduce GC pressure and avoid multiple array iterations
     const baseList =
-      activeView === "recents"
-        ? recentChannels
+      navigationSection === "search"
+        ? normalizedSearchQuery.length > 0
+          ? enabledChannels
+          : []
         : activeGroup === FAVORITES_GROUP_ID
         ? favoriteChannels
+        : activeGroup === ALL_CHANNELS_GROUP_ID
+        ? enabledChannels
         : activeGroup && enabledGroupSet.has(activeGroup)
         ? channels
         : [];
@@ -1218,11 +1516,13 @@ function App() {
       return [];
     }
 
-    const needsGroupFilter = activeView !== "recents" && activeGroup !== FAVORITES_GROUP_ID;
-    const needsFavoriteFilter = activeView === "favorites" && activeGroup !== FAVORITES_GROUP_ID;
+    const needsGroupFilter =
+      navigationSection !== "search" &&
+      activeGroup !== FAVORITES_GROUP_ID &&
+      activeGroup !== ALL_CHANNELS_GROUP_ID;
     const needsSearchFilter = normalizedSearchQuery.length > 0;
 
-    if (!needsGroupFilter && !needsFavoriteFilter && !needsSearchFilter) {
+    if (!needsGroupFilter && !needsSearchFilter) {
       return baseList;
     }
 
@@ -1230,10 +1530,6 @@ function App() {
 
     for (const channel of baseList) {
       if (needsGroupFilter && channel.group !== activeGroup) {
-        continue;
-      }
-
-      if (needsFavoriteFilter && !favoriteIdSet.has(channel.id)) {
         continue;
       }
 
@@ -1246,19 +1542,18 @@ function App() {
 
     return result;
   }, [
-    activeView,
+    navigationSection,
     activeGroup,
-    recentChannels,
     favoriteChannels,
+    enabledChannels,
     enabledGroupSet,
     channels,
-    favoriteIdSet,
     normalizedSearchQuery,
   ]);
 
   useEffect(() => {
     setChannelRenderLimit(CHANNEL_RENDER_INITIAL_LIMIT);
-  }, [activeGroup, activeView, normalizedSearchQuery, playlist?.importedAt]);
+  }, [activeGroup, navigationSection, normalizedSearchQuery, playlist?.importedAt]);
 
   useEffect(() => {
     if (!selectedChannelId) {
@@ -1305,16 +1600,33 @@ function App() {
   }, [renderedChannels, resolvedEpgMatchesByChannelId, selectedGuide]);
   const visibleEpgChannelKeysKey = visibleEpgChannelKeys.join("\u0001");
   const favoritesCount = favoriteChannels.length;
-  const groupsCollapsed = playlistPreferenceKey
-    ? collapsedGroupsByLibrary[playlistPreferenceKey] ?? false
-    : false;
   const activeGroupLabel =
-    activeView === "recents"
-      ? "Recent Channels"
+    navigationSection === "search"
+      ? normalizedSearchQuery.length > 0
+        ? "Search results"
+        : "Search"
       : activeGroup === FAVORITES_GROUP_ID
       ? "Favorites"
+      : activeGroup === ALL_CHANNELS_GROUP_ID
+      ? "All channels"
       : activeGroup;
   const isFavoritesGroupActive = activeGroup === FAVORITES_GROUP_ID;
+  const isAllChannelsGroupActive = activeGroup === ALL_CHANNELS_GROUP_ID;
+  const isSidebarVisible = sidebarMode !== "hidden";
+  const showSidebarRail = sidebarMode === "menu";
+  const sidebarVisibilityClass = isSidebarVisible ? "workspace__sidebar--visible" : "";
+  const sidebarModeClass =
+    sidebarMode === "menu"
+      ? "workspace__sidebar--menu"
+      : sidebarMode === "groups"
+      ? "workspace__sidebar--groups"
+      : "";
+  const workspaceModeClass =
+    sidebarMode === "menu"
+      ? "workspace--sidebar-menu"
+      : sidebarMode === "groups"
+      ? "workspace--sidebar-groups"
+      : "";
 
   function handleOpenEpgMatcher(channel: Channel) {
     if (enabledEpgChannels.length === 0) {
@@ -1553,25 +1865,25 @@ function App() {
     let cancelled = false;
 
     if (enabledEpgDirectories.length === 0 || visibleEpgChannelKeys.length === 0) {
-      setEpgSnapshotsByChannelKey({});
+      setGuideProgrammesByChannelKey({});
       return () => {
         cancelled = true;
       };
     }
 
-    void getEpgProgrammeSnapshots(visibleEpgChannelKeys)
-      .then((snapshots) => {
+    void getEpgProgrammeWindows(visibleEpgChannelKeys, guideWindowStartMs, guideQueryEndMs)
+      .then((programmeWindows) => {
         if (cancelled) {
           return;
         }
 
-        const nextSnapshots: Record<string, EpgProgrammeSnapshot> = {};
+        const nextProgrammes: Record<string, EpgProgrammeSummary[]> = {};
 
-        for (const snapshot of snapshots) {
-          nextSnapshots[snapshot.epgChannelKey] = snapshot;
+        for (const programmeWindow of programmeWindows) {
+          nextProgrammes[programmeWindow.epgChannelKey] = programmeWindow.programmes;
         }
 
-        setEpgSnapshotsByChannelKey(nextSnapshots);
+        setGuideProgrammesByChannelKey(nextProgrammes);
       })
       .catch((error) => {
         if (cancelled) {
@@ -1586,7 +1898,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [enabledEpgDirectoryKey, visibleEpgChannelKeysKey]);
+  }, [enabledEpgDirectoryKey, guideQueryEndMs, guideWindowStartMs, visibleEpgChannelKeysKey]);
 
   useEffect(() => {
     if (!playlist) {
@@ -1598,49 +1910,129 @@ function App() {
     }
 
     const hasValidActiveGroup =
-      activeGroup === FAVORITES_GROUP_ID || (activeGroup !== null && enabledGroupSet.has(activeGroup));
+      activeGroup === FAVORITES_GROUP_ID ||
+      activeGroup === ALL_CHANNELS_GROUP_ID ||
+      (activeGroup !== null && enabledGroupSet.has(activeGroup));
 
     if (!hasValidActiveGroup) {
-      setActiveGroup(enabledGroups[0] ?? FAVORITES_GROUP_ID);
+      setActiveGroup(ALL_CHANNELS_GROUP_ID);
     }
   }, [activeGroup, enabledGroupSet, enabledGroups, playlist]);
 
   useEffect(() => {
+    if (startupPlaybackRestoreCompletedRef.current) {
+      return;
+    }
+
+    const startupPlaybackSession = startupPlaybackSessionRef.current;
+
     if (
-      !playlist ||
       !hasHydratedPersistentState ||
-      playbackSession.channelId === null ||
-      !playbackSession.shouldResume ||
-      player.environment !== "tauri" ||
-      !player.ready ||
       shouldDelayResumeForStartupRestore ||
-      isRestoringStartupSource ||
-      playbackSession.sourceId !== activeSourceId
+      isRestoringStartupSource
     ) {
       return;
     }
 
-    const channelToResume =
-      (playbackSession.channelId !== null ? channelsById.get(playbackSession.channelId) : null) ?? null;
-
-    if (!channelToResume || !channelToResume.isPlayable) {
+    if (!playlist || player.environment !== "tauri" || !player.ready) {
       return;
     }
 
-    const restoreKey = `${activeSourceId ?? "local"}\u0001${playlist.importedAt}\u0001${channelToResume.id}`;
+    const resumeSourceId = startupPlaybackSession?.resumeSourceId ?? null;
+    const resumeChannelId = startupPlaybackSession?.resumeChannelId ?? null;
+    const resumeInFullscreen = startupPlaybackSession?.resumeInFullscreen ?? false;
+
+    if (resumeChannelId === null || !startupPlaybackSession?.shouldResume || resumeSourceId !== activeSourceId) {
+      startupPlaybackRestoreCompletedRef.current = true;
+      return;
+    }
+
+    const restoreKey = `${activeSourceId ?? "local"}\u0001${playlist.importedAt}\u0001${resumeChannelId}`;
 
     if (startupPlaybackRestoreKeyRef.current === restoreKey) {
+      startupPlaybackRestoreCompletedRef.current = true;
+      return;
+    }
+
+    if (resumeInFullscreen && !isFullscreen) {
+      let cancelled = false;
+
+      const enterStartupFullscreen = async () => {
+        try {
+          if (isTauri()) {
+            const appWindow = getCurrentWindow();
+            if (!(await appWindow.isFullscreen())) {
+              await appWindow.setFullscreen(true);
+            }
+            if (!cancelled) {
+              setIsFullscreen(true);
+              schedulePlayerLayoutSync();
+            }
+            return;
+          }
+
+          if (playerShellRef.current && !document.fullscreenElement) {
+            await playerShellRef.current.requestFullscreen();
+          }
+
+          if (!cancelled) {
+            setIsFullscreen(true);
+            schedulePlayerLayoutSync();
+          }
+        } catch {
+          if (!cancelled) {
+            setPlaybackSession((currentSession) =>
+              (currentSession.resumeSourceId ?? null) === activeSourceId &&
+              (currentSession.resumeChannelId ?? null) === resumeChannelId
+                ? {
+                    ...currentSession,
+                    shouldResume: false,
+                    resumeSourceId: null,
+                    resumeChannelId: null,
+                    resumeInFullscreen: false,
+                  }
+                : currentSession,
+            );
+            startupPlaybackRestoreCompletedRef.current = true;
+          }
+        }
+      };
+
+      void enterStartupFullscreen();
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const channelToResume = (resumeChannelId !== null ? channelsById.get(resumeChannelId) : null) ?? null;
+
+    if (!channelToResume || !channelToResume.isPlayable) {
+      setPlaybackSession((currentSession) =>
+        (currentSession.resumeSourceId ?? null) === activeSourceId
+          ? {
+              ...currentSession,
+              shouldResume: false,
+              resumeSourceId: null,
+              resumeChannelId: null,
+              resumeInFullscreen: false,
+            }
+          : currentSession,
+      );
+      startupPlaybackRestoreCompletedRef.current = true;
       return;
     }
 
     startupPlaybackRestoreKeyRef.current = restoreKey;
+    startupPlaybackRestoreCompletedRef.current = true;
     setSelectedChannelId(channelToResume.id);
     persistSelectedChannel(channelToResume.id);
     setRecentIds((currentIds) => pushRecentId(currentIds, channelToResume.id));
 
     void playChannel(channelToResume).then((didStartPlayback) => {
       setPlaybackSession((currentSession) =>
-        currentSession.sourceId === activeSourceId && currentSession.channelId === channelToResume.id
+        (currentSession.resumeSourceId ?? null) === activeSourceId &&
+        (currentSession.resumeChannelId ?? null) === channelToResume.id
           ? {
               ...currentSession,
               shouldResume: didStartPlayback,
@@ -1652,8 +2044,8 @@ function App() {
     activeSourceId,
     channelsById,
     hasHydratedPersistentState,
+    isFullscreen,
     isRestoringStartupSource,
-    playbackSession,
     player.environment,
     player.ready,
     playlist,
@@ -1703,72 +2095,98 @@ function App() {
           }}
         />
       ) : (
-        <div className="workspace">
-          <ChannelSidebar
-            playlistName={playlistDisplayName}
-            enabledGroups={enabledGroups}
-            isFavoritesActive={isFavoritesGroupActive}
-            activeGroup={activeGroup}
-            favoritesCount={favoritesCount}
-            channelCountByGroup={channelCountByGroup}
-            groupsCollapsed={groupsCollapsed}
-            message={message}
-            onSelectGroup={setActiveGroup}
-            onSelectFavorites={handleSelectFavoritesGroup}
-            onToggleGroupsCollapsed={handleToggleGroupsCollapsed}
-            onOpenSettings={() => {
-              openSettings(playlist ? "library" : "sources");
-            }}
-          />
-
-          <section className="stage">
-            <PlayerPanel
-              player={player}
-              selectedChannel={selectedChannel}
-              guide={selectedGuide}
-              isFullscreen={isFullscreen}
-              playerShellRef={playerShellRef}
-              playerSurfaceRef={playerSurfaceRef}
-              onStop={() => {
-                void handleStopPlayback();
+        <div className={`workspace ${workspaceModeClass}`}>
+          <div className={`workspace__sidebar ${sidebarVisibilityClass} ${sidebarModeClass}`.trim()}>
+            <ChannelSidebar
+              showRail={showSidebarRail}
+              navigationSection={navigationSection}
+              playlistName={playlistDisplayName}
+              enabledGroups={enabledGroups}
+              isAllChannelsActive={navigationSection === "tv" && isAllChannelsGroupActive}
+              isFavoritesActive={navigationSection === "tv" && isFavoritesGroupActive}
+              activeGroup={activeGroup}
+              favoritesCount={favoritesCount}
+              allChannelCount={enabledChannels.length}
+              channelCountByGroup={channelCountByGroup}
+              searchQuery={searchQuery}
+              searchResults={searchResults}
+              selectedChannelId={selectedChannel?.id ?? null}
+              favoriteIdSet={favoriteIdSet}
+              message={message}
+              onSelectNavigationSection={(section) => {
+                setNavigationSection(section);
+                setSidebarMode("menu");
               }}
-              onReload={() => {
-                void reloadPlayback();
+              onSearchChange={setSearchQuery}
+              onSelectChannel={(channel) => {
+                setSidebarMode("hidden");
+                void handleSelectChannel(channel);
               }}
-              onToggleMute={() => {
-                void toggleMute();
-              }}
-              onSetVolume={(volume) => {
-                const nextVolume = Math.max(0, Math.min(100, Math.round(volume)));
-
-                setSavedVolume(nextVolume);
-                void setVolumeLevel(nextVolume);
-              }}
-              onToggleFullscreen={() => {
-                void handleToggleFullscreen();
+              onSelectAllChannels={handleSelectAllChannels}
+              onSelectFavorites={handleSelectFavoritesGroup}
+              onSelectGroup={handleSelectGroup}
+              onOpenSettings={() => {
+                openSettings(playlist ? "library" : "sources");
               }}
             />
+          </div>
 
+          <div className="workspace__content">
             <ChannelShelf
+              navigationSection={navigationSection}
+              isSidebarVisible={isSidebarVisible}
+              preview={
+                <PlayerPanel
+                  player={player}
+                  selectedChannel={selectedChannel}
+                  guide={selectedGuide}
+                  isFullscreen={isFullscreen}
+                  layout="preview"
+                  playerShellRef={playerShellRef}
+                  playerSurfaceRef={playerSurfaceRef}
+                  onStop={() => {
+                    void handleStopPlayback();
+                  }}
+                  onReload={() => {
+                    void reloadPlayback();
+                  }}
+                  onToggleMute={() => {
+                    void toggleMute();
+                  }}
+                  onSetVolume={(volume) => {
+                    const nextVolume = Math.max(0, Math.min(100, Math.round(volume)));
+
+                    setSavedVolume(nextVolume);
+                    void setVolumeLevel(nextVolume);
+                  }}
+                  onToggleFullscreen={() => {
+                    void handleToggleFullscreen();
+                  }}
+                />
+              }
               activeGroupLabel={activeGroupLabel}
-              isFavoritesGroup={activeView !== "recents" && isFavoritesGroupActive}
+              playlistName={playlistDisplayName}
               channels={renderedChannels}
               totalChannelCount={visibleChannels.length}
+              selectedChannel={selectedChannel}
+              selectedGuide={selectedGuide}
               selectedChannelId={selectedChannel?.id ?? null}
-              activeView={activeView}
-              searchQuery={searchQuery}
               favoriteIdSet={favoriteIdSet}
-              recentIdSet={recentIdSet}
               getGuideByChannelId={getGuideByChannelId}
+              getProgrammesByChannelId={getProgrammesByChannelId}
               canMatchEpg={enabledEpgChannels.length > 0}
-              onSearchChange={setSearchQuery}
-              onSelectView={setActiveView}
-              onSelectChannel={handleSelectChannel}
+              guideNowMs={guideNowMs}
+              guideWindowStartMs={guideWindowStartMs}
+              guideWindowEndMs={guideWindowEndMs}
+              searchQuery={searchQuery}
+              onSelectChannel={(channel) => {
+                void handleSelectChannel(channel);
+              }}
               onToggleFavorite={handleToggleFavorite}
               onOpenEpgMatcher={handleOpenEpgMatcher}
               onLoadMoreChannels={handleLoadMoreVisibleChannels}
             />
-          </section>
+          </div>
         </div>
       )}
 
@@ -1815,6 +2233,9 @@ function App() {
         onToggleSourceEnabled={handleToggleSourceEnabled}
         onLoadSource={(sourceId) => {
           void handleLoadSavedSource(sourceId);
+        }}
+        onRemoveSource={(sourceId) => {
+          void handleRemoveSource(sourceId);
         }}
         onUpdateSource={handleUpdateSource}
       />

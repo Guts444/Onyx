@@ -28,6 +28,7 @@ const OBSERVED_PROPERTIES = [
 export interface MpvPlayerState {
   environment: "tauri" | "browser";
   ready: boolean;
+  idleActive: boolean;
   loading: boolean;
   buffering: boolean;
   muted: boolean;
@@ -121,6 +122,7 @@ export function useMpvPlayer(
   const [state, setState] = useState<MpvPlayerState>({
     environment: isNativeHost ? "tauri" : "browser",
     ready: false,
+    idleActive: true,
     loading: false,
     buffering: false,
     muted: false,
@@ -216,10 +218,16 @@ export function useMpvPlayer(
               }
               break;
             case "idle-active":
-              if (event.data === true && !userStoppedPlaybackRef.current && currentChannelRef.current) {
+              if (typeof event.data === "boolean") {
                 setState((currentState) => ({
                   ...currentState,
-                  status: currentState.error ? "Playback error" : "Waiting for the stream...",
+                  idleActive: event.data,
+                  status:
+                    event.data && !userStoppedPlaybackRef.current && currentChannelRef.current
+                      ? currentState.error
+                        ? "Playback error"
+                        : "Waiting for the stream..."
+                      : currentState.status,
                 }));
               }
               break;
@@ -238,6 +246,7 @@ export function useMpvPlayer(
               setState((currentState) => ({
                 ...currentState,
                 loading: true,
+                idleActive: false,
                 buffering: false,
                 error: null,
                 status: "Opening stream...",
@@ -251,6 +260,7 @@ export function useMpvPlayer(
               setState((currentState) => ({
                 ...currentState,
                 ready: true,
+                idleActive: false,
                 loading: false,
                 buffering: false,
                 error: null,
@@ -261,6 +271,7 @@ export function useMpvPlayer(
               if (userStoppedPlaybackRef.current || event.reason === "stop") {
                 setState((currentState) => ({
                   ...currentState,
+                  idleActive: true,
                   loading: false,
                   buffering: false,
                   error: null,
@@ -275,6 +286,7 @@ export function useMpvPlayer(
               if (event.reason === "eof") {
                 setState((currentState) => ({
                   ...currentState,
+                  idleActive: true,
                   loading: false,
                   buffering: false,
                   error: null,
@@ -289,6 +301,7 @@ export function useMpvPlayer(
               const logSuffix = lastErrorLogRef.current ? ` ${lastErrorLogRef.current}` : "";
               setState((currentState) => ({
                 ...currentState,
+                idleActive: true,
                 loading: false,
                 buffering: false,
                 error: `The stream stopped unexpectedly (${event.reason}, code ${event.error}).${logSuffix}`,
@@ -401,6 +414,7 @@ export function useMpvPlayer(
     if (!channel.isPlayable) {
       setState((currentState) => ({
         ...currentState,
+        idleActive: true,
         error: channel.playabilityError ?? "This channel is not playable.",
         status: "Channel unavailable",
         videoWidth: null,
@@ -413,6 +427,7 @@ export function useMpvPlayer(
     if (!isNativeHost) {
       setState((currentState) => ({
         ...currentState,
+        idleActive: true,
         status: "Use `npm run tauri dev` to test native playback.",
         error: null,
         videoWidth: null,
@@ -425,6 +440,7 @@ export function useMpvPlayer(
     if (!state.ready) {
       setState((currentState) => ({
         ...currentState,
+        idleActive: true,
         error: currentState.initError ?? "The native player is still starting.",
         status: "Player not ready",
         videoWidth: null,
@@ -439,6 +455,7 @@ export function useMpvPlayer(
 
     setState((currentState) => ({
       ...currentState,
+      idleActive: false,
       loading: true,
       buffering: false,
       error: null,
@@ -454,6 +471,7 @@ export function useMpvPlayer(
     } catch (error) {
       setState((currentState) => ({
         ...currentState,
+        idleActive: true,
         loading: false,
         buffering: false,
         error: describeCommandError(error),
@@ -474,6 +492,7 @@ export function useMpvPlayer(
       await command("stop");
       setState((currentState) => ({
         ...currentState,
+        idleActive: true,
         loading: false,
         buffering: false,
         error: null,
@@ -485,6 +504,7 @@ export function useMpvPlayer(
     } catch (error) {
       setState((currentState) => ({
         ...currentState,
+        idleActive: true,
         error: describeCommandError(error),
         status: "Playback error",
       }));

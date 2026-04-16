@@ -32,3 +32,10 @@ export interface PlaylistSnapshot {
   selectedChannelId: string | null;
   savedAt: string;
 }
+
+export interface SourceLibraryIndexEntry {
+  channelIds: string[];
+  playlistPreferenceKeys: string[];
+}
+
+export type SourceLibraryIndex = Record<string, SourceLibraryIndexEntry>;

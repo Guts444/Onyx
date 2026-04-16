@@ -13,6 +13,7 @@ interface SourceProfilesPanelProps {
   onToggleCollapsed: (sourceId: string) => void;
   onToggleEnabled: (sourceId: string) => void;
   onLoadSource: (sourceId: string) => void;
+  onRemoveSource: (sourceId: string) => void;
   onUpdateSource: (sourceId: string, patch: Partial<SavedPlaylistSource>) => void;
 }
 
@@ -37,6 +38,7 @@ export function SourceProfilesPanel({
   onToggleCollapsed,
   onToggleEnabled,
   onLoadSource,
+  onRemoveSource,
   onUpdateSource,
 }: SourceProfilesPanelProps) {
   return (
@@ -142,6 +144,14 @@ export function SourceProfilesPanel({
                       aria-label={`Load source ${sourceLabel}`}
                     >
                       {isLoading ? "Loading..." : "Load Now"}
+                    </button>
+                    <button
+                      type="button"
+                      className="control-button control-button--danger"
+                      onClick={() => onRemoveSource(source.id)}
+                      aria-label={`Delete source ${sourceLabel}`}
+                    >
+                      Delete Source
                     </button>
                   </div>
                 </div>

@@ -8,6 +8,7 @@ interface PlayerPanelProps {
   selectedChannel: Channel | null;
   guide: EpgResolvedGuide | null;
   isFullscreen: boolean;
+  layout?: "default" | "preview";
   playerShellRef: RefObject<HTMLDivElement | null>;
   playerSurfaceRef: RefObject<HTMLDivElement | null>;
   onStop: () => void;
@@ -31,6 +32,10 @@ function getStatusTone(player: MpvPlayerState, selectedChannel: Channel | null) 
   }
 
   if (!selectedChannel) {
+    return "idle";
+  }
+
+  if (player.idleActive) {
     return "idle";
   }
 
@@ -59,6 +64,9 @@ function getPlayerCopy(player: MpvPlayerState, selectedChannel: Channel | null) 
   } else if (player.loading && selectedChannel) {
     heading = selectedChannel.name;
     body = "Opening the selected stream.";
+  } else if (player.idleActive && selectedChannel) {
+    heading = selectedChannel.name;
+    body = "Playback is idle. If the stream does not appear, reload it or choose the channel again.";
   }
 
   return { heading, body };
@@ -69,6 +77,7 @@ export function PlayerPanel({
   selectedChannel,
   guide,
   isFullscreen,
+  layout = "default",
   playerShellRef,
   playerSurfaceRef,
   onStop,
@@ -77,6 +86,7 @@ export function PlayerPanel({
   onSetVolume,
   onToggleFullscreen,
 }: PlayerPanelProps) {
+  const isPreviewLayout = layout === "preview";
   const statusTone = getStatusTone(player, selectedChannel);
   const { heading, body } = getPlayerCopy(player, selectedChannel);
   const hideChromeTimeoutRef = useRef<number | null>(null);
@@ -91,6 +101,7 @@ export function PlayerPanel({
     player.environment === "browser" ||
     player.initError !== null ||
     selectedChannel === null ||
+    player.idleActive ||
     selectedChannel.playabilityError !== null ||
     player.error !== null ||
     player.loading ||
@@ -104,8 +115,9 @@ export function PlayerPanel({
       ? `${player.videoWidth}x${player.videoHeight}`
       : "Detecting...";
   const fpsLabel = player.videoFps !== null ? `${Math.round(player.videoFps)} fps` : "Detecting...";
-  const shouldRenderChrome = selectedChannel !== null;
-  const shouldHideCursor = isFullscreen && !showPlayerChrome && !shouldShowStatusCard;
+  const shouldRenderChrome = !isPreviewLayout && selectedChannel !== null;
+  const shouldHideCursor =
+    !isPreviewLayout && isFullscreen && !showPlayerChrome && !shouldShowStatusCard;
 
   function formatProgrammeTime(timestamp: number) {
     return new Date(timestamp).toLocaleTimeString([], {
@@ -183,16 +195,18 @@ export function PlayerPanel({
   return (
     <section
       ref={playerShellRef}
-      className={`panel player-shell ${isFullscreen ? "player-shell--fullscreen" : ""} ${
+      className={`panel player-shell ${isPreviewLayout ? "player-shell--preview" : ""} ${
+        isFullscreen ? "player-shell--fullscreen" : ""
+      } ${
         shouldHideCursor ? "player-shell--cursor-hidden" : ""
       }`}
-      onMouseMove={revealPlayerChrome}
-      onMouseEnter={revealPlayerChrome}
-      onMouseLeave={hidePlayerChrome}
+      onMouseMove={isPreviewLayout ? undefined : revealPlayerChrome}
+      onMouseEnter={isPreviewLayout ? undefined : revealPlayerChrome}
+      onMouseLeave={isPreviewLayout ? undefined : hidePlayerChrome}
     >
       <div ref={playerSurfaceRef} className="player-surface" onDoubleClick={onToggleFullscreen}>
         {shouldShowStatusCard ? (
-          <div className="player-status-card">
+          <div className={`player-status-card ${isPreviewLayout ? "player-status-card--preview" : ""}`}>
             <span className={`status-pill status-pill--${statusTone}`}>{player.status}</span>
             <div className="player-status-card__copy">
               <h2>{heading}</h2>
