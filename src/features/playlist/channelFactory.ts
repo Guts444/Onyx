@@ -4,6 +4,7 @@ const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]+/g;
 const COLLAPSE_WHITESPACE = /\s+/g;
 const WINDOWS_PATH_PATTERN = /^[a-zA-Z]:\\/;
 const UNC_PATH_PATTERN = /^\\\\/;
+const LOCAL_FILE_STREAM_ERROR = "Local file paths are not supported in playlist entries.";
 const ALLOWED_PROTOCOLS = new Set([
   "http:",
   "https:",
@@ -16,7 +17,6 @@ const ALLOWED_PROTOCOLS = new Set([
   "mmsh:",
   "rtp:",
   "srt:",
-  "file:",
 ]);
 
 export interface ChannelSeed {
@@ -69,13 +69,21 @@ export function normalizeStreamReference(stream: string) {
   if (WINDOWS_PATH_PATTERN.test(trimmedStream) || UNC_PATH_PATTERN.test(trimmedStream)) {
     return {
       stream: trimmedStream,
-      isPlayable: true,
-      playabilityError: null,
+      isPlayable: false,
+      playabilityError: LOCAL_FILE_STREAM_ERROR,
     };
   }
 
   try {
     const parsedUrl = new URL(trimmedStream);
+
+    if (parsedUrl.protocol === "file:") {
+      return {
+        stream: parsedUrl.href,
+        isPlayable: false,
+        playabilityError: LOCAL_FILE_STREAM_ERROR,
+      };
+    }
 
     if (!ALLOWED_PROTOCOLS.has(parsedUrl.protocol)) {
       return {

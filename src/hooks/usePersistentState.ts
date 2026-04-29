@@ -160,12 +160,19 @@ export function usePersistentState<T>(
       }
     }
 
+    const shouldClearLegacyStorage = migrateNextSaveRef.current;
     migrateNextSaveRef.current = false;
     const serializedValue = serializerRef.current ? serializerRef.current(value) : value;
 
-    void savePersistentValue(key, serializedValue).catch(() => {
-      // App state persistence is best-effort so the UI can keep running.
-    });
+    void savePersistentValue(key, serializedValue)
+      .then(() => {
+        if (shouldClearLegacyStorage && isTauri()) {
+          window.localStorage.removeItem(key);
+        }
+      })
+      .catch(() => {
+        // App state persistence is best-effort so the UI can keep running.
+      });
   }, [isHydrated, key, value]);
 
   return [value, setValue, isHydrated] as const;

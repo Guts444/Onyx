@@ -49,6 +49,7 @@ import {
   isSourceProfileReady,
   mergeSourceLibraryIndexEntry,
   markSourceLoaded,
+  scrubPlaylistSnapshotSecrets,
   scrubSourceProfileSecrets,
   updateSourceProfile,
 } from "./features/sources/profiles";
@@ -242,7 +243,12 @@ function App() {
     DEFAULT_PLAYER_VOLUME,
   );
   const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated] =
-    usePersistentState<PlaylistSnapshot | null>(PLAYLIST_SNAPSHOT_STORAGE_KEY, null);
+    usePersistentState<PlaylistSnapshot | null>(
+      PLAYLIST_SNAPSHOT_STORAGE_KEY,
+      null,
+      undefined,
+      (snapshot) => scrubPlaylistSnapshotSecrets(snapshot, savedSources),
+    );
   const [playlist, setPlaylist] = useState<PlaylistImport | null>(() => playlistSnapshot?.playlist ?? null);
   const [navigationSection, setNavigationSection] = useState<NavigationSection>("tv");
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
@@ -309,6 +315,22 @@ function App() {
   useEffect(() => {
     selectedChannelIdRef.current = selectedChannelId;
   }, [selectedChannelId]);
+
+  useEffect(() => {
+    if (!savedSourcesHydrated || !playlistSnapshotHydrated || !playlistSnapshot?.sourceId) {
+      return;
+    }
+
+    if (savedSources[playlistSnapshot.sourceId]?.kind === "xtream") {
+      setPlaylistSnapshot(null);
+    }
+  }, [
+    playlistSnapshot,
+    playlistSnapshotHydrated,
+    savedSources,
+    savedSourcesHydrated,
+    setPlaylistSnapshot,
+  ]);
 
   useEffect(() => {
     if (!playbackSessionHydrated || startupPlaybackSessionRef.current !== null) {

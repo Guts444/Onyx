@@ -2,28 +2,30 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { normalizeStreamReference } from "./channelFactory.ts";
 
-test("normalizeStreamReference correctly handles Windows file paths", () => {
+const LOCAL_FILE_STREAM_ERROR = "Local file paths are not supported in playlist entries.";
+
+test("normalizeStreamReference rejects Windows file paths", () => {
   const result1 = normalizeStreamReference("C:\\media\\video.mp4");
   assert.deepStrictEqual(result1, {
     stream: "C:\\media\\video.mp4",
-    isPlayable: true,
-    playabilityError: null,
+    isPlayable: false,
+    playabilityError: LOCAL_FILE_STREAM_ERROR,
   });
 
   const result2 = normalizeStreamReference("d:\\Movies\\movie.mkv");
   assert.deepStrictEqual(result2, {
     stream: "d:\\Movies\\movie.mkv",
-    isPlayable: true,
-    playabilityError: null,
+    isPlayable: false,
+    playabilityError: LOCAL_FILE_STREAM_ERROR,
   });
 });
 
-test("normalizeStreamReference correctly handles UNC network paths", () => {
+test("normalizeStreamReference rejects UNC network paths", () => {
   const result = normalizeStreamReference("\\\\SERVER\\Share\\video.mp4");
   assert.deepStrictEqual(result, {
     stream: "\\\\SERVER\\Share\\video.mp4",
-    isPlayable: true,
-    playabilityError: null,
+    isPlayable: false,
+    playabilityError: LOCAL_FILE_STREAM_ERROR,
   });
 });
 
@@ -40,7 +42,6 @@ test("normalizeStreamReference correctly handles valid protocols", () => {
     { input: "mmsh://example.com/stream", expected: "mmsh://example.com/stream" },
     { input: "rtp://127.0.0.1:1234", expected: "rtp://127.0.0.1:1234" },
     { input: "srt://example.com:1234", expected: "srt://example.com:1234" },
-    { input: "file:///home/user/video.mp4", expected: "file:///home/user/video.mp4" },
   ];
 
   for (const { input, expected } of validStreams) {
@@ -69,6 +70,15 @@ test("normalizeStreamReference rejects unsupported protocols", () => {
       playabilityError: `Unsupported stream protocol: ${parsedUrl.protocol}`,
     });
   }
+});
+
+test("normalizeStreamReference rejects file URLs", () => {
+  const result = normalizeStreamReference("file:///home/user/video.mp4");
+  assert.deepStrictEqual(result, {
+    stream: "file:///home/user/video.mp4",
+    isPlayable: false,
+    playabilityError: LOCAL_FILE_STREAM_ERROR,
+  });
 });
 
 test("normalizeStreamReference rejects malformed URLs and random strings", () => {
@@ -110,7 +120,7 @@ test("normalizeStreamReference trims whitespace before processing", () => {
   const result2 = normalizeStreamReference("\tC:\\media\\video.mp4\n");
   assert.deepStrictEqual(result2, {
     stream: "C:\\media\\video.mp4",
-    isPlayable: true,
-    playabilityError: null,
+    isPlayable: false,
+    playabilityError: LOCAL_FILE_STREAM_ERROR,
   });
 });

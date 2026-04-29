@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.4
+
+- **Windows installer hardening**: Removed Tauri's default WebView2 bootstrapper from the MSI so the installer no longer runs hidden PowerShell to download and launch Microsoft's WebView2 setup. Onyx now relies on the system WebView2 runtime included with current Windows 10/11 installs.
+- **Defender false-positive reduction**: Rebuilt release metadata around a cleaner installer path after Microsoft Defender began flagging the old v0.5.3 MSI/EXE as `Behavior:Win32/DefenseEvasion.A!ml`.
+- **Playlist safety**: Remote playlists can no longer mark Windows paths, UNC network paths, or `file:` URLs as playable, reducing accidental local file access and SMB credential exposure from malicious playlist entries.
+- **Credential storage cleanup**: Xtream playlist snapshots are no longer persisted to app-state JSON because generated stream URLs can contain provider usernames and passwords.
+- **Legacy state cleanup**: Migrated legacy `localStorage` values are removed after being written into Tauri app-state files.
+- **HTTPS default**: Scheme-less Xtream domains now default to `https://` instead of `http://`.
+
 ## v0.5.3
 
 - **Guide-first UI**: Reworked the main experience into a faster Live TV layout with a collapsible left rail, group browser, larger 16:9 mini player, richer programme details, and a full-width guide view that feels much closer to a dedicated IPTV app.

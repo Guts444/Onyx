@@ -12,6 +12,8 @@ Download the latest Windows installer from [GitHub Releases](https://github.com/
 
 Release builds include the native playback dependencies. You do not need Node.js, Rust, or the mpv DLLs unless you are building Onyx from source.
 
+Onyx uses the system Microsoft Edge WebView2 runtime. Windows 11 and current Windows 10 installs normally include it already, so the installer does not download or run the WebView2 bootstrapper.
+
 ## What Onyx Does
 
 - Loads local `.m3u` / `.m3u8` files, remote M3U URLs, and Xtream live TV accounts.

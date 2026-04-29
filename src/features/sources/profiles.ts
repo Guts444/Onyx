@@ -1,4 +1,5 @@
 import type {
+  PlaylistSnapshot,
   SavedM3uUrlSource,
   SavedPlaylistSource,
   SourceLibraryIndexEntry,
@@ -106,6 +107,17 @@ export function scrubSourceProfileSecrets(
   }
 
   return scrubbedSources;
+}
+
+export function scrubPlaylistSnapshotSecrets(
+  snapshot: PlaylistSnapshot | null,
+  sources: Record<string, SavedPlaylistSource>,
+): PlaylistSnapshot | null {
+  if (!snapshot?.sourceId) {
+    return snapshot;
+  }
+
+  return sources[snapshot.sourceId]?.kind === "xtream" ? null : snapshot;
 }
 
 export function mergeSourceLibraryIndexEntry(

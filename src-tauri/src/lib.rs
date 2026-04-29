@@ -215,7 +215,7 @@ fn normalize_xtream_domain_input(raw_input: &str) -> Result<Url, String> {
         if trimmed_input.starts_with("http://") || trimmed_input.starts_with("https://") {
             trimmed_input.to_string()
         } else {
-            format!("http://{trimmed_input}")
+            format!("https://{trimmed_input}")
         };
 
     let mut parsed_url =
