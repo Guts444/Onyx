@@ -1,7 +1,7 @@
 {
   "name": "onyx",
   "private": true,
-  "version": "0.5.4",
+  "version": "0.5.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "tauri": "tauri",
-    "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/matching.test.ts src/features/sources/profiles.test.ts"
+    "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/matching.test.ts src/features/playlist/channelFactory.test.ts src/features/sources/profiles.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

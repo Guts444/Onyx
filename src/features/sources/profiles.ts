@@ -1,3 +1,4 @@
+import type { Channel } from "../../domain/iptv";
 import type {
   PlaylistSnapshot,
   SavedM3uUrlSource,
@@ -5,6 +6,7 @@ import type {
   SourceLibraryIndexEntry,
   SavedXtreamSource,
 } from "../../domain/sourceProfiles";
+import { normalizeStreamReference } from "../playlist/channelFactory.ts";
 interface BaseSourceDraft<K extends SavedPlaylistSource["kind"]> {
   id: string;
   kind: K;
@@ -14,6 +16,9 @@ interface BaseSourceDraft<K extends SavedPlaylistSource["kind"]> {
   updatedAt: string;
   lastLoadedAt: string | null;
 }
+
+const REDACTED_STREAM_ERROR =
+  "This cached Xtream channel will be playable after the saved source refreshes.";
 
 function createBaseSource<K extends SavedPlaylistSource["kind"]>(
   kind: K,
@@ -109,6 +114,57 @@ export function scrubSourceProfileSecrets(
   return scrubbedSources;
 }
 
+function redactChannelStream(channel: Channel): Channel {
+  return {
+    ...channel,
+    stream: "",
+    originalStream: "",
+    isPlayable: false,
+    playabilityError: REDACTED_STREAM_ERROR,
+  };
+}
+
+function normalizeStoredChannel(channel: Channel, streamsRedacted: boolean): Channel {
+  if (streamsRedacted) {
+    return redactChannelStream(channel);
+  }
+
+  const normalizedStream = normalizeStreamReference(channel.stream);
+
+  return {
+    ...channel,
+    stream: normalizedStream.stream,
+    isPlayable: normalizedStream.isPlayable,
+    playabilityError: normalizedStream.playabilityError,
+  };
+}
+
+export function normalizePlaylistSnapshot(snapshot: unknown): PlaylistSnapshot | null {
+  if (typeof snapshot !== "object" || snapshot === null) {
+    return null;
+  }
+
+  const parsedSnapshot = snapshot as PlaylistSnapshot;
+
+  if (!parsedSnapshot.playlist || !Array.isArray(parsedSnapshot.playlist.channels)) {
+    return null;
+  }
+
+  const streamsRedacted = parsedSnapshot.streamsRedacted === true;
+  const channels = parsedSnapshot.playlist.channels.map((channel) =>
+    normalizeStoredChannel(channel, streamsRedacted),
+  );
+
+  return {
+    ...parsedSnapshot,
+    playlist: {
+      ...parsedSnapshot.playlist,
+      channels,
+      disabledChannelCount: channels.filter((channel) => !channel.isPlayable).length,
+    },
+  };
+}
+
 export function scrubPlaylistSnapshotSecrets(
   snapshot: PlaylistSnapshot | null,
   sources: Record<string, SavedPlaylistSource>,
@@ -117,7 +173,24 @@ export function scrubPlaylistSnapshotSecrets(
     return snapshot;
   }
 
-  return sources[snapshot.sourceId]?.kind === "xtream" ? null : snapshot;
+  if (sources[snapshot.sourceId]?.kind === "m3u_url") {
+    return {
+      ...snapshot,
+      streamsRedacted: false,
+    };
+  }
+
+  const redactedChannels = snapshot.playlist.channels.map(redactChannelStream);
+
+  return {
+    ...snapshot,
+    streamsRedacted: true,
+    playlist: {
+      ...snapshot.playlist,
+      channels: redactedChannels,
+      disabledChannelCount: redactedChannels.length,
+    },
+  };
 }
 
 export function mergeSourceLibraryIndexEntry(

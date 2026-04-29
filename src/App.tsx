@@ -49,6 +49,7 @@ import {
   isSourceProfileReady,
   mergeSourceLibraryIndexEntry,
   markSourceLoaded,
+  normalizePlaylistSnapshot,
   scrubPlaylistSnapshotSecrets,
   scrubSourceProfileSecrets,
   updateSourceProfile,
@@ -246,7 +247,7 @@ function App() {
     usePersistentState<PlaylistSnapshot | null>(
       PLAYLIST_SNAPSHOT_STORAGE_KEY,
       null,
-      undefined,
+      normalizePlaylistSnapshot,
       (snapshot) => scrubPlaylistSnapshotSecrets(snapshot, savedSources),
     );
   const [playlist, setPlaylist] = useState<PlaylistImport | null>(() => playlistSnapshot?.playlist ?? null);
@@ -286,6 +287,7 @@ function App() {
   const startupPlaybackRestoreKeyRef = useRef<string | null>(null);
   const startupPlaybackRestoreCompletedRef = useRef(false);
   const startupPlaybackSessionRef = useRef<PlaybackSession | null>(null);
+  const fullscreenEscapeHandledRef = useRef(false);
   const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
   const hydratedPlaylistSnapshotAppliedRef = useRef(false);
   const hydratedVolumeAppliedRef = useRef(false);
@@ -315,22 +317,6 @@ function App() {
   useEffect(() => {
     selectedChannelIdRef.current = selectedChannelId;
   }, [selectedChannelId]);
-
-  useEffect(() => {
-    if (!savedSourcesHydrated || !playlistSnapshotHydrated || !playlistSnapshot?.sourceId) {
-      return;
-    }
-
-    if (savedSources[playlistSnapshot.sourceId]?.kind === "xtream") {
-      setPlaylistSnapshot(null);
-    }
-  }, [
-    playlistSnapshot,
-    playlistSnapshotHydrated,
-    savedSources,
-    savedSourcesHydrated,
-    setPlaylistSnapshot,
-  ]);
 
   useEffect(() => {
     if (!playbackSessionHydrated || startupPlaybackSessionRef.current !== null) {
@@ -475,29 +461,45 @@ function App() {
   }, [savedSourcePasswordsHydrated, savedSources, savedSourcesHydrated]);
 
   useEffect(() => {
-    if (!playlistSnapshotHydrated || hydratedPlaylistSnapshotAppliedRef.current) {
+    if (
+      !playlistSnapshotHydrated ||
+      !savedSourcesHydrated ||
+      hydratedPlaylistSnapshotAppliedRef.current
+    ) {
       return;
     }
 
     hydratedPlaylistSnapshotAppliedRef.current = true;
 
-    if (!playlistSnapshot) {
+    const snapshotToApply = scrubPlaylistSnapshotSecrets(playlistSnapshot, savedSources);
+
+    if (snapshotToApply !== playlistSnapshot) {
+      setPlaylistSnapshot(snapshotToApply);
+    }
+
+    if (!snapshotToApply) {
       return;
     }
 
     const nextSelectedChannelId =
-      playlistSnapshot.selectedChannelId &&
-      playlistSnapshot.playlist.channels.some(
-        (channel) => channel.id === playlistSnapshot.selectedChannelId,
+      snapshotToApply.selectedChannelId &&
+      snapshotToApply.playlist.channels.some(
+        (channel) => channel.id === snapshotToApply.selectedChannelId,
       )
-        ? playlistSnapshot.selectedChannelId
-        : playlistSnapshot.playlist.channels[0]?.id ?? null;
+        ? snapshotToApply.selectedChannelId
+        : snapshotToApply.playlist.channels[0]?.id ?? null;
 
     startTransition(() => {
-      setPlaylist(playlistSnapshot.playlist);
+      setPlaylist(snapshotToApply.playlist);
       setSelectedChannelId(nextSelectedChannelId);
     });
-  }, [playlistSnapshot, playlistSnapshotHydrated]);
+  }, [
+    playlistSnapshot,
+    playlistSnapshotHydrated,
+    savedSources,
+    savedSourcesHydrated,
+    setPlaylistSnapshot,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -541,6 +543,9 @@ function App() {
         return;
       }
 
+      event.preventDefault();
+      event.stopPropagation();
+      fullscreenEscapeHandledRef.current = true;
       void handleToggleFullscreen();
     };
 
@@ -558,6 +563,11 @@ function App() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") {
+        return;
+      }
+
+      if (fullscreenEscapeHandledRef.current) {
+        fullscreenEscapeHandledRef.current = false;
         return;
       }
 
@@ -769,10 +779,11 @@ function App() {
     startupSourceToRestore !== null &&
     playlistSnapshot?.sourceId === startupSourceToRestore.id &&
     playlistSnapshot.playlist.channels.length > 0;
+  const hasRedactedStartupPlaylist = hasCachedStartupPlaylist && playlistSnapshot?.streamsRedacted === true;
   const shouldDelayResumeForStartupRestore =
     !startupRestoreAttemptedRef.current &&
     startupSourceToRestore !== null &&
-    !hasCachedStartupPlaylist;
+    (!hasCachedStartupPlaylist || hasRedactedStartupPlaylist);
 
   useEffect(() => {
     if (!hasHydratedPersistentState) {
@@ -792,7 +803,7 @@ function App() {
     const restoreStartupSource = () =>
       importFromSavedSource(startupSourceToRestore, {
         preservePlaybackSession: true,
-        keepPlaybackRunning: hasCachedStartupPlaylist,
+        keepPlaybackRunning: hasCachedStartupPlaylist && !hasRedactedStartupPlaylist,
       }).catch((error) => {
         const errorMessage =
           error instanceof Error ? error.message : "The saved source could not be refreshed.";
@@ -803,7 +814,7 @@ function App() {
         );
       });
 
-    if (hasCachedStartupPlaylist) {
+    if (hasCachedStartupPlaylist && !hasRedactedStartupPlaylist) {
       const timerId = window.setTimeout(() => {
         void restoreStartupSource();
       }, 1500);
@@ -818,7 +829,12 @@ function App() {
     void restoreStartupSource().finally(() => {
       setIsRestoringStartupSource(false);
     });
-  }, [hasCachedStartupPlaylist, hasHydratedPersistentState, startupSourceToRestore]);
+  }, [
+    hasCachedStartupPlaylist,
+    hasHydratedPersistentState,
+    hasRedactedStartupPlaylist,
+    startupSourceToRestore,
+  ]);
 
   async function handleImportFile(file: File) {
     setIsImportingFile(true);
@@ -844,6 +860,17 @@ function App() {
         ? currentIds.filter((id) => id !== channelId)
         : [...currentIds, channelId],
     );
+  }
+
+  function showSelectedChannelGroup() {
+    setNavigationSection("tv");
+    setActiveGroup(
+      selectedChannel?.group && enabledGroupSet.has(selectedChannel.group)
+        ? selectedChannel.group
+        : ALL_CHANNELS_GROUP_ID,
+    );
+    setSidebarMode("groups");
+    setSearchQuery("");
   }
 
   async function handleSelectChannel(channel: Channel) {
@@ -903,6 +930,9 @@ function App() {
             resumeInFullscreen: true,
           }));
         }
+        if (!nextFullscreen) {
+          showSelectedChannelGroup();
+        }
         setIsFullscreen(nextFullscreen);
         schedulePlayerLayoutSync();
         return;
@@ -914,6 +944,7 @@ function App() {
 
       if (document.fullscreenElement) {
         await document.exitFullscreen();
+        showSelectedChannelGroup();
         setIsFullscreen(false);
         schedulePlayerLayoutSync();
         return;

@@ -31,6 +31,7 @@ export interface PlaylistSnapshot {
   playlist: PlaylistImport;
   selectedChannelId: string | null;
   savedAt: string;
+  streamsRedacted?: boolean;
 }
 
 export interface SourceLibraryIndexEntry {

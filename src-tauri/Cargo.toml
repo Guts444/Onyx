@@ -1,6 +1,6 @@
 [package]
 name = "onyx"
-version = "0.5.4"
+version = "0.5.5"
 description = "Onyx is a local-first Windows IPTV player built with Tauri, React, and libmpv"
 authors = ["Guts444"]
 edition = "2021"

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.5
+
+- **Xtream restore fix**: Cached Xtream libraries once again restore groups and channels on startup while persisted stream URLs are redacted so provider credentials are not written to app-state JSON.
+- **Startup resume fix**: Redacted Xtream caches now wait for the saved source refresh before attempting fullscreen playback resume, avoiding attempts to play placeholder stream URLs.
+- **Fullscreen Escape flow**: Pressing `Esc` after startup fullscreen playback now exits to Live TV with the selected channel's group open instead of jumping to Search.
+
 ## v0.5.4
 
 - **Windows installer hardening**: Removed Tauri's default WebView2 bootstrapper from the MSI so the installer no longer runs hidden PowerShell to download and launch Microsoft's WebView2 setup. Onyx now relies on the system WebView2 runtime included with current Windows 10/11 installs.
