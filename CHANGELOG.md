@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.7
+
+- **Fullscreen Escape polish**: When leaving startup fullscreen playback, favorite channels now reopen the Favorites view instead of their normal channel group.
+- **Release maintenance**: Bumped desktop/package metadata and release helper output names for the v0.5.7 test build.
+
+## v0.5.6
+
+- **Xtream cache rollback**: Restored the pre-v0.5.4 playlist snapshot behavior so cached Xtream channels keep their stream URLs and play immediately after restart.
+- **Stream URL compatibility**: Restored the pre-v0.5.4 stream handling for Windows paths, UNC paths, and `file:` URLs.
+- **Xtream domain compatibility**: Scheme-less Xtream domains default to `http://` again, matching the behavior before v0.5.4.
+- **Storage compatibility**: Legacy `localStorage` values are no longer removed after migration, keeping the old fallback behavior intact.
+- **Kept from recent builds**: Preserved the cleaner Windows installer path and the improved fullscreen `Esc` navigation.
+
 ## v0.5.5
 
 - **Xtream restore fix**: Cached Xtream libraries once again restore groups and channels on startup while persisted stream URLs are redacted so provider credentials are not written to app-state JSON.

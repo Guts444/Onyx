@@ -49,8 +49,6 @@ import {
   isSourceProfileReady,
   mergeSourceLibraryIndexEntry,
   markSourceLoaded,
-  normalizePlaylistSnapshot,
-  scrubPlaylistSnapshotSecrets,
   scrubSourceProfileSecrets,
   updateSourceProfile,
 } from "./features/sources/profiles";
@@ -244,12 +242,7 @@ function App() {
     DEFAULT_PLAYER_VOLUME,
   );
   const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated] =
-    usePersistentState<PlaylistSnapshot | null>(
-      PLAYLIST_SNAPSHOT_STORAGE_KEY,
-      null,
-      normalizePlaylistSnapshot,
-      (snapshot) => scrubPlaylistSnapshotSecrets(snapshot, savedSources),
-    );
+    usePersistentState<PlaylistSnapshot | null>(PLAYLIST_SNAPSHOT_STORAGE_KEY, null);
   const [playlist, setPlaylist] = useState<PlaylistImport | null>(() => playlistSnapshot?.playlist ?? null);
   const [navigationSection, setNavigationSection] = useState<NavigationSection>("tv");
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
@@ -461,45 +454,29 @@ function App() {
   }, [savedSourcePasswordsHydrated, savedSources, savedSourcesHydrated]);
 
   useEffect(() => {
-    if (
-      !playlistSnapshotHydrated ||
-      !savedSourcesHydrated ||
-      hydratedPlaylistSnapshotAppliedRef.current
-    ) {
+    if (!playlistSnapshotHydrated || hydratedPlaylistSnapshotAppliedRef.current) {
       return;
     }
 
     hydratedPlaylistSnapshotAppliedRef.current = true;
 
-    const snapshotToApply = scrubPlaylistSnapshotSecrets(playlistSnapshot, savedSources);
-
-    if (snapshotToApply !== playlistSnapshot) {
-      setPlaylistSnapshot(snapshotToApply);
-    }
-
-    if (!snapshotToApply) {
+    if (!playlistSnapshot) {
       return;
     }
 
     const nextSelectedChannelId =
-      snapshotToApply.selectedChannelId &&
-      snapshotToApply.playlist.channels.some(
-        (channel) => channel.id === snapshotToApply.selectedChannelId,
+      playlistSnapshot.selectedChannelId &&
+      playlistSnapshot.playlist.channels.some(
+        (channel) => channel.id === playlistSnapshot.selectedChannelId,
       )
-        ? snapshotToApply.selectedChannelId
-        : snapshotToApply.playlist.channels[0]?.id ?? null;
+        ? playlistSnapshot.selectedChannelId
+        : playlistSnapshot.playlist.channels[0]?.id ?? null;
 
     startTransition(() => {
-      setPlaylist(snapshotToApply.playlist);
+      setPlaylist(playlistSnapshot.playlist);
       setSelectedChannelId(nextSelectedChannelId);
     });
-  }, [
-    playlistSnapshot,
-    playlistSnapshotHydrated,
-    savedSources,
-    savedSourcesHydrated,
-    setPlaylistSnapshot,
-  ]);
+  }, [playlistSnapshot, playlistSnapshotHydrated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -779,11 +756,10 @@ function App() {
     startupSourceToRestore !== null &&
     playlistSnapshot?.sourceId === startupSourceToRestore.id &&
     playlistSnapshot.playlist.channels.length > 0;
-  const hasRedactedStartupPlaylist = hasCachedStartupPlaylist && playlistSnapshot?.streamsRedacted === true;
   const shouldDelayResumeForStartupRestore =
     !startupRestoreAttemptedRef.current &&
     startupSourceToRestore !== null &&
-    (!hasCachedStartupPlaylist || hasRedactedStartupPlaylist);
+    !hasCachedStartupPlaylist;
 
   useEffect(() => {
     if (!hasHydratedPersistentState) {
@@ -803,7 +779,7 @@ function App() {
     const restoreStartupSource = () =>
       importFromSavedSource(startupSourceToRestore, {
         preservePlaybackSession: true,
-        keepPlaybackRunning: hasCachedStartupPlaylist && !hasRedactedStartupPlaylist,
+        keepPlaybackRunning: hasCachedStartupPlaylist,
       }).catch((error) => {
         const errorMessage =
           error instanceof Error ? error.message : "The saved source could not be refreshed.";
@@ -814,7 +790,7 @@ function App() {
         );
       });
 
-    if (hasCachedStartupPlaylist && !hasRedactedStartupPlaylist) {
+    if (hasCachedStartupPlaylist) {
       const timerId = window.setTimeout(() => {
         void restoreStartupSource();
       }, 1500);
@@ -832,7 +808,6 @@ function App() {
   }, [
     hasCachedStartupPlaylist,
     hasHydratedPersistentState,
-    hasRedactedStartupPlaylist,
     startupSourceToRestore,
   ]);
 
@@ -865,7 +840,9 @@ function App() {
   function showSelectedChannelGroup() {
     setNavigationSection("tv");
     setActiveGroup(
-      selectedChannel?.group && enabledGroupSet.has(selectedChannel.group)
+      selectedChannel && favoriteIdSet.has(selectedChannel.id)
+        ? FAVORITES_GROUP_ID
+        : selectedChannel?.group && enabledGroupSet.has(selectedChannel.group)
         ? selectedChannel.group
         : ALL_CHANNELS_GROUP_ID,
     );
