@@ -126,6 +126,39 @@ Release artifacts are generated in:
 src-tauri/target/release/bundle
 ```
 
+## Experimental Native WinUI Prototype
+
+The stable Onyx release is still the Tauri app described above. An experimental native Windows prototype lives side-by-side in:
+
+```text
+src-winui/
+```
+
+The native prototype uses C#, WinUI 3, Windows App SDK, and native `libmpv` playback. It does not use Tauri, React, Electron, or an embedded browser UI. Its current slice includes native shell, local M3U/M3U8 import, Xtream live login/import, group/channel lists, channel selection, local favorites/recents persistence, and a first libmpv playback host. It is not feature-complete and should not be treated as the stable release.
+
+Native build prerequisites:
+
+- .NET 8 SDK. The project uses package-local Windows SDK/MSIX build tooling for WinUI resource generation.
+- Native playback expects `src-tauri/lib/libmpv-2.dll`. If it is missing, run `npx tauri-plugin-libmpv-api setup-lib` from the repo root before launching the native app.
+
+Build and test the native prototype:
+
+```bash
+dotnet restore src-winui/Onyx.Native.sln
+dotnet test src-winui/Onyx.Native.Tests/Onyx.Native.Tests.csproj
+dotnet build src-winui/Onyx.Native.sln -c Debug
+```
+
+Run it during development:
+
+```bash
+dotnet run --project src-winui/Onyx.Native/Onyx.Native.csproj
+```
+
+In the native app, use **Import M3U** for local playlists or **Xtream** for a live TV account. Remembered Xtream passwords are stored in Windows Credential Manager through `PasswordVault`, not in the JSON source profile file.
+
+If `dotnet build` reports a missing `Microsoft.Build.Packaging.Pri.Tasks.dll`, restore packages again and confirm `EnableMsixTooling` remains enabled in the native project. The Core library and parser tests can still build with only the base .NET SDK.
+
 ## Disclaimer
 
 Onyx is a client application for loading and playing user-supplied playlists, streams, guide URLs, and related credentials. It does not provide channels, playlists, stream URLs, guide data, or service access.

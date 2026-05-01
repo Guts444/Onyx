@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Onyx.Native.Core", "Onyx.Native.Core\Onyx.Native.Core.csproj", "{B51CB1EE-D9E1-4A31-A642-9BEECCDE75E8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Onyx.Native", "Onyx.Native\Onyx.Native.csproj", "{FF9A9D45-E657-4DA0-9EB5-3D1BFC929DC8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Onyx.Native.Tests", "Onyx.Native.Tests\Onyx.Native.Tests.csproj", "{634ABFAC-5418-43D6-91DF-9E31F93E1B2B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B51CB1EE-D9E1-4A31-A642-9BEECCDE75E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B51CB1EE-D9E1-4A31-A642-9BEECCDE75E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B51CB1EE-D9E1-4A31-A642-9BEECCDE75E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B51CB1EE-D9E1-4A31-A642-9BEECCDE75E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FF9A9D45-E657-4DA0-9EB5-3D1BFC929DC8}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{FF9A9D45-E657-4DA0-9EB5-3D1BFC929DC8}.Debug|Any CPU.Build.0 = Debug|x64
+		{FF9A9D45-E657-4DA0-9EB5-3D1BFC929DC8}.Release|Any CPU.ActiveCfg = Release|x64
+		{FF9A9D45-E657-4DA0-9EB5-3D1BFC929DC8}.Release|Any CPU.Build.0 = Release|x64
+		{634ABFAC-5418-43D6-91DF-9E31F93E1B2B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{634ABFAC-5418-43D6-91DF-9E31F93E1B2B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{634ABFAC-5418-43D6-91DF-9E31F93E1B2B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{634ABFAC-5418-43D6-91DF-9E31F93E1B2B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

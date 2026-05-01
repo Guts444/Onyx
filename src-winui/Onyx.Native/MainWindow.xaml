@@ -1,0 +1,340 @@
+<Window
+    x:Class="Onyx.Native.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Background="{StaticResource OnyxPageBackgroundBrush}" RequestedTheme="Dark">
+        <NavigationView
+            x:Name="RootNavigation"
+            Background="{StaticResource OnyxPageBackgroundBrush}"
+            IsBackButtonVisible="Collapsed"
+            IsPaneOpen="True"
+            IsSettingsVisible="False"
+            PaneDisplayMode="LeftCompact"
+            SelectionChanged="RootNavigation_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="Live TV" Tag="LiveTv">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE7F4;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Settings" Tag="Settings">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <Grid Padding="20" RowSpacing="16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Onyx Native" FontSize="28" FontWeight="SemiBold" />
+                        <TextBlock
+                            Margin="0,4,0,0"
+                            Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                            Text="{Binding PlaylistSummary}" />
+                    </StackPanel>
+                    <Button
+                        Grid.Column="1"
+                        IsEnabled="{Binding CanImport}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon FontSize="15" Glyph="&#xE77B;" />
+                            <TextBlock Text="Xtream" />
+                        </StackPanel>
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel Width="340" Spacing="12">
+                                    <TextBlock Text="Xtream Live Login" FontSize="18" FontWeight="SemiBold" />
+                                    <TextBox
+                                        x:Name="XtreamDomainBox"
+                                        Header="Domain"
+                                        PlaceholderText="provider.example.com:8080"
+                                        Text="{Binding XtreamDomain, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox
+                                        x:Name="XtreamUsernameBox"
+                                        Header="Username"
+                                        Text="{Binding XtreamUsername, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <PasswordBox
+                                        x:Name="XtreamPasswordBox"
+                                        Header="Password" />
+                                    <CheckBox
+                                        x:Name="RememberXtreamCheckBox"
+                                        Content="Remember login securely"
+                                        IsChecked="True" />
+                                    <Button
+                                        HorizontalAlignment="Right"
+                                        Click="ImportXtream_Click"
+                                        IsEnabled="{Binding CanImport}">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <FontIcon FontSize="15" Glyph="&#xE72D;" />
+                                            <TextBlock Text="Import Live TV" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                    <Button
+                        Grid.Column="2"
+                        Click="ImportLocalPlaylist_Click"
+                        IsEnabled="{Binding CanImport}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon FontSize="15" Glyph="&#xE8E5;" />
+                            <TextBlock Text="Import M3U" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
+                <Grid
+                    x:Name="LiveTvView"
+                    Grid.Row="1"
+                    ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="280" />
+                        <ColumnDefinition Width="360" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Style="{StaticResource OnyxPanelBorderStyle}">
+                        <Grid RowSpacing="14">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Library" FontSize="18" FontWeight="SemiBold" />
+                                <TextBlock
+                                    Margin="0,4,0,0"
+                                    Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                    Text="Groups, favorites, and recents" />
+                            </StackPanel>
+                            <ListView
+                                Grid.Row="1"
+                                ItemsSource="{Binding Groups}"
+                                SelectedItem="{Binding SelectedGroup, Mode=TwoWay}"
+                                SelectionMode="Single">
+                                <ListView.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <ItemsStackPanel />
+                                    </ItemsPanelTemplate>
+                                </ListView.ItemsPanel>
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Padding="8" ColumnSpacing="10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                                Text="{Binding ChannelCount}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Column="1" Style="{StaticResource OnyxPanelBorderStyle}">
+                        <Grid RowSpacing="14">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Channels" FontSize="18" FontWeight="SemiBold" />
+                                <TextBlock
+                                    Margin="0,4,0,0"
+                                    Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                    Text="Native virtualized channel list" />
+                            </StackPanel>
+                            <Grid Grid.Row="1" ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox
+                                    PlaceholderText="Search channels"
+                                    Text="{Binding SearchQuery, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Grid.Column="1" Command="{Binding ClearSearchCommand}">
+                                    <FontIcon FontSize="14" Glyph="&#xE894;" />
+                                </Button>
+                            </Grid>
+                            <ListView
+                                Grid.Row="2"
+                                ItemsSource="{Binding Channels}"
+                                SelectedItem="{Binding SelectedChannelItem, Mode=TwoWay}"
+                                SelectionMode="Single">
+                                <ListView.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <ItemsStackPanel />
+                                    </ItemsPanelTemplate>
+                                </ListView.ItemsPanel>
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Padding="10" RowSpacing="4">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock
+                                                    FontWeight="SemiBold"
+                                                    Text="{Binding Name}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <TextBlock
+                                                    Grid.Column="1"
+                                                    Foreground="{StaticResource OnyxAccentBrush}"
+                                                    Text="{Binding FavoriteLabel}" />
+                                            </Grid>
+                                            <Grid Grid.Row="1" ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock
+                                                    Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                                    Text="{Binding Group}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <TextBlock
+                                                    Grid.Column="1"
+                                                    Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                                    Text="{Binding RecentLabel}" />
+                                            </Grid>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Column="2" RowSpacing="14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <Border Style="{StaticResource OnyxPanelBorderStyle}">
+                            <Grid RowSpacing="16">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding PlayerTitle}" FontSize="22" FontWeight="SemiBold" />
+                                        <TextBlock
+                                            Margin="0,4,0,0"
+                                            Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                            Text="{Binding PlayerStatus}"
+                                            TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <Button
+                                        Grid.Column="1"
+                                        Command="{Binding ToggleFavoriteCommand}"
+                                        Content="{Binding FavoriteButtonLabel}" />
+                                </Grid>
+
+                                <Border
+                                    x:Name="MpvHost"
+                                    Grid.Row="1"
+                                    Background="Black"
+                                    BorderBrush="{StaticResource OnyxPanelBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <Grid>
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                                            <FontIcon
+                                                FontSize="42"
+                                                Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                                Glyph="&#xE768;" />
+                                            <TextBlock
+                                                Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                                HorizontalAlignment="Center"
+                                                Text="Native libmpv surface" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+
+                                <Grid Grid.Row="2" ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button Command="{Binding StopPlaybackCommand}" Content="Stop" />
+                                    <Button Grid.Column="1" Click="ToggleFullscreen_Click" Content="Fullscreen" />
+                                    <TextBlock
+                                        Grid.Column="2"
+                                        Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                        Text="Selecting a channel loads it with native libmpv."
+                                        TextAlignment="Right"
+                                        TextWrapping="WrapWholeWords" />
+                                </Grid>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="1" Style="{StaticResource OnyxPanelBorderStyle}">
+                            <TextBlock
+                                Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                                Text="{Binding StatusMessage}"
+                                TextWrapping="WrapWholeWords" />
+                        </Border>
+                    </Grid>
+                </Grid>
+
+                <Border
+                    x:Name="SettingsView"
+                    Grid.Row="1"
+                    Style="{StaticResource OnyxPanelBorderStyle}"
+                    Visibility="Collapsed">
+                    <Grid RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Settings" FontSize="24" FontWeight="SemiBold" />
+                        <TextBlock
+                            Grid.Row="1"
+                            Foreground="{StaticResource OnyxTextSecondaryBrush}"
+                            Text="Native settings are placeholders in this first prototype. Source profiles, EPG sources, secure credentials, volume, fullscreen resume, hidden groups, and startup behavior will move here in later phases."
+                            TextWrapping="WrapWholeWords" />
+                        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                            <Button Content="Sources" IsEnabled="False" />
+                            <Button Content="EPG" IsEnabled="False" />
+                            <Button Content="Playback" IsEnabled="False" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <ProgressBar
+                    Grid.Row="2"
+                    IsIndeterminate="{Binding IsBusy}" />
+            </Grid>
+        </NavigationView>
+    </Grid>
+</Window>

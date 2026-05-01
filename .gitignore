@@ -28,7 +28,12 @@ dist-ssr
 *.ntvs*
 *.njsproj
 *.sln
+!src-winui/*.sln
 *.sw?
+
+# .NET
+bin/
+obj/
 
 # Release notes
 RELEASE_NOTES*.md
