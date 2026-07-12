@@ -3,8 +3,10 @@ import assert from "node:assert";
 import type { Channel } from "../../domain/iptv.ts";
 import type { PlaylistSnapshot, SavedPlaylistSource } from "../../domain/sourceProfiles.ts";
 import {
+  createSourceRevisionTracker,
+  createStartupSourceRestoreState,
   getSourceOperationCommitState,
-  getSourceOperationFingerprint,
+  migrateStartupPlaybackSession,
   migrateImportedChannelReferences,
 } from "./appIntegration.ts";
 
@@ -55,18 +57,89 @@ test("an imported playlist migrates every App channel reference while preserving
   });
 });
 
-test("source operation commit state uses current existence, readiness, and a secret-free configuration fingerprint", () => {
-  const fingerprint = getSourceOperationFingerprint(source);
-  assert.equal(fingerprint.includes(source.url), false);
-  assert.deepStrictEqual(getSourceOperationCommitState({ "source-a": source }, "source-a"), {
+test("startup playback resume keeps its target when an imported playlist replaces a legacy channel ID", () => {
+  const startupSession = {
     sourceId: "source-a",
-    fingerprint,
+    channelId: "old-a",
+    shouldResume: true,
+    resumeSourceId: "source-a",
+    resumeChannelId: "old-a",
+    resumeInFullscreen: false,
+  };
+
+  const migrated = migrateStartupPlaybackSession(channels, startupSession);
+
+  assert.deepStrictEqual(migrated, {
+    ...startupSession,
+    channelId: "new-a",
+    resumeChannelId: "new-a",
+  });
+});
+
+test("canceling a delayed startup restore clears pending state without consuming its attempt", () => {
+  const restore = createStartupSourceRestoreState();
+
+  assert.equal(restore.plan("revision-a"), true);
+  assert.equal(restore.hasPending("revision-a"), true);
+  assert.equal(restore.hasAttempted("revision-a"), false);
+
+  restore.cancelPending("revision-a");
+
+  assert.equal(restore.hasPending("revision-a"), false);
+  assert.equal(restore.hasAttempted("revision-a"), false);
+});
+
+test("a changed valid source revision can start once after an earlier delayed restore is canceled", () => {
+  const restore = createStartupSourceRestoreState();
+  restore.plan("revision-a");
+  restore.cancelPending("revision-a");
+
+  assert.equal(restore.plan("revision-b"), true);
+  assert.equal(restore.begin("revision-b"), true);
+  assert.equal(restore.hasAttempted("revision-b"), true);
+  assert.equal(restore.plan("revision-b"), false);
+  assert.equal(restore.begin("revision-b"), false);
+});
+
+test("source revisions are opaque, stable until mutation, and bumped across deletion or recreation", () => {
+  const revisions = createSourceRevisionTracker();
+  const first = revisions.current(source.id);
+
+  assert.equal(revisions.current(source.id), first);
+  assert.equal(first.includes(source.id), false);
+  assert.equal(first.includes(source.url), false);
+
+  const edited = revisions.bump(source.id);
+  assert.notEqual(edited, first);
+  assert.equal(revisions.current(source.id), edited);
+
+  const recreated = revisions.bump(source.id);
+  assert.notEqual(recreated, edited);
+});
+
+test("source operation commit state uses an explicit revision without deriving identity from secrets", () => {
+  const revisions = createSourceRevisionTracker();
+  const revision = revisions.current(source.id);
+  const xtream: SavedPlaylistSource = {
+    ...source,
+    kind: "xtream",
+    domain: "https://secret-domain.example",
+    username: "secret-user",
+    password: "secret-password",
+  };
+
+  assert.equal(JSON.stringify({ revision }).includes(xtream.domain), false);
+  assert.equal(JSON.stringify({ revision }).includes(xtream.username), false);
+  assert.equal(JSON.stringify({ revision }).includes(xtream.password), false);
+  assert.deepStrictEqual(getSourceOperationCommitState({ "source-a": xtream }, "source-a", revision), {
+    sourceId: "source-a",
+    fingerprint: revision,
     exists: true,
     ready: true,
   });
-  assert.deepStrictEqual(getSourceOperationCommitState({}, "source-a"), {
+  assert.deepStrictEqual(getSourceOperationCommitState({}, "source-a", revision), {
     sourceId: "source-a",
-    fingerprint: null,
+    fingerprint: revision,
     exists: false,
     ready: false,
   });

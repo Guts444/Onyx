@@ -12,7 +12,6 @@ import {
   type PlaybackSessionChannelReferences,
 } from "../playlist/migration.ts";
 import { isSourceProfileReady } from "./profiles.ts";
-import { hashString } from "../../utils/hash.ts";
 
 export interface ImportedChannelReferences<T extends PlaybackSessionChannelReferences> {
   favoriteIds: readonly string[];
@@ -44,29 +43,77 @@ export function migrateImportedChannelReferences<T extends PlaybackSessionChanne
   };
 }
 
-export function getSourceOperationFingerprint(source: SavedPlaylistSource) {
-  const configuration = source.kind === "m3u_url"
-    ? { id: source.id, kind: source.kind, enabled: source.enabled, updatedAt: source.updatedAt, url: source.url }
-    : {
-        id: source.id,
-        kind: source.kind,
-        enabled: source.enabled,
-        updatedAt: source.updatedAt,
-        domain: source.domain,
-        username: source.username,
-        hasPassword: source.password.length > 0,
-      };
-  return `source_${hashString(JSON.stringify(configuration))}`;
+export function migrateStartupPlaybackSession<T extends PlaybackSessionChannelReferences>(
+  channels: readonly Channel[],
+  session: T,
+) {
+  return migratePlaybackSessionChannelIds(session, buildLegacyChannelIdMap(channels));
+}
+
+export function createStartupSourceRestoreState() {
+  const attemptedRevisions = new Set<string>();
+  let pendingRevision: string | null = null;
+
+  return {
+    plan(revision: string) {
+      if (attemptedRevisions.has(revision) || pendingRevision === revision) {
+        return false;
+      }
+      pendingRevision = revision;
+      return true;
+    },
+    begin(revision: string) {
+      if (pendingRevision !== revision || attemptedRevisions.has(revision)) {
+        return false;
+      }
+      pendingRevision = null;
+      attemptedRevisions.add(revision);
+      return true;
+    },
+    cancelPending(revision: string) {
+      if (pendingRevision === revision) {
+        pendingRevision = null;
+      }
+    },
+    hasPending(revision: string) {
+      return pendingRevision === revision;
+    },
+    hasAttempted(revision: string) {
+      return attemptedRevisions.has(revision);
+    },
+  };
+}
+
+export function createSourceRevisionTracker() {
+  const revisions = new Map<string, string>();
+
+  const issueRevision = () => `source-revision:${crypto.randomUUID()}`;
+
+  return {
+    current(sourceId: string) {
+      const existing = revisions.get(sourceId);
+      if (existing) return existing;
+      const revision = issueRevision();
+      revisions.set(sourceId, revision);
+      return revision;
+    },
+    bump(sourceId: string) {
+      const revision = issueRevision();
+      revisions.set(sourceId, revision);
+      return revision;
+    },
+  };
 }
 
 export function getSourceOperationCommitState(
   sources: Record<string, SavedPlaylistSource>,
   sourceId: string,
+  revision: string,
 ) {
   const source = sources[sourceId];
   return {
     sourceId,
-    fingerprint: source ? getSourceOperationFingerprint(source) : null,
+    fingerprint: revision,
     exists: source !== undefined,
     ready: source ? isSourceProfileReady(source) : false,
   };

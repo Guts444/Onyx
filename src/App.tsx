@@ -52,9 +52,11 @@ import {
   shouldRefreshPlaylistSnapshot,
 } from "./features/playlist/snapshot";
 import {
+  createSourceRevisionTracker,
+  createStartupSourceRestoreState,
   getSourceOperationCommitState,
-  getSourceOperationFingerprint,
   migrateImportedChannelReferences,
+  migrateStartupPlaybackSession,
 } from "./features/sources/appIntegration";
 import {
   getXtreamCredentialHydrationFingerprint,
@@ -288,7 +290,7 @@ function App() {
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isRestoringStartupSource, setIsRestoringStartupSource] = useState(false);
+  const [startupRestoreToken, setStartupRestoreToken] = useState<SourceOperationToken | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("library");
   const [message, setMessage] = useState<string | null>(null);
   const [epgDirectoriesByUrlKey, setEpgDirectoriesByUrlKey] = useState<
@@ -306,7 +308,7 @@ function App() {
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const playerShellRef = useRef<HTMLDivElement>(null);
   const playerSurfaceRef = useRef<HTMLDivElement>(null);
-  const startupRestoreAttemptedRef = useRef(false);
+  const startupRestoreStateRef = useRef(createStartupSourceRestoreState());
   const startupPlaybackRestoreKeyRef = useRef<string | null>(null);
   const startupPlaybackRestoreCompletedRef = useRef(false);
   const startupPlaybackSessionRef = useRef<PlaybackSession | null>(null);
@@ -318,6 +320,7 @@ function App() {
   const savedSourcesRef = useRef(savedSources);
   const activeSourceIdRef = useRef(activeSourceId);
   const sourceOperationsRef = useRef(createSourceOperationCoordinator());
+  const sourceRevisionsRef = useRef(createSourceRevisionTracker());
   const persistenceNoticeShownRef = useRef(false);
   const startupSourceRefreshResultRef = useRef<"pending" | "succeeded" | "failed">("pending");
   const importedReferencesRef = useRef({
@@ -361,6 +364,7 @@ function App() {
   };
   const loadingSourceId = sourceBusy?.origin === "local" ? null : sourceBusy?.sourceId ?? null;
   const isImportingFile = sourceBusy?.origin === "local";
+  const isRestoringStartupSource = startupRestoreToken !== null;
   const { player, playChannel, setVolumeLevel, stopPlayback, toggleMute } =
     useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
 
@@ -708,7 +712,11 @@ function App() {
     }
     return sourceOperationsRef.current.canCommit(
       token,
-      getSourceOperationCommitState(savedSourcesRef.current, token.sourceId),
+      getSourceOperationCommitState(
+        savedSourcesRef.current,
+        token.sourceId,
+        sourceRevisionsRef.current.current(token.sourceId),
+      ),
     );
   }
 
@@ -763,6 +771,12 @@ function App() {
         };
 
     if (!canCommitSourceOperation(token)) return false;
+    if (startupPlaybackSessionRef.current !== null) {
+      startupPlaybackSessionRef.current = migrateStartupPlaybackSession(
+        importedPlaylist.channels,
+        startupPlaybackSessionRef.current,
+      );
+    }
     startTransition(() => {
       setFavoriteIds(migrated.favoriteIds);
       setRecentIds(migrated.recentIds);
@@ -852,6 +866,9 @@ function App() {
     activeSourceId && savedSources[activeSourceId] && isSourceProfileReady(savedSources[activeSourceId])
       ? savedSources[activeSourceId]
       : null;
+  const startupSourceRevision = startupSourceToRestore
+    ? sourceRevisionsRef.current.current(startupSourceToRestore.id)
+    : null;
   const cachedStartupSnapshot =
     startupSourceToRestore !== null && playlistSnapshot?.sourceId === startupSourceToRestore.id
       ? playlistSnapshot
@@ -868,35 +885,48 @@ function App() {
     startupSourceRefreshResultRef.current === "pending";
 
   useEffect(() => {
-    if (!hasHydratedPersistentState || startupRestoreAttemptedRef.current) {
+    if (!hasHydratedPersistentState) {
       return;
     }
 
-    startupRestoreAttemptedRef.current = true;
-    if (!startupSourceToRestore) {
+    if (!startupSourceToRestore || !startupSourceRevision) {
       startupSourceRefreshResultRef.current = "failed";
       return;
     }
 
-    const token = sourceOperationsRef.current.start({
-      origin: "startup",
-      sourceId: startupSourceToRestore.id,
-      expectedFingerprint: getSourceOperationFingerprint(startupSourceToRestore),
-    });
-    setIsRestoringStartupSource(true);
-    setSourceBusy(beginSourceBusy(token));
+    const restoreState = startupRestoreStateRef.current;
+    if (!restoreState.plan(startupSourceRevision)) {
+      return;
+    }
+
+    startupSourceRefreshResultRef.current = "pending";
+    let timerId: number | null = null;
+    let token: SourceOperationToken | null = null;
 
     const restoreStartupSource = async () => {
+      if (!restoreState.begin(startupSourceRevision)) return;
+
+      token = sourceOperationsRef.current.start({
+        origin: "startup",
+        sourceId: startupSourceToRestore.id,
+        expectedFingerprint: startupSourceRevision,
+      });
+      const operationToken = token;
+      setStartupRestoreToken(operationToken);
+      setSourceBusy(beginSourceBusy(operationToken));
+
       try {
-        if (!canCommitSourceOperation(token)) return;
-        const applied = await importFromSavedSource(startupSourceToRestore, token, {
+        if (!canCommitSourceOperation(operationToken)) return;
+        const applied = await importFromSavedSource(startupSourceToRestore, operationToken, {
           preservePlaybackSession: true,
           keepPlaybackRunning: hasCachedStartupPlaylist,
         });
-        startupSourceRefreshResultRef.current = applied ? "succeeded" : "failed";
+        if (operationToken.isCurrent()) {
+          startupSourceRefreshResultRef.current = applied ? "succeeded" : "failed";
+        }
       } catch (error) {
-        startupSourceRefreshResultRef.current = "failed";
-        if (canCommitSourceOperation(token)) {
+        if (operationToken.isCurrent()) {
+          startupSourceRefreshResultRef.current = "failed";
           const safeError = redactCredentials(
             error instanceof Error ? error.message : "The saved source could not be refreshed.",
           );
@@ -907,26 +937,37 @@ function App() {
           );
         }
       } finally {
-        setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, token));
-        setIsRestoringStartupSource(false);
+        setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, operationToken));
+        setStartupRestoreToken((currentToken) =>
+          currentToken === operationToken ? null : currentToken,
+        );
       }
     };
 
     if (hasCachedStartupPlaylist) {
-      const timerId = window.setTimeout(() => {
+      timerId = window.setTimeout(() => {
+        timerId = null;
         void restoreStartupSource();
       }, 1500);
-      return () => window.clearTimeout(timerId);
+    } else {
+      void restoreStartupSource();
     }
 
-    void restoreStartupSource();
-  }, [hasCachedStartupPlaylist, hasHydratedPersistentState, startupSourceToRestore]);
+    return () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+        restoreState.cancelPending(startupSourceRevision);
+        startupSourceRefreshResultRef.current = "failed";
+      }
+    };
+  }, [hasHydratedPersistentState, startupSourceRevision, startupSourceToRestore?.id]);
 
   async function handleImportFile(file: File) {
     const token = sourceOperationsRef.current.start({
       origin: "local",
       sourceId: null,
-      expectedFingerprint: `local_${file.name}_${file.size}_${file.lastModified}`,
+      expectedFingerprint: null,
     });
     setSourceBusy(beginSourceBusy(token));
 
@@ -1111,7 +1152,7 @@ function App() {
     const token = sourceOperationsRef.current.start({
       origin: "saved",
       sourceId,
-      expectedFingerprint: getSourceOperationFingerprint(source),
+      expectedFingerprint: sourceRevisionsRef.current.current(sourceId),
     });
     setSourceBusy(beginSourceBusy(token));
 
@@ -1146,6 +1187,13 @@ function App() {
 
   function handleToggleSourceEnabled(sourceId: string) {
     sourceOperationsRef.current.invalidateSource(sourceId);
+    sourceRevisionsRef.current.bump(sourceId);
+    startupSourceRefreshResultRef.current = savedSourcesRef.current[sourceId]?.enabled
+      ? "failed"
+      : "pending";
+    setStartupRestoreToken((currentToken) =>
+      currentToken?.sourceId === sourceId ? null : currentToken,
+    );
     setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
     setSavedSources((currentSources) => {
       const source = currentSources[sourceId];
@@ -1161,6 +1209,11 @@ function App() {
 
   function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
     sourceOperationsRef.current.invalidateSource(sourceId);
+    sourceRevisionsRef.current.bump(sourceId);
+    startupSourceRefreshResultRef.current = "pending";
+    setStartupRestoreToken((currentToken) =>
+      currentToken?.sourceId === sourceId ? null : currentToken,
+    );
     setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
     setSavedSources((currentSources) => {
       const source = currentSources[sourceId];
@@ -1180,6 +1233,11 @@ function App() {
     }
 
     sourceOperationsRef.current.invalidateSource(sourceId);
+    sourceRevisionsRef.current.bump(sourceId);
+    startupSourceRefreshResultRef.current = "failed";
+    setStartupRestoreToken((currentToken) =>
+      currentToken?.sourceId === sourceId ? null : currentToken,
+    );
     setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
 
     const cleanupEntry = sourceLibraryIndex[sourceId];
