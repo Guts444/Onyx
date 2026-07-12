@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  EpgCacheDiagnostics,
   EpgChannelProgrammeWindow,
   EpgDirectoryResponse,
   EpgProgrammeSnapshot,
@@ -13,6 +14,10 @@ export function refreshEpgCache(url: string) {
 
 export function loadEpgCacheDirectories() {
   return invoke<EpgDirectoryResponse[]>("load_epg_cache_directories");
+}
+
+export function getEpgCacheDiagnostics() {
+  return invoke<EpgCacheDiagnostics>("get_epg_cache_diagnostics");
 }
 
 export function deleteEpgCache(url: string) {

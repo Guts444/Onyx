@@ -127,6 +127,12 @@ export interface EpgDirectoryChannel {
   icon: string | null;
 }
 
+export interface EpgCacheDiagnostics {
+  recovered: boolean;
+  corrupt: boolean;
+  warnings: string[];
+}
+
 export interface EpgDirectoryResponse {
   sourceUrl: string;
   fetchedAt: string;

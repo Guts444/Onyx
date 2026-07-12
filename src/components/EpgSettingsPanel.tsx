@@ -6,6 +6,10 @@ import {
   type EpgSource,
 } from "../domain/epg";
 import { normalizeEpgUrlKey } from "../features/epg/matching";
+import {
+  formatEpgDirectoryDiagnostics,
+  sanitizeEpgSourceLabel,
+} from "../features/epg/diagnostics";
 
 interface EpgSettingsPanelProps {
   sources: EpgSource[];
@@ -142,6 +146,9 @@ export function EpgSettingsPanel({
             const directory = urlKey ? directoriesByUrlKey[urlKey] ?? null : null;
             const isReady = isEpgSourceReady(source);
             const isUpdating = updatingSourceIds.includes(source.id);
+            const directoryDiagnostics = directory
+              ? formatEpgDirectoryDiagnostics(directory)
+              : "";
 
             return (
               <article key={source.id} className="source-card">
@@ -155,7 +162,7 @@ export function EpgSettingsPanel({
 
                     <div className="source-card__summary-row">
                       <span className="source-card__summary-name">
-                        {getEpgSourceLabel(source)}
+                        {sanitizeEpgSourceLabel(getEpgSourceLabel(source))}
                       </span>
                     </div>
 
@@ -167,6 +174,9 @@ export function EpgSettingsPanel({
                         ? `${directory.channelCount} guide channels and ${directory.programmeCount} programmes cached locally.`
                         : "Update this guide once to cache it locally for matching and now/next data."}
                     </span>
+                    {directoryDiagnostics ? (
+                      <span className="source-card__summary-meta">{directoryDiagnostics}</span>
+                    ) : null}
                   </div>
 
                   <div className="source-card__actions">

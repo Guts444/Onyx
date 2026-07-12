@@ -4,7 +4,7 @@ use std::{
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
@@ -31,8 +31,48 @@ const TOTAL_REFRESH_TIMEOUT_SECS: u64 = 90;
 #[derive(Default)]
 pub struct EpgState {
     caches: Mutex<Option<HashMap<String, EpgCache>>>,
+    diagnostics: Mutex<EpgCacheDiagnostics>,
     generations: Mutex<GenerationRegistry>,
     disk_writes: Mutex<()>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EpgCacheDiagnostics {
+    recovered: bool,
+    corrupt: bool,
+    warnings: Vec<String>,
+}
+
+impl EpgState {
+    fn install_disk_read(&self, outcome: EpgDiskRead) -> Result<(), String> {
+        let mut caches = self
+            .caches
+            .lock()
+            .map_err(|_| "Could not access the saved EPG caches.".to_string())?;
+        if caches.is_some() {
+            return Ok(());
+        }
+        let mut diagnostics = self
+            .diagnostics
+            .lock()
+            .map_err(|_| "Could not access the EPG cache diagnostics.".to_string())?;
+        *diagnostics = EpgCacheDiagnostics {
+            recovered: outcome.recovered,
+            corrupt: outcome.corrupt,
+            warnings: outcome.warnings,
+        };
+        *caches = Some(outcome.caches);
+        Ok(())
+    }
+
+    #[allow(dead_code)] // Used by the command once it is added to the app's handler list.
+    fn cache_diagnostics(&self) -> Result<EpgCacheDiagnostics, String> {
+        self.diagnostics
+            .lock()
+            .map(|diagnostics| diagnostics.clone())
+            .map_err(|_| "Could not access the EPG cache diagnostics.".to_string())
+    }
 }
 
 #[derive(Default)]
@@ -889,6 +929,13 @@ impl EpgDiskStore {
     }
 
     fn read(&self) -> Result<EpgDiskRead, String> {
+        self.read_with_repair(atomic_write_epg)
+    }
+
+    fn read_with_repair<F>(&self, repair: F) -> Result<EpgDiskRead, String>
+    where
+        F: FnOnce(&Path, &[u8]) -> Result<(), String>,
+    {
         let primary_existed = self.path.exists();
         let primary = self.read_file(&self.path)?;
         if let Some(bytes) = primary.as_ref() {
@@ -908,20 +955,31 @@ impl EpgDiskStore {
         let backup = self.read_file(&backup_path)?;
         if let Some(bytes) = backup.as_ref() {
             if let Ok(mut caches) = Self::parse(bytes) {
-                atomic_write_epg(&self.path, bytes)?;
+                let repair_failed = repair(&self.path, bytes).is_err();
                 for cache in caches.values_mut() {
                     cache.recovered = true;
                     cache.corrupt = primary_existed;
                     cache.warnings.push(
                         "Recovered the EPG cache from its last-known-good backup.".to_string(),
                     );
+                    if repair_failed && cache.warnings.len() < MAX_WARNING_SAMPLES {
+                        cache.warnings.push(
+                            "The recovered EPG cache could not be repaired on disk.".to_string(),
+                        );
+                    }
                     cache.warnings.truncate(MAX_WARNING_SAMPLES);
                 }
+                let mut warnings = vec!["Recovered the EPG cache from backup.".to_string()];
+                if repair_failed {
+                    warnings
+                        .push("The recovered EPG cache could not be repaired on disk.".to_string());
+                }
+                warnings.truncate(MAX_WARNING_SAMPLES);
                 return Ok(EpgDiskRead {
                     caches,
                     recovered: true,
                     corrupt: primary_existed,
-                    warnings: vec!["Recovered the EPG cache from backup.".to_string()],
+                    warnings,
                 });
             }
             Self::discard_invalid(&backup_path);
@@ -1050,42 +1108,55 @@ fn persist_epg_snapshot(path: &Path, state: &EpgState) -> Result<(), String> {
     EpgDiskStore::new(path.to_path_buf()).write(&snapshot)
 }
 
-fn persist_epg_snapshot_if_current(
+#[derive(Debug, PartialEq, Eq)]
+enum EpgRefreshCommit {
+    Committed,
+    DeadlineExpired,
+    Superseded,
+}
+
+fn commit_epg_refresh_if_current<F>(
     path: &Path,
     state: &EpgState,
     source_url: &str,
     generation: u64,
-) -> Result<bool, String> {
+    cache: EpgCache,
+    may_commit: F,
+) -> Result<EpgRefreshCommit, String>
+where
+    F: FnOnce() -> bool,
+{
     let _write_guard = state
         .disk_writes
         .lock()
         .map_err(|_| "Could not coordinate the EPG cache write.".to_string())?;
-    if !state
+    let generations = state
         .generations
         .lock()
-        .map_err(|_| "Could not coordinate the EPG refresh.".to_string())?
-        .accept_refresh(source_url, generation)
-    {
-        return Ok(false);
+        .map_err(|_| "Could not coordinate the EPG refresh.".to_string())?;
+    if !generations.accept_refresh(source_url, generation) {
+        return Ok(EpgRefreshCommit::Superseded);
     }
-    let snapshot = state
+    if !may_commit() {
+        return Ok(EpgRefreshCommit::DeadlineExpired);
+    }
+
+    let mut cache_guard = state
         .caches
         .lock()
-        .map_err(|_| "Could not access the saved EPG caches.".to_string())?
-        .clone()
-        .unwrap_or_default();
+        .map_err(|_| "Could not save the in-memory EPG cache.".to_string())?;
+    let caches = cache_guard
+        .as_mut()
+        .ok_or_else(|| "Could not initialize the in-memory EPG cache store.".to_string())?;
+    let mut snapshot = caches.clone();
+    snapshot.insert(source_url.to_string(), cache.clone());
     EpgDiskStore::new(path.to_path_buf()).write(&snapshot)?;
-    Ok(true)
+    caches.insert(source_url.to_string(), cache);
+    Ok(EpgRefreshCommit::Committed)
 }
 
-fn read_epg_caches_from_disk<R: Runtime>(
-    app: &AppHandle<R>,
-) -> Result<HashMap<String, EpgCache>, String> {
-    let outcome = EpgDiskStore::new(get_epg_cache_path(app)?).read()?;
-    // Per-cache recovery details are included in directory responses. Keep the
-    // empty-store diagnostics consumed here so a corrupt cache never bricks startup.
-    let _recovery_diagnostics = (outcome.recovered, outcome.corrupt, outcome.warnings);
-    Ok(outcome.caches)
+fn read_epg_caches_from_disk<R: Runtime>(app: &AppHandle<R>) -> Result<EpgDiskRead, String> {
+    EpgDiskStore::new(get_epg_cache_path(app)?).read()
 }
 
 fn ensure_epg_caches_loaded<R: Runtime>(
@@ -1102,15 +1173,7 @@ fn ensure_epg_caches_loaded<R: Runtime>(
         }
     }
 
-    let loaded = read_epg_caches_from_disk(app)?;
-    let mut cache_guard = state
-        .caches
-        .lock()
-        .map_err(|_| "Could not access the saved EPG caches.".to_string())?;
-    if cache_guard.is_none() {
-        *cache_guard = Some(loaded);
-    }
-    Ok(())
+    state.install_disk_read(read_epg_caches_from_disk(app)?)
 }
 
 fn programme_to_summary(programme: &EpgProgramme) -> EpgProgrammeSummary {
@@ -1188,6 +1251,7 @@ pub async fn refresh_epg_cache(
 ) -> Result<EpgDirectoryResponse, String> {
     let normalized_url = normalize_epg_url_input(&url)?;
     let normalized_url_text = normalized_url.to_string();
+    ensure_epg_caches_loaded(&app, &state)?;
     let generation = state
         .generations
         .lock()
@@ -1195,7 +1259,8 @@ pub async fn refresh_epg_cache(
         .begin_refresh(&normalized_url_text);
     let client = build_http_client()?;
     let source_for_work = normalized_url.clone();
-    let refresh = async move {
+    let deadline = Instant::now() + Duration::from_secs(TOTAL_REFRESH_TIMEOUT_SECS);
+    let work = async move {
         let (body, content_type) = fetch_bytes_with_limit(
             &client,
             normalized_url,
@@ -1203,50 +1268,47 @@ pub async fn refresh_epg_cache(
             "Could not download the EPG file",
         )
         .await?;
-        let cache = tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             let xml = decode_epg_bytes(body, &source_for_work, content_type.as_deref())?;
             parse_xmltv_document(source_for_work.to_string(), xml)
         })
         .await
-        .map_err(|error| format!("Could not process the EPG file: {error}"))??;
-        let response = cache.directory_response();
-
-        ensure_epg_caches_loaded(&app, &state)?;
-        {
-            let generations = state
-                .generations
-                .lock()
-                .map_err(|_| "Could not coordinate the EPG refresh.".to_string())?;
-            if !generations.accept_refresh(&normalized_url_text, generation) {
-                return Err("This EPG refresh was superseded by a newer operation.".to_string());
-            }
-            let mut cache_guard = state
-                .caches
-                .lock()
-                .map_err(|_| "Could not save the in-memory EPG cache.".to_string())?;
-            let caches = cache_guard
-                .as_mut()
-                .ok_or_else(|| "Could not initialize the in-memory EPG cache store.".to_string())?;
-            caches.insert(normalized_url_text.clone(), cache);
-        }
-
-        let path = get_epg_cache_path(&app)?;
-        let app_for_write = app.clone();
-        let source_for_write = normalized_url_text.clone();
-        let persisted = tauri::async_runtime::spawn_blocking(move || {
-            let state = app_for_write.state::<EpgState>();
-            persist_epg_snapshot_if_current(&path, state.inner(), &source_for_write, generation)
-        })
-        .await
-        .map_err(|error| format!("Could not save the EPG cache: {error}"))??;
-        if !persisted {
-            return Err("This EPG refresh was superseded by a newer operation.".to_string());
-        }
-        Ok(response)
+        .map_err(|error| format!("Could not process the EPG file: {error}"))?
     };
-    tokio::time::timeout(Duration::from_secs(TOTAL_REFRESH_TIMEOUT_SECS), refresh)
+    let cache = tokio::time::timeout(Duration::from_secs(TOTAL_REFRESH_TIMEOUT_SECS), work)
         .await
-        .map_err(|_| "The EPG refresh exceeded its total time limit.".to_string())?
+        .map_err(|_| "The EPG refresh exceeded its total time limit.".to_string())??;
+    let response = cache.directory_response();
+    let path = get_epg_cache_path(&app)?;
+    let app_for_write = app.clone();
+    let source_for_write = normalized_url_text.clone();
+
+    // The deadline applies only to cancellable network and pure parsing work. The
+    // commit closure rechecks both deadline and generation while holding the disk
+    // and generation locks; after it starts writing, we await its durable result.
+    let commit = tauri::async_runtime::spawn_blocking(move || {
+        let state = app_for_write.state::<EpgState>();
+        commit_epg_refresh_if_current(
+            &path,
+            state.inner(),
+            &source_for_write,
+            generation,
+            cache,
+            || Instant::now() < deadline,
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not save the EPG cache: {error}"))??;
+
+    match commit {
+        EpgRefreshCommit::Committed => Ok(response),
+        EpgRefreshCommit::DeadlineExpired => {
+            Err("The EPG refresh exceeded its total time limit.".to_string())
+        }
+        EpgRefreshCommit::Superseded => {
+            Err("This EPG refresh was superseded by a newer operation.".to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -1270,6 +1332,16 @@ pub fn load_epg_cache_directories(
         .collect::<Vec<_>>();
     directories.sort_by(|left, right| left.source_url.cmp(&right.source_url));
     Ok(directories)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // Registration is intentionally owned by src-tauri/src/lib.rs.
+pub fn get_epg_cache_diagnostics(
+    app: AppHandle,
+    state: State<'_, EpgState>,
+) -> Result<EpgCacheDiagnostics, String> {
+    ensure_epg_caches_loaded(&app, &state)?;
+    state.cache_diagnostics()
 }
 
 #[tauri::command]
@@ -1548,6 +1620,76 @@ mod tests {
     }
 
     #[test]
+    fn backup_recovery_survives_a_failed_primary_repair() {
+        let directory = TestDirectory::new("repair-failure");
+        let path = directory.0.join("cache.json");
+        let store = EpgDiskStore::new(path.clone());
+        store
+            .write(&sample_store("https://one.test/guide"))
+            .unwrap();
+        store
+            .write(&sample_store("https://two.test/guide"))
+            .unwrap();
+        fs::write(&path, b"broken").unwrap();
+
+        let recovered = store
+            .read_with_repair(|_, _| Err("simulated repair failure".to_string()))
+            .expect("a failed best-effort repair must not discard a valid backup");
+
+        assert!(recovered.recovered && recovered.corrupt);
+        assert!(recovered.caches.contains_key("https://one.test/guide"));
+        assert!(recovered.warnings.len() <= MAX_WARNING_SAMPLES);
+        assert!(recovered
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("could not be repaired")));
+    }
+
+    #[test]
+    fn empty_store_recovery_diagnostics_are_preserved_in_state() {
+        let state = EpgState::default();
+        state
+            .install_disk_read(EpgDiskRead {
+                caches: HashMap::new(),
+                recovered: false,
+                corrupt: true,
+                warnings: vec!["The saved EPG cache was corrupt.".to_string()],
+            })
+            .unwrap();
+
+        let diagnostics = state.cache_diagnostics().unwrap();
+        assert!(!diagnostics.recovered);
+        assert!(diagnostics.corrupt);
+        assert_eq!(
+            diagnostics.warnings,
+            ["The saved EPG cache was corrupt.".to_string()]
+        );
+        assert!(state.caches.lock().unwrap().as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn expired_refresh_does_not_commit_to_memory_or_disk() {
+        let directory = TestDirectory::new("expired-before-commit");
+        let path = directory.0.join("cache.json");
+        let state = EpgState::default();
+        let source = "https://one.test/guide";
+        let generation = state.generations.lock().unwrap().begin_refresh(source);
+        *state.caches.lock().unwrap() = Some(HashMap::new());
+        let cache = sample_store(source).remove(source).unwrap();
+
+        let outcome =
+            commit_epg_refresh_if_current(&path, &state, source, generation, cache, || false)
+                .unwrap();
+
+        assert_eq!(outcome, EpgRefreshCommit::DeadlineExpired);
+        assert!(state.caches.lock().unwrap().as_ref().unwrap().is_empty());
+        assert!(!path.exists());
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(state.caches.lock().unwrap().as_ref().unwrap().is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn generations_make_latest_refresh_win_and_delete_tombstones_inflight_refresh() {
         let mut generations = GenerationRegistry::default();
         let first = generations.begin_refresh("u");
@@ -1567,11 +1709,15 @@ mod tests {
         let source = "https://one.test/guide";
         let stale_generation = state.generations.lock().unwrap().begin_refresh(source);
         state.generations.lock().unwrap().begin_refresh(source);
-        *state.caches.lock().unwrap() = Some(sample_store(source));
+        *state.caches.lock().unwrap() = Some(HashMap::new());
+        let cache = sample_store(source).remove(source).unwrap();
 
-        assert!(
-            !persist_epg_snapshot_if_current(&path, &state, source, stale_generation,).unwrap()
+        assert_eq!(
+            commit_epg_refresh_if_current(&path, &state, source, stale_generation, cache, || true,)
+                .unwrap(),
+            EpgRefreshCommit::Superseded
         );
+        assert!(state.caches.lock().unwrap().as_ref().unwrap().is_empty());
         assert!(!path.exists());
     }
 }

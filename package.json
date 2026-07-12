@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "tauri": "tauri",
-    "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/matching.test.ts src/features/playlist/channelFactory.test.ts src/features/playlist/materialize.test.ts src/features/playlist/migration.test.ts src/features/playlist/redaction.test.ts src/features/playlist/snapshot.test.ts src/features/sources/appIntegration.test.ts src/features/sources/hydration.test.ts src/features/sources/operations.test.ts src/features/sources/profiles.test.ts src/hooks/usePersistentState.test.ts"
+    "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/diagnostics.test.ts src/features/epg/matching.test.ts src/features/epg/operations.test.ts src/features/playlist/channelFactory.test.ts src/features/playlist/materialize.test.ts src/features/playlist/migration.test.ts src/features/playlist/redaction.test.ts src/features/playlist/snapshot.test.ts src/features/sources/appIntegration.test.ts src/features/sources/hydration.test.ts src/features/sources/operations.test.ts src/features/sources/profiles.test.ts src/hooks/usePersistentState.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

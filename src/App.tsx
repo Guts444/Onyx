@@ -28,10 +28,17 @@ import type {
 } from "./domain/sourceProfiles";
 import {
   deleteEpgCache,
+  getEpgCacheDiagnostics,
   getEpgProgrammeWindows,
   loadEpgCacheDirectories,
   refreshEpgCache,
 } from "./features/epg/api";
+import {
+  formatEpgDirectoryDiagnostics,
+  formatEpgFailureStatus,
+  formatEpgStoreDiagnostics,
+  sanitizeEpgSourceLabel,
+} from "./features/epg/diagnostics";
 import {
   createEpgChannelIndex,
   createEpgMappingScope,
@@ -39,6 +46,15 @@ import {
   normalizeEpgUrlKey,
   resolveEpgChannelMatch,
 } from "./features/epg/matching";
+import {
+  beginEpgSourceOperation,
+  createEpgOperationCoordinator,
+  finishEpgSourceOperation,
+  getEpgSourceCommitState,
+  shouldDeleteSharedEpgCache,
+  type EpgOperationToken,
+  type EpgSourceBusyState,
+} from "./features/epg/operations";
 import { DEFAULT_PLAYER_VOLUME, useMpvPlayer } from "./features/player/mpv";
 import { parseM3u } from "./features/playlist/m3u";
 import { createLocalM3uSourceIdentity } from "./features/playlist/channelFactory";
@@ -303,7 +319,7 @@ function App() {
   const [guideProgrammesByChannelKey, setGuideProgrammesByChannelKey] = useState<
     Record<string, EpgProgrammeSummary[]>
   >({});
-  const [updatingEpgSourceIds, setUpdatingEpgSourceIds] = useState<string[]>([]);
+  const [epgBusyBySourceId, setEpgBusyBySourceId] = useState<Record<string, EpgSourceBusyState>>({});
   const [hasLoadedEpgCacheDirectories, setHasLoadedEpgCacheDirectories] = useState(false);
   const [savedSourceSecretsHydrated, setSavedSourceSecretsHydrated] = useState(false);
   const [epgStatusMessage, setEpgStatusMessage] = useState<string | null>(null);
@@ -337,9 +353,9 @@ function App() {
     savedEpgMappings,
   });
   const startupEpgRefreshAttemptedRef = useRef<Set<string>>(new Set());
-  const epgRefreshPromiseRef = useRef<Map<string, Promise<EpgDirectoryResponse | null>>>(
-    new Map(),
-  );
+  const epgSourcesRef = useRef(epgSources);
+  const epgOperationsRef = useRef(createEpgOperationCoordinator());
+  const epgDirectoryLoadRevisionRef = useRef(0);
   const hasHydratedPersistentState =
     favoriteIdsHydrated &&
     recentIdsHydrated &&
@@ -357,6 +373,7 @@ function App() {
     playlistSnapshotHydrated;
   savedSourcesRef.current = savedSources;
   activeSourceIdRef.current = activeSourceId;
+  epgSourcesRef.current = normalizeEpgSources(epgSources);
   importedReferencesRef.current = {
     favoriteIds,
     recentIds,
@@ -1353,7 +1370,32 @@ function App() {
     setEpgSources((currentSources) => [...currentSources, createEpgSource()]);
   }
 
+  function canCommitEpgOperation(token: EpgOperationToken) {
+    const currentSource = epgSourcesRef.current.find((source) => source.id === token.sourceId);
+    return epgOperationsRef.current.canCommit(
+      token,
+      getEpgSourceCommitState(
+        epgSourcesRef.current,
+        token.sourceId,
+        token.urlKey,
+        currentSource?.updatedAt ?? "",
+      ),
+    );
+  }
+
+  function invalidateEpgSourceOperation(sourceId: string) {
+    epgOperationsRef.current.invalidate(sourceId);
+    epgDirectoryLoadRevisionRef.current += 1;
+    setEpgBusyBySourceId((currentBusy) => {
+      if (!currentBusy[sourceId]) return currentBusy;
+      const nextBusy = { ...currentBusy };
+      delete nextBusy[sourceId];
+      return nextBusy;
+    });
+  }
+
   function handleToggleEpgSourceEnabled(sourceId: string) {
+    invalidateEpgSourceOperation(sourceId);
     setEpgSources((currentSources) =>
       currentSources.map((source) =>
         source.id === sourceId
@@ -1366,43 +1408,58 @@ function App() {
   }
 
   function handleUpdateEpgSource(sourceId: string, patch: Partial<EpgSource>) {
+    const previousSource = epgSourcesRef.current.find((source) => source.id === sourceId);
+    invalidateEpgSourceOperation(sourceId);
     setEpgSources((currentSources) =>
       currentSources.map((source) =>
         source.id === sourceId ? updateEpgSource(source, patch) : source,
       ),
     );
 
-    if (patch.url !== undefined && patch.url.trim().length === 0) {
+    if (patch.url !== undefined) {
       setEpgStatusMessage(null);
       setGuideProgrammesByChannelKey({});
+
+      const oldUrlKey = normalizeEpgUrlKey(previousSource?.url ?? "");
+      const isOldUrlShared = oldUrlKey.length > 0 && epgSourcesRef.current.some(
+        (source) => source.id !== sourceId && normalizeEpgUrlKey(source.url) === oldUrlKey,
+      );
+      if (oldUrlKey && !isOldUrlShared && oldUrlKey !== normalizeEpgUrlKey(patch.url)) {
+        setEpgDirectoriesByUrlKey((currentDirectories) => {
+          const nextDirectories = { ...currentDirectories };
+          delete nextDirectories[oldUrlKey];
+          return nextDirectories;
+        });
+        if (previousSource) {
+          setSavedEpgMappings((currentMappings) =>
+            removeMappingsForGuideUrl(currentMappings, previousSource.url),
+          );
+          void deleteEpgCache(previousSource.url).catch(() => {
+            // URL edits invalidate the old profile before best-effort shared-cache cleanup.
+          });
+        }
+      }
     }
   }
 
   function handleRemoveEpgSource(sourceId: string) {
-    const sourceToRemove = epgSources.find((source) => source.id === sourceId);
+    const currentSources = epgSourcesRef.current;
+    const sourceToRemove = currentSources.find((source) => source.id === sourceId);
 
     if (!sourceToRemove) {
       return;
     }
 
+    invalidateEpgSourceOperation(sourceId);
     const removedGuideUrlKey = normalizeEpgUrlKey(sourceToRemove.url);
-    const hasOtherGuideForUrl =
-      removedGuideUrlKey.length > 0 &&
-      epgSources.some(
-        (source) =>
-          source.id !== sourceId && normalizeEpgUrlKey(source.url) === removedGuideUrlKey,
-      );
+    const shouldDeleteCache = shouldDeleteSharedEpgCache(currentSources, sourceId);
+    const sourceLabel = sanitizeEpgSourceLabel(getEpgSourceLabel(sourceToRemove));
 
     setEpgSources((currentSources) =>
       currentSources.filter((source) => source.id !== sourceId),
     );
-    setUpdatingEpgSourceIds((currentIds) =>
-      currentIds.filter((currentId) => currentId !== sourceId),
-    );
-    epgRefreshPromiseRef.current.delete(sourceId);
-
-    if (!removedGuideUrlKey || hasOtherGuideForUrl) {
-      setEpgStatusMessage(`Removed ${getEpgSourceLabel(sourceToRemove)}.`);
+    if (!removedGuideUrlKey || !shouldDeleteCache) {
+      setEpgStatusMessage(`Removed ${sourceLabel}.`);
       return;
     }
 
@@ -1425,12 +1482,10 @@ function App() {
     setSavedEpgMappings((currentMappings) =>
       removeMappingsForGuideUrl(currentMappings, sourceToRemove.url),
     );
-    setEpgStatusMessage(`Removed ${getEpgSourceLabel(sourceToRemove)}.`);
+    setEpgStatusMessage(`Removed ${sourceLabel}.`);
 
-    void deleteEpgCache(sourceToRemove.url).catch((error) => {
-      const errorMessage =
-        error instanceof Error ? error.message : "The guide cache could not be removed.";
-      setEpgStatusMessage(errorMessage);
+    void deleteEpgCache(sourceToRemove.url).catch(() => {
+      // Deletion is best-effort. A deleted profile has no valid token that may mutate UI state.
     });
   }
 
@@ -1439,7 +1494,7 @@ function App() {
     reason: "manual" | "startup" | "auto",
   ) {
     const rawGuideUrl = source.url.trim();
-    const sourceLabel = getEpgSourceLabel(source);
+    const sourceLabel = sanitizeEpgSourceLabel(getEpgSourceLabel(source));
 
     if (rawGuideUrl.length === 0) {
       const statusCopy = `Enter an EPG URL first for ${sourceLabel}.`;
@@ -1452,33 +1507,32 @@ function App() {
       return null;
     }
 
-    const existingPromise = epgRefreshPromiseRef.current.get(source.id);
-
-    if (existingPromise) {
-      return existingPromise;
-    }
-
-    setUpdatingEpgSourceIds((currentIds) =>
-      currentIds.includes(source.id) ? currentIds : [...currentIds, source.id],
-    );
+    epgDirectoryLoadRevisionRef.current += 1;
+    const token = epgOperationsRef.current.start(source.id, rawGuideUrl, source.updatedAt);
+    setEpgBusyBySourceId((currentBusy) => ({
+      ...currentBusy,
+      [source.id]: beginEpgSourceOperation(token),
+    }));
 
     const refreshPromise = refreshEpgCache(rawGuideUrl)
       .then((directory) => {
-        const urlKey = normalizeEpgUrlKey(directory.sourceUrl);
+        if (!canCommitEpgOperation(token)) return null;
+        const diagnosticStatus = formatEpgDirectoryDiagnostics(directory);
 
         setEpgDirectoriesByUrlKey((currentDirectories) => ({
           ...currentDirectories,
-          [urlKey]: directory,
+          [token.urlKey]: directory,
         }));
         setEpgStatusMessage(
-          `${getEpgSourceLabel(directory.sourceUrl)} updated ${new Date(directory.fetchedAt).toLocaleString()}.`,
+          `${sourceLabel} updated ${new Date(directory.fetchedAt).toLocaleString()}.${
+            diagnosticStatus ? ` ${diagnosticStatus}` : ""
+          }`,
         );
         return directory;
       })
-      .catch((error) => {
-        const errorMessage =
-          error instanceof Error ? error.message : "The guide could not be updated.";
-        const statusCopy = `${sourceLabel}: ${errorMessage}`;
+      .catch(() => {
+        if (!canCommitEpgOperation(token)) return null;
+        const statusCopy = formatEpgFailureStatus(sourceLabel);
 
         setEpgStatusMessage(statusCopy);
 
@@ -1489,17 +1543,21 @@ function App() {
         return null;
       })
       .finally(() => {
-        epgRefreshPromiseRef.current.delete(source.id);
-        setUpdatingEpgSourceIds((currentIds) =>
-          currentIds.filter((currentId) => currentId !== source.id),
-        );
+        setEpgBusyBySourceId((currentBusy) => {
+          const nextSourceBusy = finishEpgSourceOperation(currentBusy[source.id] ?? null, token);
+          if (nextSourceBusy === currentBusy[source.id]) return currentBusy;
+          const nextBusy = { ...currentBusy };
+          if (nextSourceBusy) nextBusy[source.id] = nextSourceBusy;
+          else delete nextBusy[source.id];
+          return nextBusy;
+        });
       });
 
-    epgRefreshPromiseRef.current.set(source.id, refreshPromise);
     return refreshPromise;
   }
 
   const normalizedEpgSources = useMemo(() => normalizeEpgSources(epgSources), [epgSources]);
+  const updatingEpgSourceIds = useMemo(() => Object.keys(epgBusyBySourceId), [epgBusyBySourceId]);
   const uniqueReadyEpgSources = useMemo(
     () => getUniqueReadyEpgSources(normalizedEpgSources),
     [normalizedEpgSources],
@@ -1532,13 +1590,6 @@ function App() {
     );
   }
 
-  const epgSourceUrlsKey = useMemo(
-    () =>
-      uniqueReadyEpgSources
-        .map((source) => normalizeEpgUrlKey(source.url))
-        .join("\u0001"),
-    [uniqueReadyEpgSources],
-  );
 
   const channels = playlist?.channels ?? [];
   const channelsById = useMemo(() => {
@@ -2001,36 +2052,32 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!epgSourcesHydrated) return undefined;
+    const loadRevision = epgDirectoryLoadRevisionRef.current;
     setHasLoadedEpgCacheDirectories(false);
 
-    void loadEpgCacheDirectories()
-      .then((cachedDirectories) => {
-        if (cancelled) {
-          return;
-        }
+    void Promise.allSettled([loadEpgCacheDirectories(), getEpgCacheDiagnostics()])
+      .then(([directoryResult, diagnosticsResult]) => {
+        if (cancelled) return;
 
-        const nextDirectories: Record<string, EpgDirectoryResponse> = {};
-
-        for (const directory of cachedDirectories) {
-          const urlKey = normalizeEpgUrlKey(directory.sourceUrl);
-
-          if (!urlKey) {
-            continue;
+        if (
+          directoryResult.status === "fulfilled" &&
+          epgDirectoryLoadRevisionRef.current === loadRevision
+        ) {
+          const nextDirectories: Record<string, EpgDirectoryResponse> = {};
+          for (const directory of directoryResult.value) {
+            const urlKey = normalizeEpgUrlKey(directory.sourceUrl);
+            if (urlKey) nextDirectories[urlKey] = directory;
           }
-
-          nextDirectories[urlKey] = directory;
+          setEpgDirectoriesByUrlKey(nextDirectories);
         }
 
-        setEpgDirectoriesByUrlKey(nextDirectories);
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
+        if (diagnosticsResult.status === "fulfilled") {
+          const diagnosticStatus = formatEpgStoreDiagnostics(diagnosticsResult.value);
+          if (diagnosticStatus) setEpgStatusMessage(diagnosticStatus);
+        } else if (directoryResult.status === "rejected") {
+          setEpgStatusMessage("The saved guide cache could not be loaded.");
         }
-
-        const errorMessage =
-          error instanceof Error ? error.message : "The saved guide cache could not be loaded.";
-        setEpgStatusMessage(errorMessage);
       })
       .finally(() => {
         if (!cancelled) {
@@ -2041,7 +2088,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [epgSourceUrlsKey]);
+  }, [epgSourcesHydrated]);
 
   useEffect(() => {
     if (!hasHydratedPersistentState || !hasLoadedEpgCacheDirectories) {

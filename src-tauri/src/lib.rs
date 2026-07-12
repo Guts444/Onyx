@@ -612,6 +612,7 @@ pub fn run() {
             epg::refresh_epg_cache,
             epg::load_epg_cache_directories,
             epg::delete_epg_cache,
+            epg::get_epg_cache_diagnostics,
             epg::get_epg_programme_snapshots,
             epg::get_epg_programme_windows
         ])
