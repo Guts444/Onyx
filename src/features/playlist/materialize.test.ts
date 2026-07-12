@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { buildCredentialFreeXtreamChannel, materializeChannelForPlayback } from "./materialize.ts";
+import {
+  buildCredentialFreeXtreamChannel,
+  materializeChannelForPlayback,
+  validateXtreamStreamDescriptor,
+} from "./materialize.ts";
 
 test("credential-free Xtream channels materialize only from runtime credentials", () => {
   const channel = buildCredentialFreeXtreamChannel(
@@ -64,4 +68,55 @@ test("materialization rejects missing credentials without leaking channel detail
     () => materializeChannelForPlayback(channel, { id: "source_xtream", kind: "xtream", domain: "https://provider.example" }),
     /credentials are unavailable/i,
   );
+});
+
+test("Xtream descriptor validation reconstructs only strict allowlisted fields", () => {
+  assert.deepStrictEqual(
+    validateXtreamStreamDescriptor({
+      kind: "xtream", streamType: "live", streamId: "channel_42-abc", container: "ts",
+      origin: "https://attacker.example/live/user/pass/", password: "persisted-secret",
+    }),
+    { kind: "xtream", streamType: "live", streamId: "channel_42-abc", container: "ts" },
+  );
+
+  for (const streamId of ["", ".", "..", "../42", "a/b", "a\\b", "%2f", "%5C", "a\u0000b"]) {
+    assert.equal(validateXtreamStreamDescriptor({ kind: "xtream", streamType: "live", streamId, container: null }), null, streamId);
+  }
+  for (const container of ["", ".ts", "../ts", "t/s", "t%73", "way-too-long-container"]) {
+    assert.equal(validateXtreamStreamDescriptor({ kind: "xtream", streamType: "live", streamId: "42", container }), null, container);
+  }
+  assert.equal(validateXtreamStreamDescriptor({ kind: "xtream", streamType: "LIVE", streamId: "42", container: "ts" }), null);
+});
+
+test("materialization validates forged descriptors and normalizes the runtime domain", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    { name: "News", stream: "https://provider.example/live/user/password/42.ts" },
+    "source_xtream",
+  );
+  const source = {
+    id: "source_xtream", kind: "xtream" as const,
+    domain: "runtime.example/base/?username=old#fragment",
+    username: "runtime-user", password: "runtime-password",
+  };
+
+  assert.equal(materializeChannelForPlayback(channel, source).stream, "http://runtime.example/base/live/runtime-user/runtime-password/42.ts");
+  for (const streamId of ["../admin", "%2fadmin", "42/../../admin"]) {
+    assert.throws(
+      () => materializeChannelForPlayback({ ...channel, streamDescriptor: { ...channel.streamDescriptor!, streamId } as never }, source),
+      /invalid Xtream stream descriptor/i,
+    );
+  }
+});
+
+test("nonstandard Xtream direct sources become credential-free display-only channels", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    { name: "Direct", stream: "https://cdn.example/watch.m3u8?username=viewer&password=super-secret" },
+    "source_xtream",
+  );
+
+  assert.equal(channel.stream, null);
+  assert.equal(channel.originalStream, null);
+  assert.equal(channel.isPlayable, false);
+  assert.match(channel.playabilityError ?? "", /direct source|refresh/i);
+  assert.equal(JSON.stringify(channel).includes("super-secret"), false);
 });

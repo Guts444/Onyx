@@ -1,4 +1,5 @@
 import type { Channel } from "../../domain/iptv";
+import { decodeSafePathSegments } from "./redaction.ts";
 
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]+/g;
 const COLLAPSE_WHITESPACE = /\s+/g;
@@ -155,11 +156,16 @@ export function canonicalizeStreamIdentity(stream: string) {
     url.password = "";
 
     const pathSegments = url.pathname.split("/");
-    const xtreamKindIndex = pathSegments.findIndex((segment) =>
+    const authorityIndex = trimmedStream.indexOf("//");
+    const pathIndex = trimmedStream.indexOf("/", authorityIndex + 2);
+    const originalPath = pathIndex < 0 ? "/" : trimmedStream.slice(pathIndex).split(/[?#]/, 1)[0];
+    const decodedSegments = decodeSafePathSegments(originalPath);
+    const xtreamKindIndex = decodedSegments.findIndex((segment) =>
       XTREAM_PATH_KINDS.has(segment.toLowerCase()),
     );
 
     if (xtreamKindIndex >= 0 && pathSegments.length > xtreamKindIndex + 3) {
+      pathSegments[xtreamKindIndex] = decodedSegments[xtreamKindIndex].toLowerCase();
       pathSegments[xtreamKindIndex + 1] = "__user__";
       pathSegments[xtreamKindIndex + 2] = "__secret__";
       url.pathname = pathSegments.join("/");

@@ -91,3 +91,24 @@ test("redactCredentialUrl leaves non-secret URL context intact", () => {
   const input = "https://provider.example/watch/42.ts?quality=hd&language=en";
   assert.equal(redactCredentialUrl(input), input);
 });
+
+test("encoded Xtream kinds are classified once, redacted, and identity-canonicalized", async () => {
+  const { canonicalizeStreamIdentity } = await import("./channelFactory.ts");
+  for (const kind of ["%6cive", "l%69ve", "Li%56E"]) {
+    const input = `https://provider.example/base/${kind}/viewer/super-secret/42.ts`;
+    const redacted = redactCredentialUrl(input);
+    assert.equal(redacted.includes("viewer"), false);
+    assert.equal(redacted.includes("super-secret"), false);
+    assert.equal(canonicalizeStreamIdentity(input), "https://provider.example/base/live/__user__/__secret__/42.ts");
+  }
+});
+
+test("malformed and separator-smuggling Xtream paths are rejected without retaining credentials", () => {
+  for (const kind of ["l%ZZive", "%256cive", "live%252fadmin", "%2e%2e", "live%255cadmin"]) {
+    const input = `https://provider.example/base/${kind}/viewer/super-secret/42.ts`;
+    const result = redactCredentialUrl(input);
+    assert.equal(result.includes("viewer"), false, kind);
+    assert.equal(result.includes("super-secret"), false, kind);
+    assert.match(result, /redacted|invalid/i, kind);
+  }
+});

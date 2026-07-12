@@ -99,3 +99,55 @@ test("credential-free Xtream descriptors remain runtime-materializable in snapsh
   assert.equal(isPlaylistSnapshotPlaybackReady(result), true);
   assert.equal(shouldRefreshPlaylistSnapshot(result), false);
 });
+
+test("remote snapshots rebuild allowlisted fields and redact every string metadata field", () => {
+  const secretUrl = "https://viewer:super-secret@provider.example/live/viewer/super-secret/42.ts?token=secret-token";
+  const input = snapshot("source_remote", {
+    ...remoteChannel,
+    name: `News ${secretUrl}`, group: `Group ${secretUrl}`, tvgId: `id ${secretUrl}`,
+    tvgName: `TV ${secretUrl}`, logo: secretUrl, playabilityError: `Error ${secretUrl}`,
+    streamDescriptor: { kind: "direct", persistedSecret: secretUrl } as never,
+    arbitrarySecret: secretUrl,
+  } as Channel);
+  input.sourceId = secretUrl;
+  input.selectedChannelId = secretUrl;
+  input.savedAt = secretUrl;
+  input.playlist.importedAt = secretUrl;
+  input.playlist.name = `Playlist ${secretUrl}`;
+  input.playlist.groups = [`Group ${secretUrl}`];
+  (input.playlist as never as Record<string, unknown>).extra = secretUrl;
+  (input as never as Record<string, unknown>).extra = secretUrl;
+
+  const result = sanitizePlaylistSnapshot(input);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes("super-secret"), false);
+  assert.equal(serialized.includes("secret-token"), false);
+  assert.equal("extra" in result, false);
+  assert.equal("extra" in result.playlist, false);
+  assert.equal("arbitrarySecret" in result.playlist.channels[0], false);
+  assert.deepStrictEqual(result.playlist.channels[0].streamDescriptor, { kind: "remote-m3u" });
+});
+
+test("forged persisted Xtream descriptors become display-only and drop extras", () => {
+  for (const descriptor of [
+    { kind: "xtream", streamType: "LIVE", streamId: "42", container: "ts" },
+    { kind: "xtream", streamType: "live", streamId: "../42", container: "ts" },
+    { kind: "xtream", streamType: "live", streamId: "42", container: "../ts" },
+  ]) {
+    const result = sanitizePlaylistSnapshot(snapshot("source_xtream", {
+      ...remoteChannel, stream: null, originalStream: null, streamDescriptor: descriptor as never,
+    }));
+    assert.equal(result.playlist.channels[0].isPlayable, false);
+    assert.deepStrictEqual(result.playlist.channels[0].streamDescriptor, { kind: "remote-m3u" });
+    assert.equal(isPlaylistSnapshotPlaybackReady(result), false);
+  }
+
+  const valid = sanitizePlaylistSnapshot(snapshot("source_xtream", {
+    ...remoteChannel, stream: null, originalStream: null,
+    streamDescriptor: { kind: "xtream", streamType: "movie", streamId: "42", container: "mkv", secret: "drop-me" } as never,
+  }));
+  assert.deepStrictEqual(valid.playlist.channels[0].streamDescriptor, {
+    kind: "xtream", streamType: "movie", streamId: "42", container: "mkv",
+  });
+  assert.equal(JSON.stringify(valid).includes("drop-me"), false);
+});
