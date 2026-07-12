@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -19,11 +20,39 @@ TEXT_SUFFIXES = {
     ".sh", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
 }
 DEFAULT_GENERATED = ("dist", "config", "state", "cache")
-PLACEHOLDER_WORDS = (
-    ".example", ".invalid", ".test", "@[", "@tv", "changeme", "dummy", "example", "fake", "marker",
-    "placeholder", "plain-text", "redacted", "sample", "sentinel", "test-only", "top-secret",
-    "your_", "your-", "xxxx",
-)
+ASSIGNMENT_PLACEHOLDERS = frozenset({
+    "changeme-changeme-changeme",
+    "example-placeholder-not-a-secret",
+    "placeholder-placeholder",
+    "plain-text-password-marker",
+    "redacted-redacted-redacted",
+    "https://provider.test/guide.xml?token=top-secret",
+    "https://" "user:password@provider.test/guide.xml?token=top-secret",
+    "your_api_key_goes_here",
+    "your-password-goes-here",
+})
+URL_PLACEHOLDER_CREDENTIALS = frozenset({
+    "http://" "alice:s3cret@tv.example",
+    "http://" "alice:secret@tv",
+    "https://" "${redacted}:${redacted}@provider.example",
+    "https://" "art-user:art-pass@provider.example",
+    "https://" "new-login:new-userinfo-secret@provider.example",
+    "https://" "new:secret@example.com",
+    "https://" "old-login:old-userinfo-secret@provider.example",
+    "https://" "old-user:old-pass@provider.example",
+    "https://" "stream-user:stream-pass@provider.example",
+    "https://" "user:p%40ss@provider.example",
+    "https://" "user:pass@legacy.example",
+    "https://" "user:password@[",
+    "https://" "user:password@example.com",
+    "https://" "user:password@secret.example",
+    "https://" "viewer:secret@provider.example",
+    "https://" "viewer:super-secret@provider.example",
+})
+STRUCTURED_RULES = frozenset({
+    "private-key", "github-token", "github-fine-grained-token", "npm-token",
+    "google-api-key", "aws-access-key", "slack-token", "stripe-live-key",
+})
 
 
 @dataclass(frozen=True)
@@ -96,9 +125,43 @@ def read_text(path: Path) -> str | None:
     return data.decode("utf-8", errors="replace")
 
 
-def is_placeholder(value: str) -> bool:
-    lowered = value.lower()
-    return any(word in lowered for word in PLACEHOLDER_WORDS) or len(set(value)) < 5
+def normalized_placeholder(value: str) -> str:
+    return value.strip().lower()
+
+
+def is_test_file(path: Path) -> bool:
+    lowered = path.as_posix().lower()
+    name = path.name.lower()
+    return (
+        "/test/" in f"/{lowered}/"
+        or "/tests/" in f"/{lowered}/"
+        or "/fixtures/" in f"/{lowered}/"
+        or name.startswith("test_")
+        or ".test." in name
+        or ".spec." in name
+    )
+
+
+def credential_parts(candidate: str) -> tuple[str, str, str]:
+    try:
+        parsed = urlsplit(candidate)
+        return parsed.username or "", parsed.password or "", (parsed.hostname or "").lower().rstrip(".")
+    except ValueError:
+        match = re.match(r"^[A-Za-z]+://([^:@/]+):([^@/]+)@", candidate)
+        return (match.group(1), match.group(2), "") if match else ("", "", "")
+
+
+def suppress_finding(rule: Rule, candidate: str, fixture_context: bool) -> bool:
+    if rule.name in STRUCTURED_RULES:
+        return False
+    if rule.name == "secret-assignment":
+        return normalized_placeholder(candidate) in ASSIGNMENT_PLACEHOLDERS
+    if rule.name == "credential-url" and fixture_context:
+        _, _, hostname = credential_parts(candidate)
+        reserved_host = hostname.endswith(".invalid") or hostname.endswith(".test")
+        exact_placeholder = candidate.lower() in URL_PLACEHOLDER_CREDENTIALS
+        return reserved_host or exact_placeholder
+    return False
 
 
 def findings(paths: Iterable[Path], display_root: Path) -> list[tuple[str, str, int]]:
@@ -111,15 +174,28 @@ def findings(paths: Iterable[Path], display_root: Path) -> list[tuple[str, str, 
             display = path.relative_to(display_root).as_posix()
         except ValueError:
             display = path.name
-        for line_number, line in enumerate(text.splitlines(), 1):
+        lines = text.splitlines()
+        rust_test_start = next(
+            (number for number, source_line in enumerate(lines, 1) if source_line.strip() == "#[cfg(test)]"),
+            None,
+        ) if path.suffix.lower() == ".rs" else None
+        for line_number, line in enumerate(lines, 1):
+            fixture_context = is_test_file(path) or (
+                rust_test_start is not None and line_number > rust_test_start
+            )
             for rule in RULES:
                 for match in rule.pattern.finditer(line):
                     candidate = match.group(1) if rule.name == "secret-assignment" else match.group(0)
-                    if is_placeholder(candidate):
+                    if suppress_finding(rule, candidate, fixture_context):
                         continue
                     found.append((display, rule.name, line_number))
                     break
     return sorted(set(found))
+
+
+def report_findings(detected: Iterable[tuple[str, str, int]]) -> None:
+    for path, rule, line in detected:
+        print(f"{path}:{line}: potential secret ({rule}); value suppressed", file=sys.stderr)
 
 
 def self_test() -> int:
@@ -161,8 +237,7 @@ def main() -> int:
     requested.extend((root / path if not Path(path).is_absolute() else Path(path)) for path in args.paths)
     detected = findings(requested, root)
     if detected:
-        for path, rule, line in detected:
-            print(f"{path}:{line}: potential secret ({rule}); value suppressed", file=sys.stderr)
+        report_findings(detected)
         print(f"Secret scan failed with {len(detected)} finding(s).", file=sys.stderr)
         return 1
     print(f"Secret scan passed ({len(list(expand_paths(requested)))} candidate files; binary/large files skipped).")

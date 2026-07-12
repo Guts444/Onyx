@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: Release version or tag (for example, v0.5.8)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -20,6 +25,7 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
     steps:
       # actions/checkout v7.0.0
       - name: Check out repository
@@ -27,6 +33,15 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
+
+      - name: Verify requested release version
+        id: release-version
+        shell: pwsh
+        run: |
+          python scripts/test-verify-release-version.py
+          $canonical = python scripts/verify-release-version.py "$env:RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "version=$canonical" >> $env:GITHUB_OUTPUT
 
       # actions/setup-node v6.4.0
       - name: Set up Node.js 24.18.0 with lockfile cache
@@ -75,6 +90,7 @@ jobs:
       - name: Secret and whitespace gates
         shell: pwsh
         run: |
+          python scripts/test-scan-repository-secrets.py
           python scripts/scan-repository-secrets.py --self-test
           python scripts/scan-repository-secrets.py dist
           git diff --check
@@ -82,7 +98,7 @@ jobs:
 
       - name: Build MSI and NSIS bundles
         shell: pwsh
-        run: npm run tauri -- build --bundles msi,nsis --ci
+        run: npm run tauri -- build --bundles msi,nsis --ci -- --locked
 
       - name: Reverify native inputs and scan bundle metadata
         shell: pwsh
@@ -114,7 +130,7 @@ jobs:
       - name: Upload verified Windows installers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: onyx-windows-${{ github.ref_name }}
+          name: onyx-windows-${{ steps.release-version.outputs.version }}
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
