@@ -1,17 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import type { Channel } from "../../domain/iptv.ts";
-import type { PlaylistSnapshot } from "../../domain/sourceProfiles.ts";
+import type { LegacyPlaylistSnapshot, PlaylistCacheSnapshot } from "../../domain/sourceProfiles.ts";
 import {
+  createPlaylistCacheSnapshot,
+  createPlaylistPersistenceCoordinator,
+  createPlaylistSelectionState,
   isDisplayOnlyChannel,
-  isPlaylistSnapshotPlaybackReady,
-  sanitizePlaylistSnapshot,
-  shouldRefreshPlaylistSnapshot,
+  isPlaylistCachePlaybackReady,
+  resolvePlaylistSelectionHydration,
+  revivePlaylistCacheSnapshot,
+  revivePlaylistSelectionState,
+  sanitizePlaylistCacheSnapshot,
+  serializePlaylistCacheSnapshot,
+  serializePlaylistSelectionState,
+  shouldRefreshPlaylistCache,
 } from "./snapshot.ts";
 import { buildCredentialFreeXtreamChannel, materializeChannelForPlayback } from "./materialize.ts";
 
-function snapshot(sourceId: string | null, channel: Channel): PlaylistSnapshot {
+function snapshot(sourceId: string | null, channel: Channel): PlaylistCacheSnapshot {
   return {
+    version: 1,
+    cacheId: "cache-a",
     sourceId,
     playlist: {
       name: "Channels",
@@ -21,7 +31,6 @@ function snapshot(sourceId: string | null, channel: Channel): PlaylistSnapshot {
       disabledChannelCount: 0,
       skippedEntryCount: 0,
     },
-    selectedChannelId: channel.id,
     savedAt: "2026-07-12T00:00:01.000Z",
   };
 }
@@ -41,7 +50,7 @@ const remoteChannel: Channel = {
 };
 
 test("remote M3U snapshots become credential-free display-only caches", () => {
-  const result = sanitizePlaylistSnapshot(snapshot("source_remote", remoteChannel));
+  const result = sanitizePlaylistCacheSnapshot(snapshot("source_remote", remoteChannel));
   const savedChannel = result.playlist.channels[0];
 
   assert.equal(savedChannel.stream, null);
@@ -52,12 +61,12 @@ test("remote M3U snapshots become credential-free display-only caches", () => {
   assert.match(savedChannel.playabilityError ?? "", /refresh/i);
   assert.equal(JSON.stringify(result).includes("secret"), false);
   assert.equal(isDisplayOnlyChannel(savedChannel), true);
-  assert.equal(isPlaylistSnapshotPlaybackReady(result), false);
-  assert.equal(shouldRefreshPlaylistSnapshot(result), true);
+  assert.equal(isPlaylistCachePlaybackReady(result), false);
+  assert.equal(shouldRefreshPlaylistCache(result), true);
 });
 
 test("remote snapshots redact credential-bearing display metadata and errors", () => {
-  const result = sanitizePlaylistSnapshot(
+  const result = sanitizePlaylistCacheSnapshot(
     snapshot("source_remote", {
       ...remoteChannel,
       logo: "https://art-user:art-pass@provider.example/logo.png?token=art-token",
@@ -76,12 +85,12 @@ test("remote snapshots redact credential-bearing display metadata and errors", (
 test("local one-off snapshots retain trusted local playback targets", () => {
   const local = { ...remoteChannel, id: "local", stream: "C:\\media\\movie.mkv", originalStream: "C:\\media\\movie.mkv" };
   const input = snapshot(null, local);
-  const result = sanitizePlaylistSnapshot(input);
+  const result = sanitizePlaylistCacheSnapshot(input);
 
-  assert.equal(result, input);
+  assert.deepStrictEqual(result, input);
   assert.equal(result.playlist.channels[0].stream, "C:\\media\\movie.mkv");
-  assert.equal(isPlaylistSnapshotPlaybackReady(result), true);
-  assert.equal(shouldRefreshPlaylistSnapshot(result), false);
+  assert.equal(isPlaylistCachePlaybackReady(result), true);
+  assert.equal(shouldRefreshPlaylistCache(result), false);
 });
 
 test("credential-free Xtream descriptors remain runtime-materializable in snapshots", () => {
@@ -92,13 +101,13 @@ test("credential-free Xtream descriptors remain runtime-materializable in snapsh
     originalStream: null,
     streamDescriptor: { kind: "xtream", streamType: "live", streamId: "42", container: "ts" },
   };
-  const result = sanitizePlaylistSnapshot(snapshot("source_xtream", xtream));
+  const result = sanitizePlaylistCacheSnapshot(snapshot("source_xtream", xtream));
   const savedChannel = result.playlist.channels[0];
 
   assert.equal(savedChannel.isPlayable, true);
   assert.equal(isDisplayOnlyChannel(savedChannel), false);
-  assert.equal(isPlaylistSnapshotPlaybackReady(result), true);
-  assert.equal(shouldRefreshPlaylistSnapshot(result), false);
+  assert.equal(isPlaylistCachePlaybackReady(result), true);
+  assert.equal(shouldRefreshPlaylistCache(result), false);
 });
 
 test("snapshot sanitization intentionally strips runtime-only Xtream origin provenance", () => {
@@ -106,7 +115,7 @@ test("snapshot sanitization intentionally strips runtime-only Xtream origin prov
     { name: "News", stream: "https://cdn.example/live/provider-user/provider-pass/42.ts" },
     "source_xtream",
   );
-  const sanitized = sanitizePlaylistSnapshot(snapshot("source_xtream", channel));
+  const sanitized = sanitizePlaylistCacheSnapshot(snapshot("source_xtream", channel));
   const savedChannel = sanitized.playlist.channels[0];
 
   assert.equal(JSON.stringify(sanitized).includes("cdn.example"), false);
@@ -129,7 +138,6 @@ test("remote snapshots rebuild allowlisted fields and redact every string metada
     arbitrarySecret: secretUrl,
   } as Channel);
   input.sourceId = secretUrl;
-  input.selectedChannelId = secretUrl;
   input.savedAt = secretUrl;
   input.playlist.importedAt = secretUrl;
   input.playlist.name = `Playlist ${secretUrl}`;
@@ -137,7 +145,7 @@ test("remote snapshots rebuild allowlisted fields and redact every string metada
   (input.playlist as never as Record<string, unknown>).extra = secretUrl;
   (input as never as Record<string, unknown>).extra = secretUrl;
 
-  const result = sanitizePlaylistSnapshot(input);
+  const result = sanitizePlaylistCacheSnapshot(input);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes("super-secret"), false);
   assert.equal(serialized.includes("secret-token"), false);
@@ -153,15 +161,15 @@ test("forged persisted Xtream descriptors become display-only and drop extras", 
     { kind: "xtream", streamType: "live", streamId: "../42", container: "ts" },
     { kind: "xtream", streamType: "live", streamId: "42", container: "../ts" },
   ]) {
-    const result = sanitizePlaylistSnapshot(snapshot("source_xtream", {
+    const result = sanitizePlaylistCacheSnapshot(snapshot("source_xtream", {
       ...remoteChannel, stream: null, originalStream: null, streamDescriptor: descriptor as never,
     }));
     assert.equal(result.playlist.channels[0].isPlayable, false);
     assert.deepStrictEqual(result.playlist.channels[0].streamDescriptor, { kind: "remote-m3u" });
-    assert.equal(isPlaylistSnapshotPlaybackReady(result), false);
+    assert.equal(isPlaylistCachePlaybackReady(result), false);
   }
 
-  const valid = sanitizePlaylistSnapshot(snapshot("source_xtream", {
+  const valid = sanitizePlaylistCacheSnapshot(snapshot("source_xtream", {
     ...remoteChannel, stream: null, originalStream: null,
     streamDescriptor: { kind: "xtream", streamType: "movie", streamId: "42", container: "mkv", secret: "drop-me" } as never,
   }));
@@ -169,4 +177,89 @@ test("forged persisted Xtream descriptors become display-only and drop extras", 
     kind: "xtream", streamType: "movie", streamId: "42", container: "mkv",
   });
   assert.equal(JSON.stringify(valid).includes("drop-me"), false);
+});
+
+test("App-facing playlist persistence writes a 50k cache once and only bounded compact state for selections", () => {
+  const channels = Array.from({ length: 50_000 }, (_, index) => ({
+    ...remoteChannel, id: `channel-${index}`, name: `Channel ${index}`,
+  }));
+  const cache = createPlaylistCacheSnapshot("source-large", {
+    name: "Large", channels, groups: ["Live"], importedAt: "then",
+    disabledChannelCount: 0, skippedEntryCount: 0,
+  }, "cache-large", "saved");
+  const cacheWrites: unknown[] = [];
+  const selectionWrites: unknown[] = [];
+  const persistence = createPlaylistPersistenceCoordinator(
+    (value) => cacheWrites.push(serializePlaylistCacheSnapshot(value)),
+    (value) => selectionWrites.push(serializePlaylistSelectionState(value)),
+  );
+
+  persistence.replace(cache, "channel-0");
+  const cacheWritesAfterInitialPersist = cacheWrites.length;
+  for (let index = 0; index < 100; index += 1) {
+    persistence.select(cache, `channel-${index}`);
+  }
+
+  assert.equal(cacheWritesAfterInitialPersist, 1);
+  assert.equal(cacheWrites.length - cacheWritesAfterInitialPersist, 0);
+  assert.equal(selectionWrites.length, 101);
+  const serializedSelections = selectionWrites.map((value) => JSON.stringify(value));
+  assert.equal(serializedSelections.every((value) => value.length < 256), true);
+  assert.equal(serializedSelections.some((value) => value.includes("channels") || value.includes("Channel 0")), false);
+  assert.equal(JSON.stringify(cacheWrites[0]).includes("selectedChannelId"), false);
+
+  persistence.clear();
+  assert.equal(cacheWrites[cacheWrites.length - 1], null);
+  assert.equal(selectionWrites[selectionWrites.length - 1], null);
+});
+
+test("legacy embedded selection migrates losslessly through legacy channel IDs", () => {
+  const cache = revivePlaylistCacheSnapshot({
+    sourceId: "source-a",
+    playlist: {
+      name: "Legacy", channels: [{ ...remoteChannel, id: "new-a", legacyIds: ["old-a"] }],
+      groups: ["Live"], importedAt: "then", disabledChannelCount: 0, skippedEntryCount: 0,
+    },
+    selectedChannelId: "old-a",
+    savedAt: "saved",
+  }) as LegacyPlaylistSnapshot;
+  const resolved = resolvePlaylistSelectionHydration(cache, null, false, null);
+
+  assert.equal(resolved.selectedChannelId, "new-a");
+  assert.deepStrictEqual(resolved.selectionState, createPlaylistSelectionState(cache, "new-a"));
+  assert.equal(JSON.stringify(serializePlaylistCacheSnapshot(cache)).includes("selectedChannelId"), false);
+});
+
+test("late selection hydration cannot overwrite a newer user selection", () => {
+  const cache = snapshot("source-a", { ...remoteChannel, id: "a" });
+  cache.playlist.channels.push({ ...remoteChannel, id: "b" });
+  const resolved = resolvePlaylistSelectionHydration(
+    cache, createPlaylistSelectionState(cache, "a"), true, "b",
+  );
+  assert.equal(resolved.selectedChannelId, "b");
+  assert.deepStrictEqual(resolved.selectionState, createPlaylistSelectionState(cache, "b"));
+});
+
+test("corrupt compact selection recovers independently without invalidating cache", () => {
+  const cache = snapshot("source-a", { ...remoteChannel, id: "a" });
+  for (const corrupt of [
+    { version: 99, cacheId: cache.cacheId, sourceId: cache.sourceId, selectedChannelId: "a" },
+    { version: 1, cacheId: "x".repeat(5_000), sourceId: cache.sourceId, selectedChannelId: "a" },
+    { version: 1, cacheId: cache.cacheId, sourceId: cache.sourceId, selectedChannelId: { channel: "a" } },
+  ]) {
+    assert.equal(revivePlaylistSelectionState(corrupt), null);
+    assert.equal(revivePlaylistCacheSnapshot(cache)?.playlist.channels[0].id, "a");
+  }
+});
+
+test("selection from another cache or source is rejected and rebound to the current playlist", () => {
+  const cache = snapshot("source-a", { ...remoteChannel, id: "a" });
+  for (const mismatch of [
+    { ...createPlaylistSelectionState(cache, "a"), cacheId: "other-cache" },
+    { ...createPlaylistSelectionState(cache, "a"), sourceId: "source-b" },
+  ]) {
+    const resolved = resolvePlaylistSelectionHydration(cache, mismatch, false, null);
+    assert.equal(resolved.selectedChannelId, "a");
+    assert.deepStrictEqual(resolved.selectionState, createPlaylistSelectionState(cache, "a"));
+  }
 });

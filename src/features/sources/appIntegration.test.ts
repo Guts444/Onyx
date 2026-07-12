@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import type { Channel } from "../../domain/iptv.ts";
-import type { PlaylistSnapshot, SavedPlaylistSource } from "../../domain/sourceProfiles.ts";
+import type { LegacyPlaylistSnapshot, SavedPlaylistSource } from "../../domain/sourceProfiles.ts";
 import {
   createSourceRevisionTracker,
   createStartupSourceRestoreState,
@@ -23,11 +23,13 @@ const source: SavedPlaylistSource = {
 
 const channels = [{ id: "new-a", legacyIds: ["old-a"] }] as Channel[];
 const snapshot = {
+  version: 1,
+  cacheId: "legacy-cache",
   sourceId: "source-a",
   playlist: { name: "old", channels: [], groups: [], importedAt: "then", disabledChannelCount: 0, skippedEntryCount: 0 },
-  selectedChannelId: "old-a",
+  legacySelectedChannelId: "old-a",
   savedAt: "then",
-} as PlaylistSnapshot;
+} as LegacyPlaylistSnapshot;
 
 test("an imported playlist migrates every App channel reference while preserving unknown IDs", () => {
   const migrated = migrateImportedChannelReferences(channels, {
@@ -49,7 +51,12 @@ test("an imported playlist migrates every App channel reference while preserving
   assert.equal(migrated.preferredChannelId, "new-a");
   assert.deepStrictEqual(migrated.playbackSession, { channelId: "new-a", resumeChannelId: "unknown", marker: true });
   assert.deepStrictEqual(migrated.sourceLibraryIndex["source-a"].channelIds, ["new-a", "unknown"]);
-  assert.equal(migrated.playlistSnapshot?.selectedChannelId, "new-a");
+  assert.equal(
+    migrated.playlistSnapshot && "legacySelectedChannelId" in migrated.playlistSnapshot
+      ? migrated.playlistSnapshot.legacySelectedChannelId
+      : null,
+    "new-a",
+  );
   assert.deepStrictEqual(migrated.savedEpgMappings.scope, {
     "channel:unknown": "guide-b",
     "tvg-id:x": "guide-c",

@@ -1,8 +1,23 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 const memoryStateStore = new Map<string, unknown>();
 const persistentWriteQueues = new Map<string, Promise<void>>();
+
+export function createHydrationRevisionGuard() {
+  let revision = 0;
+  return {
+    beginHydration() {
+      return revision;
+    },
+    recordMutation() {
+      revision += 1;
+    },
+    canApply(hydrationRevision: number) {
+      return hydrationRevision === revision;
+    },
+  };
+}
 
 export interface PersistentStateMetadata {
   source: "backend" | "legacy-local-storage" | "memory";
@@ -201,6 +216,7 @@ export function usePersistentState<T>(
   const reviverRef = useRef(reviver);
   const serializerRef = useRef(serializer);
   const beforePersistRef = useRef(beforePersist);
+  const hydrationGuardRef = useRef(createHydrationRevisionGuard());
   const skipNextSaveRef = useRef(true);
   const migrateNextSaveRef = useRef(false);
   const removeLegacyNextSaveRef = useRef(false);
@@ -208,6 +224,11 @@ export function usePersistentState<T>(
   const [isHydrated, setIsHydrated] = useState(false);
   const [metadata, setMetadata] = useState<PersistentStateMetadata>(cleanBackendMetadata);
   const [persistenceFailed, setPersistenceFailed] = useState(false);
+  const setPersistentValue = useCallback<Dispatch<SetStateAction<T>>>((nextValue) => {
+    hydrationGuardRef.current.recordMutation();
+    skipNextSaveRef.current = false;
+    setValue(nextValue);
+  }, []);
 
   useEffect(() => {
     reviverRef.current = reviver;
@@ -223,6 +244,7 @@ export function usePersistentState<T>(
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationRevision = hydrationGuardRef.current.beginHydration();
     setIsHydrated(false);
     setMetadata(cleanBackendMetadata);
     skipNextSaveRef.current = true;
@@ -231,7 +253,7 @@ export function usePersistentState<T>(
 
     void loadPersistentValue(key)
       .then((storedValue) => {
-        if (cancelled) {
+        if (cancelled || !hydrationGuardRef.current.canApply(hydrationRevision)) {
           return;
         }
 
@@ -242,7 +264,7 @@ export function usePersistentState<T>(
         setValue(reviveValue(storedValue.value, initialValueRef.current, reviverRef.current));
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && hydrationGuardRef.current.canApply(hydrationRevision)) {
           setMetadata({ ...cleanBackendMetadata, corrupt: true, degraded: true });
           setValue(initialValueRef.current);
         }
@@ -292,5 +314,5 @@ export function usePersistentState<T>(
       });
   }, [isHydrated, key, value]);
 
-  return [value, setValue, isHydrated, metadata, persistenceFailed] as const;
+  return [value, setPersistentValue, isHydrated, metadata, persistenceFailed] as const;
 }

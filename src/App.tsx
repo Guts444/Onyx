@@ -22,7 +22,9 @@ import {
 } from "./domain/epg";
 import type { Channel, PlaylistImport } from "./domain/iptv";
 import type {
-  PlaylistSnapshot,
+  LegacyPlaylistSnapshot,
+  PlaylistCacheSnapshot,
+  PlaylistSelectionState,
   SavedPlaylistSource,
   SourceLibraryIndex,
 } from "./domain/sourceProfiles";
@@ -79,9 +81,16 @@ import { importXtreamPlaylist } from "./features/playlist/xtream";
 import { materializeChannelForPlayback } from "./features/playlist/materialize";
 import { redactCredentials } from "./features/playlist/redaction";
 import {
-  isPlaylistSnapshotPlaybackReady,
-  sanitizePlaylistSnapshot,
-  shouldRefreshPlaylistSnapshot,
+  createPlaylistCacheSnapshot,
+  createPlaylistPersistenceCoordinator,
+  isPlaylistCachePlaybackReady,
+  resolvePlaylistSelectionHydration,
+  revivePlaylistCacheSnapshot,
+  revivePlaylistSelectionState,
+  sanitizePlaylistCacheSnapshot,
+  serializePlaylistCacheSnapshot,
+  serializePlaylistSelectionState,
+  shouldRefreshPlaylistCache,
 } from "./features/playlist/snapshot";
 import {
   createSourceRevisionTracker,
@@ -130,6 +139,7 @@ const SAVED_SOURCES_STORAGE_KEY = SAVED_SOURCES_PERSISTENCE_KEY;
 const SOURCE_LIBRARY_INDEX_STORAGE_KEY = "iptv-player:source-library-index";
 const ACTIVE_SOURCE_STORAGE_KEY = "iptv-player:active-source";
 const PLAYLIST_SNAPSHOT_STORAGE_KEY = "iptv-player:playlist-snapshot";
+const PLAYLIST_SELECTION_STORAGE_KEY = "iptv-player:playlist-selection";
 const COLLAPSED_SOURCE_CARDS_STORAGE_KEY = "iptv-player:collapsed-source-cards";
 
 const EPG_MANUAL_MATCHES_STORAGE_KEY = "iptv-player:epg-manual-matches";
@@ -311,22 +321,27 @@ function App() {
     DEFAULT_PLAYER_VOLUME,
   );
   const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated, playlistSnapshotMetadata] =
-    usePersistentState<PlaylistSnapshot | null>(
+    usePersistentState<PlaylistCacheSnapshot | LegacyPlaylistSnapshot | null>(
       PLAYLIST_SNAPSHOT_STORAGE_KEY,
       null,
-      undefined,
-      (snapshot) => snapshot ? sanitizePlaylistSnapshot(snapshot) : null,
+      revivePlaylistCacheSnapshot,
+      serializePlaylistCacheSnapshot,
     );
-  const [playlist, setPlaylist] = useState<PlaylistImport | null>(() => playlistSnapshot?.playlist ?? null);
+  const [playlistSelection, setPlaylistSelection, playlistSelectionHydrated, playlistSelectionMetadata] =
+    usePersistentState<PlaylistSelectionState | null>(
+      PLAYLIST_SELECTION_STORAGE_KEY,
+      null,
+      revivePlaylistSelectionState,
+      serializePlaylistSelectionState,
+    );
+  const [playlist, setPlaylist] = useState<PlaylistImport | null>(null);
   const [navigationSection, setNavigationSection] = useState<NavigationSection>("tv");
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
     playlistSnapshot?.playlist.channels.length ? "groups" : "menu",
   );
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
-    () => playlistSnapshot?.selectedChannelId ?? playlistSnapshot?.playlist.channels[0]?.id ?? null,
-  );
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [sourceBusy, setSourceBusy] = useState<SourceBusyState | null>(null);
   const [channelRenderLimit, setChannelRenderLimit] = useState(CHANNEL_RENDER_INITIAL_LIMIT);
 
@@ -358,6 +373,7 @@ function App() {
   const fullscreenEscapeHandledRef = useRef(false);
   const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
   const hydratedPlaylistSnapshotAppliedRef = useRef(false);
+  const selectionChangedBeforeHydrationRef = useRef(false);
   const hydratedVolumeAppliedRef = useRef(false);
   const savedSourcesRef = useRef(savedSources);
   const activeSourceIdRef = useRef(activeSourceId);
@@ -399,7 +415,8 @@ function App() {
     savedEpgMappingsHydrated &&
     playbackSessionHydrated &&
     savedVolumeHydrated &&
-    playlistSnapshotHydrated;
+    playlistSnapshotHydrated &&
+    playlistSelectionHydrated;
   savedSourcesRef.current = savedSources;
   activeSourceIdRef.current = activeSourceId;
   epgSourcesRef.current = normalizeEpgSources(epgSources);
@@ -420,6 +437,9 @@ function App() {
 
   useEffect(() => {
     selectedChannelIdRef.current = selectedChannelId;
+    if (!hydratedPlaylistSnapshotAppliedRef.current && selectedChannelId !== null) {
+      selectionChangedBeforeHydrationRef.current = true;
+    }
   }, [selectedChannelId]);
 
   useEffect(() => {
@@ -443,6 +463,7 @@ function App() {
       savedEpgMappingsMetadata,
       playbackSessionMetadata,
       playlistSnapshotMetadata,
+      playlistSelectionMetadata,
     ].filter((metadata) => metadata.degraded);
     if (degradedMetadata.length === 0) {
       persistenceNoticeShownRef.current = true;
@@ -460,6 +481,7 @@ function App() {
     hasHydratedPersistentState,
     message,
     playbackSessionMetadata,
+    playlistSelectionMetadata,
     playlistSnapshotMetadata,
     recentIdsMetadata,
     savedEpgMappingsMetadata,
@@ -575,29 +597,52 @@ function App() {
 
 
   useEffect(() => {
-    if (!playlistSnapshotHydrated || hydratedPlaylistSnapshotAppliedRef.current) {
+    if (
+      !playlistSnapshotHydrated ||
+      !playlistSelectionHydrated ||
+      hydratedPlaylistSnapshotAppliedRef.current
+    ) {
       return;
     }
 
     hydratedPlaylistSnapshotAppliedRef.current = true;
 
     if (!playlistSnapshot) {
+      if (playlistSelection !== null) setPlaylistSelection(null);
       return;
     }
 
-    const nextSelectedChannelId =
-      playlistSnapshot.selectedChannelId &&
-      playlistSnapshot.playlist.channels.some(
-        (channel) => channel.id === playlistSnapshot.selectedChannelId,
-      )
-        ? playlistSnapshot.selectedChannelId
-        : playlistSnapshot.playlist.channels[0]?.id ?? null;
+    const resolvedSelection = resolvePlaylistSelectionHydration(
+      playlistSnapshot,
+      playlistSelection,
+      selectionChangedBeforeHydrationRef.current,
+      selectedChannelIdRef.current,
+    );
+    const sanitizedCache = sanitizePlaylistCacheSnapshot(playlistSnapshot);
+
+    if ("legacySelectedChannelId" in playlistSnapshot) {
+      setPlaylistSnapshot(sanitizedCache);
+    }
+    if (
+      playlistSelection?.cacheId !== resolvedSelection.selectionState.cacheId ||
+      playlistSelection.sourceId !== resolvedSelection.selectionState.sourceId ||
+      playlistSelection.selectedChannelId !== resolvedSelection.selectionState.selectedChannelId
+    ) {
+      setPlaylistSelection(resolvedSelection.selectionState);
+    }
 
     startTransition(() => {
-      setPlaylist(playlistSnapshot.playlist);
-      setSelectedChannelId(nextSelectedChannelId);
+      setPlaylist(sanitizedCache.playlist);
+      setSelectedChannelId(resolvedSelection.selectedChannelId);
     });
-  }, [playlistSnapshot, playlistSnapshotHydrated]);
+  }, [
+    playlistSelection,
+    playlistSelectionHydrated,
+    playlistSnapshot,
+    playlistSnapshotHydrated,
+    setPlaylistSelection,
+    setPlaylistSnapshot,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -833,12 +878,10 @@ function App() {
       setPlaybackSession(nextPlaybackSession);
       setSourceLibraryIndex(nextLibraryIndex);
       setSavedEpgMappings(migrated.savedEpgMappings);
-      setPlaylistSnapshot({
-        sourceId: nextSourceId,
-        playlist: importedPlaylist,
-        selectedChannelId: nextSelectedChannelId,
-        savedAt: new Date().toISOString(),
-      });
+      createPlaylistPersistenceCoordinator(setPlaylistSnapshot, setPlaylistSelection).replace(
+        createPlaylistCacheSnapshot(nextSourceId, importedPlaylist),
+        nextSelectedChannelId,
+      );
       setActiveSourceId(nextSourceId);
       setPlaylist(importedPlaylist);
       setSelectedChannelId(nextSelectedChannelId);
@@ -862,16 +905,12 @@ function App() {
   }
 
   function persistSelectedChannel(channelId: string | null) {
-    if (!playlist) {
+    if (!playlistSnapshot || !playlist) {
       return;
     }
 
-    setPlaylistSnapshot({
-      sourceId: activeSourceId,
-      playlist,
-      selectedChannelId: channelId,
-      savedAt: new Date().toISOString(),
-    });
+    createPlaylistPersistenceCoordinator(setPlaylistSnapshot, setPlaylistSelection)
+      .select(playlistSnapshot, channelId);
   }
 
   async function importFromSavedSource(
@@ -910,7 +949,7 @@ function App() {
       sourceId: source.id,
       preferredChannelId:
         currentSnapshot?.sourceId === source.id
-          ? selectedChannelIdRef.current ?? currentSnapshot.selectedChannelId
+          ? selectedChannelIdRef.current
           : null,
       preservePlaybackSession: options?.preservePlaybackSession,
       keepPlaybackRunning: options?.keepPlaybackRunning,
@@ -930,9 +969,9 @@ function App() {
       : null;
   const hasCachedStartupPlaylist = (cachedStartupSnapshot?.playlist.channels.length ?? 0) > 0;
   const cachedStartupPlaylistNeedsRefresh =
-    cachedStartupSnapshot !== null && shouldRefreshPlaylistSnapshot(cachedStartupSnapshot);
+    cachedStartupSnapshot !== null && shouldRefreshPlaylistCache(cachedStartupSnapshot);
   const cachedStartupPlaylistPlaybackReady =
-    cachedStartupSnapshot !== null && isPlaylistSnapshotPlaybackReady(cachedStartupSnapshot);
+    cachedStartupSnapshot !== null && isPlaylistCachePlaybackReady(cachedStartupSnapshot);
   const shouldDelayResumeForStartupRestore =
     playbackSession.shouldResume &&
     playbackSession.resumeSourceId === activeSourceId &&
@@ -1415,7 +1454,7 @@ function App() {
 
     if (shouldClearLoadedPlaylist) {
       setActiveSourceId(null);
-      setPlaylistSnapshot(null);
+      createPlaylistPersistenceCoordinator(setPlaylistSnapshot, setPlaylistSelection).clear();
       setGuideProgrammesByChannelKey({});
       setMatcherChannel(null);
 

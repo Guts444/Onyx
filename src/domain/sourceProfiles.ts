@@ -26,11 +26,24 @@ export interface SavedXtreamSource extends SavedSourceBase {
 
 export type SavedPlaylistSource = SavedM3uUrlSource | SavedXtreamSource;
 
-export interface PlaylistSnapshot {
+export interface PlaylistCacheSnapshot {
+  version: 1;
+  cacheId: string;
   sourceId: string | null;
   playlist: PlaylistImport;
-  selectedChannelId: string | null;
   savedAt: string;
+}
+
+/** Transient read shape for pre-split v0.5.7/v0.5.8 state. Never serialize directly. */
+export interface LegacyPlaylistSnapshot extends PlaylistCacheSnapshot {
+  legacySelectedChannelId: string | null;
+}
+
+export interface PlaylistSelectionState {
+  version: 1;
+  cacheId: string;
+  sourceId: string | null;
+  selectedChannelId: string | null;
 }
 
 export interface SourceLibraryIndexEntry {

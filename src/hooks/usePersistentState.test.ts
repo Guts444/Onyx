@@ -3,6 +3,7 @@ import assert from "node:assert";
 import {
   enqueuePersistentWork,
   enqueuePersistentWrite,
+  createHydrationRevisionGuard,
   persistPreparedValue,
   persistMigratedValue,
   resolvePersistentPayload,
@@ -18,6 +19,14 @@ import {
 } from "../features/sources/secrets.ts";
 import { scrubSourceProfileSecrets } from "../features/sources/profiles.ts";
 import type { SavedPlaylistSource } from "../domain/sourceProfiles.ts";
+
+test("a hydration revision guard rejects a load completed after a newer local mutation", () => {
+  const guard = createHydrationRevisionGuard();
+  const loadRevision = guard.beginHydration();
+  assert.equal(guard.canApply(loadRevision), true);
+  guard.recordMutation();
+  assert.equal(guard.canApply(loadRevision), false);
+});
 
 function deferred() {
   let resolve!: () => void;

@@ -1,6 +1,6 @@
 import type { SavedEpgMappingStore } from "../../domain/epg";
 import type { Channel } from "../../domain/iptv";
-import type { PlaylistSnapshot, SourceLibraryIndex } from "../../domain/sourceProfiles";
+import type { LegacyPlaylistSnapshot, SourceLibraryIndex } from "../../domain/sourceProfiles";
 
 export type LegacyChannelIdMap = Readonly<Record<string, string>>;
 
@@ -56,13 +56,13 @@ export function migratePlaybackSessionChannelIds<T extends PlaybackSessionChanne
   };
 }
 
-export function migratePlaylistSnapshotChannelIds(
-  snapshot: PlaylistSnapshot,
+export function migrateLegacyPlaylistSnapshotChannelIds(
+  snapshot: LegacyPlaylistSnapshot,
   map: LegacyChannelIdMap,
-): PlaylistSnapshot {
+): LegacyPlaylistSnapshot {
   return {
     ...snapshot,
-    selectedChannelId: migrateChannelId(snapshot.selectedChannelId, map),
+    legacySelectedChannelId: migrateChannelId(snapshot.legacySelectedChannelId, map),
   };
 }
 

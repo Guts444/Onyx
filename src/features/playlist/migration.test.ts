@@ -6,7 +6,7 @@ import {
   migrateChannelId,
   migrateChannelIdArray,
   migratePlaybackSessionChannelIds,
-  migratePlaylistSnapshotChannelIds,
+  migrateLegacyPlaylistSnapshotChannelIds,
   migrateSavedEpgMappingStore,
   migrateSourceLibraryIndexChannelIds,
 } from "./migration.ts";
@@ -70,8 +70,10 @@ test("playback session migration updates current and resume channel references",
   });
 });
 
-test("playlist snapshot migration updates the persisted selected channel reference", () => {
+test("legacy playlist snapshot migration updates only the transient selected channel reference", () => {
   const playlistSnapshot = {
+    version: 1 as const,
+    cacheId: "legacy-cache",
     sourceId: "source_a",
     playlist: {
       name: "Channels",
@@ -81,13 +83,13 @@ test("playlist snapshot migration updates the persisted selected channel referen
       disabledChannelCount: 1,
       skippedEntryCount: 0,
     },
-    selectedChannelId: "old_a",
+    legacySelectedChannelId: "old_a",
     savedAt: "2026-07-12T00:00:01.000Z",
   };
 
-  assert.deepStrictEqual(migratePlaylistSnapshotChannelIds(playlistSnapshot, { old_a: "new_a" }), {
+  assert.deepStrictEqual(migrateLegacyPlaylistSnapshotChannelIds(playlistSnapshot, { old_a: "new_a" }), {
     ...playlistSnapshot,
-    selectedChannelId: "new_a",
+    legacySelectedChannelId: "new_a",
   });
 });
 

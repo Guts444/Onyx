@@ -1,12 +1,17 @@
 import type { SavedEpgMappingStore } from "../../domain/epg.ts";
 import type { Channel } from "../../domain/iptv.ts";
-import type { PlaylistSnapshot, SavedPlaylistSource, SourceLibraryIndex } from "../../domain/sourceProfiles.ts";
+import type {
+  LegacyPlaylistSnapshot,
+  PlaylistCacheSnapshot,
+  SavedPlaylistSource,
+  SourceLibraryIndex,
+} from "../../domain/sourceProfiles.ts";
 import {
   buildLegacyChannelIdMap,
   migrateChannelId,
   migrateChannelIdArray,
   migratePlaybackSessionChannelIds,
-  migratePlaylistSnapshotChannelIds,
+  migrateLegacyPlaylistSnapshotChannelIds,
   migrateSavedEpgMappingStore,
   migrateSourceLibraryIndexChannelIds,
   type PlaybackSessionChannelReferences,
@@ -20,7 +25,7 @@ export interface ImportedChannelReferences<T extends PlaybackSessionChannelRefer
   preferredChannelId: string | null;
   playbackSession: T;
   sourceLibraryIndex: SourceLibraryIndex;
-  playlistSnapshot: PlaylistSnapshot | null;
+  playlistSnapshot: PlaylistCacheSnapshot | LegacyPlaylistSnapshot | null;
   savedEpgMappings: SavedEpgMappingStore;
 }
 
@@ -36,9 +41,9 @@ export function migrateImportedChannelReferences<T extends PlaybackSessionChanne
     preferredChannelId: migrateChannelId(references.preferredChannelId, map),
     playbackSession: migratePlaybackSessionChannelIds(references.playbackSession, map),
     sourceLibraryIndex: migrateSourceLibraryIndexChannelIds(references.sourceLibraryIndex, map),
-    playlistSnapshot: references.playlistSnapshot
-      ? migratePlaylistSnapshotChannelIds(references.playlistSnapshot, map)
-      : null,
+    playlistSnapshot: references.playlistSnapshot && "legacySelectedChannelId" in references.playlistSnapshot
+      ? migrateLegacyPlaylistSnapshotChannelIds(references.playlistSnapshot, map)
+      : references.playlistSnapshot,
     savedEpgMappings: migrateSavedEpgMappingStore(references.savedEpgMappings, map),
   };
 }
