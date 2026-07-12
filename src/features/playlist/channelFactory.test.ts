@@ -225,6 +225,53 @@ test("malformed Xtream paths produce stable credential-free opaque identities", 
   }
 });
 
+test("shifted malformed Xtream credentials never influence opaque channel identity", () => {
+  const shiftedPaths = [
+    (user: string, password: string) => `l%ZZive//${user}/${password}/42.ts`,
+    (user: string, password: string) => `live%252fadmin//${user}/${password}/42.ts`,
+    (user: string, password: string) => `l%ZZive/extra/${user}/${password}/42.ts`,
+    (user: string, password: string) => `live%252fadmin/extra/${user}/${password}/42.ts`,
+  ];
+
+  for (const buildPath of shiftedPaths) {
+    const beforeStream = `https://provider.example/${buildPath("old-user", "old-pass")}`;
+    const afterStream = `https://provider.example/${buildPath("new-user", "new-pass")}`;
+    const beforeIdentity = canonicalizeStreamIdentity(beforeStream);
+    const afterIdentity = canonicalizeStreamIdentity(afterStream);
+    const beforeChannel = buildChannel(
+      { name: "News", group: "Live", stream: beforeStream },
+      REMOTE_SOURCE,
+    );
+    const afterChannel = buildChannel(
+      { name: "News", group: "Live", stream: afterStream },
+      REMOTE_SOURCE,
+    );
+
+    assert.equal(beforeIdentity, afterIdentity);
+    assert.equal(beforeChannel.id, afterChannel.id);
+    assert.match(beforeIdentity, /^opaque-stream:[0-9a-f]{64}$/);
+    for (const secret of ["old-user", "old-pass", "new-user", "new-pass"]) {
+      assert.equal(beforeIdentity.includes(secret), false, `identity retained ${secret}`);
+      assert.equal(beforeChannel.id.includes(secret), false, `channel ID retained ${secret}`);
+    }
+  }
+});
+
+test("malformed Xtream fallback distinguishes safe terminal stream identifiers", () => {
+  const first = canonicalizeStreamIdentity(
+    "https://provider.example/l%ZZive//user/password/42.ts",
+  );
+  const second = canonicalizeStreamIdentity(
+    "https://provider.example/l%ZZive//user/password/43.ts",
+  );
+  const otherHost = canonicalizeStreamIdentity(
+    "https://backup.example/l%ZZive//user/password/42.ts",
+  );
+
+  assert.notEqual(first, second);
+  assert.notEqual(first, otherHost);
+});
+
 test("buildChannel identity redacts rotating URL credentials but distinguishes streams", () => {
   const first = buildChannel(
     {

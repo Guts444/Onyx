@@ -42,6 +42,7 @@ const SHA_256_ROUND_CONSTANTS = [
 ];
 const SENSITIVE_QUERY_PARAMETER = /^(?:access_?token|api_?key|auth|authorization|credential|key|pass|password|secret|signature|token|user|username)$/i;
 const XTREAM_PATH_KINDS = new Set(["live", "movie", "series"]);
+const SAFE_TERMINAL_STREAM_FILE = /^[0-9]+\.(?:avi|m3u8|mkv|mov|mp4|ts)$/i;
 
 export interface ChannelSeed {
   name: string;
@@ -172,9 +173,22 @@ function looksLikeXtreamKind(rawSegment: string) {
 function opaqueStreamIdentity(url: URL, originalPath: string) {
   const pathSegments = originalPath.split("/");
   const xtreamKindIndex = pathSegments.findIndex(looksLikeXtreamKind);
-  if (xtreamKindIndex >= 0 && pathSegments.length > xtreamKindIndex + 3) {
-    pathSegments[xtreamKindIndex + 1] = "__user__";
-    pathSegments[xtreamKindIndex + 2] = "__secret__";
+  if (xtreamKindIndex >= 0) {
+    const terminalSegment = [...pathSegments].reverse().find((segment) => segment.length > 0) ?? "";
+    const safeTerminal = SAFE_TERMINAL_STREAM_FILE.test(terminalSegment)
+      ? terminalSegment.toLowerCase()
+      : "__unknown_stream__";
+
+    // Unsafe or ambiguous Xtream path structure means no middle path or query value is
+    // trustworthy: any of them may be a shifted credential. Keep only origin metadata
+    // and a narrowly allowlisted terminal stream file.
+    return `opaque-stream:${sha256(JSON.stringify([
+      url.protocol,
+      url.hostname.toLowerCase(),
+      url.port,
+      "__malformed_xtream__",
+      safeTerminal,
+    ]))}`;
   }
 
   for (const key of Array.from(url.searchParams.keys())) {

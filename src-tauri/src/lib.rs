@@ -546,6 +546,29 @@ async fn fetch_xtream_live_channels(
     })
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .manage(epg::EpgState::default())
+        .plugin(tauri_plugin_libmpv::init())
+        .invoke_handler(tauri::generate_handler![
+            fetch_playlist_from_url,
+            fetch_xtream_live_channels,
+            load_app_state,
+            save_app_state,
+            load_xtream_password,
+            save_xtream_password,
+            delete_xtream_password,
+            epg::refresh_epg_cache,
+            epg::load_epg_cache_directories,
+            epg::delete_epg_cache,
+            epg::get_epg_programme_snapshots,
+            epg::get_epg_programme_windows
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
 #[cfg(test)]
 mod tests {
     use super::{choose_xtream_stream, XtreamChannelPayload};
@@ -576,27 +599,4 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("payload should serialize");
         assert_eq!(serialized["isDirectSource"], true);
     }
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .manage(epg::EpgState::default())
-        .plugin(tauri_plugin_libmpv::init())
-        .invoke_handler(tauri::generate_handler![
-            fetch_playlist_from_url,
-            fetch_xtream_live_channels,
-            load_app_state,
-            save_app_state,
-            load_xtream_password,
-            save_xtream_password,
-            delete_xtream_password,
-            epg::refresh_epg_cache,
-            epg::load_epg_cache_directories,
-            epg::delete_epg_cache,
-            epg::get_epg_programme_snapshots,
-            epg::get_epg_programme_windows
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }
