@@ -181,7 +181,14 @@ test("forged persisted Xtream descriptors become display-only and drop extras", 
 
 test("App-facing playlist persistence writes a 50k cache once and only bounded compact state for selections", () => {
   const channels = Array.from({ length: 50_000 }, (_, index) => ({
-    ...remoteChannel, id: `channel-${index}`, name: `Channel ${index}`,
+    ...remoteChannel,
+    id: `xtream:source_0190f7d8-43b2-7f65-a9c1-0123456789ab:live:${String(index).padStart(10, "0")}`,
+    legacyIds: [
+      `m3u:https://provider.example/playlist/0190f7d8-43b2-7f65-a9c1-0123456789ab:${String(index).padStart(10, "0")}`,
+    ],
+    name: `Channel ${String(index).padStart(5, "0")} — International News and Entertainment HD`,
+    tvgId: `provider.station.${String(index).padStart(10, "0")}.example`,
+    tvgName: `Provider Station ${String(index).padStart(5, "0")} HD`,
   }));
   const cache = createPlaylistCacheSnapshot("source-large", {
     name: "Large", channels, groups: ["Live"], importedAt: "then",
@@ -194,10 +201,17 @@ test("App-facing playlist persistence writes a 50k cache once and only bounded c
     (value) => selectionWrites.push(serializePlaylistSelectionState(value)),
   );
 
-  persistence.replace(cache, "channel-0");
+  const serializedCacheBytes = Buffer.byteLength(
+    JSON.stringify(serializePlaylistCacheSnapshot(cache)),
+    "utf8",
+  );
+  assert.equal(serializedCacheBytes > 16 * 1024 * 1024, true);
+  assert.equal(serializedCacheBytes < 32 * 1024 * 1024, true);
+
+  persistence.replace(cache, channels[0].id);
   const cacheWritesAfterInitialPersist = cacheWrites.length;
   for (let index = 0; index < 100; index += 1) {
-    persistence.select(cache, `channel-${index}`);
+    persistence.select(cache, channels[index].id);
   }
 
   assert.equal(cacheWritesAfterInitialPersist, 1);

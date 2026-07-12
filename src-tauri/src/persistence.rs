@@ -10,9 +10,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// App-state files are capped at 16 MiB, including the version envelope. This is
-/// large enough for local UI snapshots while bounding memory and disk usage.
+/// Default app-state cap, including the version envelope.
 pub const MAX_STATE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_PLAYLIST_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_PLAYLIST_SELECTION_BYTES: usize = 4 * 1024;
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MAX_KEY_BYTES: usize = 160;
 const ENVELOPE_MAGIC: &str = "onyx-app-state";
@@ -68,6 +69,14 @@ pub struct Store {
 impl Store {
     pub fn new(directory: PathBuf) -> Self {
         Self { directory }
+    }
+
+    fn max_state_bytes(key: &str) -> usize {
+        match key {
+            "iptv-player:playlist-snapshot" => MAX_PLAYLIST_SNAPSHOT_BYTES,
+            "iptv-player:playlist-selection" => MAX_PLAYLIST_SELECTION_BYTES,
+            _ => MAX_STATE_BYTES,
+        }
     }
 
     fn validate_key(key: &str) -> Result<(), String> {
@@ -135,6 +144,7 @@ impl Store {
 
     pub fn write(&self, key: &str, value: &Value) -> Result<(), String> {
         Self::validate_key(key)?;
+        let max_state_bytes = Self::max_state_bytes(key);
         let serialized = serde_json::to_vec(&StateEnvelope {
             format: ENVELOPE_MAGIC.to_string(),
             schema_version: CURRENT_SCHEMA_VERSION,
@@ -147,9 +157,9 @@ impl Store {
                     .to_string(),
             );
         }
-        if serialized.len() > MAX_STATE_BYTES {
+        if serialized.len() > max_state_bytes {
             return Err(format!(
-                "The app state is too large (maximum {MAX_STATE_BYTES} bytes)."
+                "The app state is too large (maximum {max_state_bytes} bytes)."
             ));
         }
 
@@ -269,7 +279,7 @@ impl Store {
     }
 
     fn load_file(&self, key: &str, path: &Path) -> Result<LoadedState, String> {
-        let Some(bytes) = read_bounded(path)? else {
+        let Some(bytes) = read_bounded(path, Self::max_state_bytes(key))? else {
             return Ok(LoadedState {
                 bytes: Vec::new(),
                 parsed: Err("The app state is too large to read safely.".to_string()),
@@ -416,20 +426,23 @@ fn is_epg_state_key(key: &str) -> bool {
     )
 }
 
-fn read_bounded(path: &Path) -> Result<Option<Vec<u8>>, String> {
+fn read_bounded(path: &Path, max_state_bytes: usize) -> Result<Option<Vec<u8>>, String> {
     let file = File::open(path).map_err(|error| format!("Could not open app state: {error}"))?;
     let length = file
         .metadata()
         .map_err(|error| format!("Could not inspect app state: {error}"))?
         .len();
-    if length > MAX_STATE_BYTES as u64 {
+    if length > max_state_bytes as u64 {
         return Ok(None);
     }
+    // The metadata value is untrusted but already bounded above. The limited
+    // read also handles a file that grows after the metadata check without
+    // allocating from its attacker-controlled final length.
     let mut bytes = Vec::with_capacity(length as usize);
-    file.take((MAX_STATE_BYTES + 1) as u64)
+    file.take((max_state_bytes + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Could not read app state: {error}"))?;
-    if bytes.len() > MAX_STATE_BYTES {
+    if bytes.len() > max_state_bytes {
         return Ok(None);
     }
     Ok(Some(bytes))
@@ -916,6 +929,113 @@ mod tests {
         assert!(error.contains("too large"));
         assert_eq!(fs::read(store.path("large")).unwrap(), primary_before);
         assert_eq!(fs::read(store.backup_path("large")).unwrap(), backup_before);
+    }
+
+    fn value_with_envelope_size(target: usize) -> Value {
+        let empty_size = serde_json::to_vec(&StateEnvelope {
+            format: ENVELOPE_MAGIC.to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+            value: json!(""),
+        })
+        .unwrap()
+        .len();
+        assert!(target >= empty_size);
+        json!("x".repeat(target - empty_size))
+    }
+
+    #[test]
+    fn key_specific_limits_are_envelope_inclusive_at_the_exact_boundary() {
+        let directory = TestDirectory::new("key-specific-exact-boundaries");
+        let store = Store::new(directory.0.clone());
+
+        for (key, maximum) in [
+            ("iptv-player:playlist-snapshot", 32 * 1024 * 1024),
+            ("iptv-player:playlist-selection", 4 * 1024),
+            ("settings", MAX_STATE_BYTES),
+        ] {
+            store
+                .write(key, &value_with_envelope_size(maximum))
+                .unwrap();
+            assert_eq!(fs::metadata(store.path(key)).unwrap().len(), maximum as u64);
+            let error = store
+                .write(key, &value_with_envelope_size(maximum + 1))
+                .unwrap_err();
+            assert!(
+                error.contains("too large"),
+                "unexpected error for {key}: {error}"
+            );
+            assert_eq!(fs::metadata(store.path(key)).unwrap().len(), maximum as u64);
+        }
+    }
+
+    #[test]
+    fn realistic_playlist_above_the_legacy_global_limit_is_accepted_only_for_snapshot_key() {
+        const REPRESENTATIVE_SNAPSHOT_BYTES: usize = 17_539_155;
+        let directory = TestDirectory::new("production-playlist-size");
+        let store = Store::new(directory.0.clone());
+        let value = value_with_envelope_size(REPRESENTATIVE_SNAPSHOT_BYTES);
+
+        store
+            .write("iptv-player:playlist-snapshot", &value)
+            .unwrap();
+        let error = store.write("ordinary-state", &value).unwrap_err();
+
+        assert_eq!(
+            fs::metadata(store.path("iptv-player:playlist-snapshot"))
+                .unwrap()
+                .len(),
+            REPRESENTATIVE_SNAPSHOT_BYTES as u64,
+        );
+        assert!(error.contains("too large"));
+        assert!(!store.path("ordinary-state").exists());
+    }
+
+    #[test]
+    fn oversized_selection_recovers_independently_without_affecting_playlist_snapshot() {
+        let directory = TestDirectory::new("selection-independent-recovery");
+        let store = Store::new(directory.0.clone());
+        let snapshot_key = "iptv-player:playlist-snapshot";
+        let selection_key = "iptv-player:playlist-selection";
+        let snapshot = json!({"cacheId": "cache-a", "channels": ["channel-a"]});
+        store.write(snapshot_key, &snapshot).unwrap();
+        store
+            .write(selection_key, &json!({"selected": "channel-a"}))
+            .unwrap();
+        store
+            .write(selection_key, &json!({"selected": "channel-b"}))
+            .unwrap();
+        create_oversized_file_for_key(&store, selection_key);
+
+        let selection = store.read(selection_key).unwrap();
+
+        assert_eq!(selection.value, Some(json!({"selected": "channel-a"})));
+        assert!(selection.recovered);
+        assert!(selection.corrupt);
+        assert_eq!(store.read(snapshot_key).unwrap().value, Some(snapshot));
+    }
+
+    #[test]
+    fn playlist_above_its_32_mib_limit_is_removed_and_recovers_its_bounded_backup() {
+        let directory = TestDirectory::new("oversized-playlist-recovery");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:playlist-snapshot";
+        store.write(key, &json!({"generation": 1})).unwrap();
+        store.write(key, &json!({"generation": 2})).unwrap();
+        create_oversized_file_for_key(&store, key);
+
+        let loaded = store.read(key).unwrap();
+
+        assert_eq!(loaded.value, Some(json!({"generation": 1})));
+        assert!(loaded.recovered);
+        assert!(loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(fs::metadata(store.path(key)).unwrap().len() <= 32 * 1024 * 1024);
+    }
+
+    fn create_oversized_file_for_key(store: &Store, key: &str) {
+        let file = File::create(store.path(key)).unwrap();
+        file.set_len(Store::max_state_bytes(key) as u64 + 1)
+            .unwrap();
     }
 
     fn create_oversized_file(path: &Path) {

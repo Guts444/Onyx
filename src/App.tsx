@@ -320,14 +320,26 @@ function App() {
     PLAYER_VOLUME_STORAGE_KEY,
     DEFAULT_PLAYER_VOLUME,
   );
-  const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated, playlistSnapshotMetadata] =
+  const [
+    playlistSnapshot,
+    setPlaylistSnapshot,
+    playlistSnapshotHydrated,
+    playlistSnapshotMetadata,
+    playlistSnapshotPersistenceFailed,
+  ] =
     usePersistentState<PlaylistCacheSnapshot | LegacyPlaylistSnapshot | null>(
       PLAYLIST_SNAPSHOT_STORAGE_KEY,
       null,
       revivePlaylistCacheSnapshot,
       serializePlaylistCacheSnapshot,
     );
-  const [playlistSelection, setPlaylistSelection, playlistSelectionHydrated, playlistSelectionMetadata] =
+  const [
+    playlistSelection,
+    setPlaylistSelection,
+    playlistSelectionHydrated,
+    playlistSelectionMetadata,
+    playlistSelectionPersistenceFailed,
+  ] =
     usePersistentState<PlaylistSelectionState | null>(
       PLAYLIST_SELECTION_STORAGE_KEY,
       null,
@@ -504,6 +516,12 @@ function App() {
       );
     }
   }, [epgSourcesPersistenceFailed]);
+
+  useEffect(() => {
+    if (playlistSnapshotPersistenceFailed || playlistSelectionPersistenceFailed) {
+      setMessage("Playlist changes could not be saved. They may be lost when the app closes.");
+    }
+  }, [playlistSelectionPersistenceFailed, playlistSnapshotPersistenceFailed]);
 
   const secretSourceIdsKey = useMemo(
     () => Object.values(savedSources)
