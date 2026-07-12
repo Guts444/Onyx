@@ -44,15 +44,20 @@ The 2026-07-12 pinned-lockfile audit reports **0 vulnerabilities** and **17 warn
 
 The following status is intentionally explicit and must be updated from real gate output before publication:
 
-- [x] `npm run check`, `npm test` (137 tests), and `npm run build` passed in the metadata working tree on 2026-07-12
-- [x] `cargo metadata --locked` and locked Windows-target Rust tests (65 tests) passed in the metadata working tree on 2026-07-12
-- [ ] Clean `npm ci` install repeated for the final release commit
-- [ ] Formatting, clippy, and npm audit reviewed
+- [x] Clean `npm ci`, `npm run check`, `npm test` (**157 tests**), and `npm run build` passed at `7b3ceae` on 2026-07-12
+- [x] Locked Windows-target Rust tests (**73 tests**) passed at `7b3ceae` on 2026-07-12
+- [x] Rust formatting, strict Clippy (`-D warnings`), and npm audit (**0 vulnerabilities**) passed
 - [x] Cargo audit warnings reviewed and dispositioned in [`docs/security/cargo-audit-v0.5.8.md`](docs/security/cargo-audit-v0.5.8.md) on 2026-07-12
-- [ ] Pinned toolchain and native dependency provenance checks completed
-- [ ] MSI and NSIS packaging completed
-- [ ] Packaged installer/application smoke tests completed with isolated state
-- [ ] Credential/artifact scan completed
+- [x] Pinned Node 24.18.0, npm 11.16.0, Rust 1.95.0, and native dependency hash/PE checks completed
+- [x] MSI and NSIS packaging completed from locked dependencies
+- [x] Packaged smoke completed with isolated state: MSI administrative extraction, NSIS silent install, exact production window title, stability window, payload checks, cleanup, and restoration of the pre-existing app-data directory
+- [x] Windows Credential Manager save/load/delete roundtrip passed with a temporary non-secret `example.invalid` value; the smoke credential was confirmed absent afterward
+- [x] Credential/artifact scan completed for `dist`, MSI extraction, NSIS installation, and final bundle directories
 - [ ] Final independent security, specification, and code-quality review approved
+
+Final local artifacts:
+
+- `Onyx_0.5.8_x64_en-US.msi` — 45,084,672 bytes — SHA-256 `eb5fca47fd2f9c9280886f848b02cb989841deb78d3211b793ee3e4609074722`
+- `Onyx_0.5.8_x64-setup.exe` — 33,436,975 bytes — SHA-256 `e231980333b8bac6aedb5636451aabd5e06d3d25e185da65ca25692cd46f207c`
 
 Do not publish or describe v0.5.8 as release-complete until every applicable item above has evidence and the packaging/smoke/final-review items are checked.

@@ -66,9 +66,13 @@ function Invoke-Installer {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
     $startInfo.UseShellExecute = $false
-    foreach ($argument in $Arguments) {
-        $startInfo.ArgumentList.Add($argument)
-    }
+    # Windows PowerShell 5.1 runs on .NET Framework, where ProcessStartInfo
+    # does not expose ArgumentList. None of these installer arguments ends in
+    # a backslash, so standard Windows quoting safely preserves spaces and the
+    # required final NSIS /D= argument.
+    $startInfo.Arguments = (($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
+    }) -join ' ')
 
     $process = [System.Diagnostics.Process]::Start($startInfo)
     try {
@@ -124,7 +128,7 @@ try {
 
     [System.IO.Directory]::CreateDirectory($nsisInstall) | Out-Null
     Write-Host "Silently installing NSIS into an isolated temporary directory."
-    # NSIS requires /D=install-path to be the final argument; ArgumentList preserves it as one argument even with spaces.
+    # NSIS requires /D=install-path to be the final argument.
     $nsisExitCode = Invoke-Installer -FilePath $nsis -Arguments @("/S", "/D=$nsisInstall")
     if ($nsisExitCode -ne 0) {
         throw "Silent NSIS installation failed with exit code $nsisExitCode."
