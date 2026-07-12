@@ -31,8 +31,91 @@ test("credential-free Xtream channels materialize only from runtime credentials"
     password: "runtime/pass",
   });
 
-  assert.equal(result.stream, "https://provider.example/base/live/runtime%20user/runtime%2Fpass/42.ts");
+  assert.equal(result.stream, "https://provider.example/live/runtime%20user/runtime%2Fpass/42.ts");
   assert.equal(channel.stream, null);
+});
+
+test("materialization preserves a provider-selected stream origin without credentials", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    {
+      name: "News",
+      stream: "https://stream-cdn.example:8443/live/old-user/old-pass/42.ts",
+    },
+    "source_xtream",
+  );
+
+  assert.equal(JSON.stringify(channel).includes("old-user"), false);
+  assert.equal(JSON.stringify(channel).includes("old-pass"), false);
+  assert.equal(JSON.stringify(channel).includes("stream-cdn.example"), false);
+  assert.deepStrictEqual(channel.streamDescriptor, {
+    kind: "xtream", streamType: "live", streamId: "42", container: "ts",
+  });
+
+  const result = materializeChannelForPlayback(channel, {
+    id: "source_xtream",
+    kind: "xtream",
+    domain: "https://auth.example/base",
+    username: "runtime-user",
+    password: "runtime-password",
+  });
+
+  assert.equal(
+    result.stream,
+    "https://stream-cdn.example:8443/live/runtime-user/runtime-password/42.ts",
+  );
+});
+
+test("channel object spreads preserve trusted runtime-only Xtream origins", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    { name: "News", stream: "https://cdn.example/live/provider-user/provider-pass/42.ts" },
+    "source_xtream",
+  );
+
+  const result = materializeChannelForPlayback({ ...channel }, {
+    id: "source_xtream", kind: "xtream", domain: "https://auth.example/base",
+    username: "runtime-user", password: "runtime-password",
+  });
+
+  assert.equal(result.stream, "https://cdn.example/live/runtime-user/runtime-password/42.ts");
+});
+
+test("serialized Xtream descriptors lose runtime provenance and fall back to the source domain", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    { name: "News", stream: "https://cdn.example/live/provider-user/provider-pass/42.ts" },
+    "source_xtream",
+  );
+  const restored = JSON.parse(JSON.stringify(channel));
+
+  const result = materializeChannelForPlayback(restored, {
+    id: "source_xtream", kind: "xtream", domain: "https://auth.example/base",
+    username: "runtime-user", password: "runtime-password",
+  });
+
+  assert.equal(result.stream, "https://auth.example/base/live/runtime-user/runtime-password/42.ts");
+});
+
+test("forged descriptor origins cannot redirect runtime credentials", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    { name: "News", stream: "https://cdn.example/live/provider-user/provider-pass/42.ts" },
+    "source_xtream",
+  );
+  const forged = {
+    ...channel,
+    streamDescriptor: {
+      ...channel.streamDescriptor!,
+      origin: "https://attacker.example",
+      password: "persisted-secret",
+    } as never,
+  };
+
+  const result = materializeChannelForPlayback(forged, {
+    id: "source_xtream", kind: "xtream", domain: "https://auth.example/base",
+    username: "runtime-user", password: "runtime-password",
+  });
+
+  assert.equal(result.stream, "https://auth.example/base/live/runtime-user/runtime-password/42.ts");
+  assert.equal(JSON.stringify(result.streamDescriptor).includes("attacker"), false);
+  assert.equal(JSON.stringify(result.streamDescriptor).includes("persisted-secret"), false);
 });
 
 test("materialization rejects display-only channels before the player boundary", () => {
@@ -74,7 +157,7 @@ test("Xtream descriptor validation reconstructs only strict allowlisted fields",
   assert.deepStrictEqual(
     validateXtreamStreamDescriptor({
       kind: "xtream", streamType: "live", streamId: "channel_42-abc", container: "ts",
-      origin: "https://attacker.example/live/user/pass/", password: "persisted-secret",
+      origin: "https://attacker.example", password: "persisted-secret",
     }),
     { kind: "xtream", streamType: "live", streamId: "channel_42-abc", container: "ts" },
   );
@@ -99,10 +182,11 @@ test("materialization validates forged descriptors and normalizes the runtime do
     username: "runtime-user", password: "runtime-password",
   };
 
-  assert.equal(materializeChannelForPlayback(channel, source).stream, "http://runtime.example/base/live/runtime-user/runtime-password/42.ts");
+  const persistedChannel = JSON.parse(JSON.stringify(channel));
+  assert.equal(materializeChannelForPlayback(persistedChannel, source).stream, "http://runtime.example/base/live/runtime-user/runtime-password/42.ts");
   for (const streamId of ["../admin", "%2fadmin", "42/../../admin"]) {
     assert.throws(
-      () => materializeChannelForPlayback({ ...channel, streamDescriptor: { ...channel.streamDescriptor!, streamId } as never }, source),
+      () => materializeChannelForPlayback({ ...persistedChannel, streamDescriptor: { ...persistedChannel.streamDescriptor!, streamId } as never }, source),
       /invalid Xtream stream descriptor/i,
     );
   }

@@ -8,6 +8,7 @@ import {
   sanitizePlaylistSnapshot,
   shouldRefreshPlaylistSnapshot,
 } from "./snapshot.ts";
+import { buildCredentialFreeXtreamChannel, materializeChannelForPlayback } from "./materialize.ts";
 
 function snapshot(sourceId: string | null, channel: Channel): PlaylistSnapshot {
   return {
@@ -98,6 +99,24 @@ test("credential-free Xtream descriptors remain runtime-materializable in snapsh
   assert.equal(isDisplayOnlyChannel(savedChannel), false);
   assert.equal(isPlaylistSnapshotPlaybackReady(result), true);
   assert.equal(shouldRefreshPlaylistSnapshot(result), false);
+});
+
+test("snapshot sanitization intentionally strips runtime-only Xtream origin provenance", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    { name: "News", stream: "https://cdn.example/live/provider-user/provider-pass/42.ts" },
+    "source_xtream",
+  );
+  const sanitized = sanitizePlaylistSnapshot(snapshot("source_xtream", channel));
+  const savedChannel = sanitized.playlist.channels[0];
+
+  assert.equal(JSON.stringify(sanitized).includes("cdn.example"), false);
+  assert.equal(
+    materializeChannelForPlayback(savedChannel, {
+      id: "source_xtream", kind: "xtream", domain: "https://auth.example/base",
+      username: "runtime-user", password: "runtime-password",
+    }).stream,
+    "https://auth.example/base/live/runtime-user/runtime-password/42.ts",
+  );
 });
 
 test("remote snapshots rebuild allowlisted fields and redact every string metadata field", () => {

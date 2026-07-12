@@ -6,7 +6,21 @@ import { decodeSafePathSegments } from "./redaction.ts";
 
 const XTREAM_STREAM_TYPES = new Set<XtreamStreamType>(["live", "movie", "series"]);
 const SAFE_CONTAINER = /^[a-zA-Z0-9]{1,12}$/;
+const RUNTIME_XTREAM_ORIGINS = new WeakMap<XtreamStreamDescriptor, string>();
 export { validateXtreamStreamDescriptor } from "../../domain/iptv.ts";
+
+function trustedStreamOrigin(streamUrl: string): string {
+  const url = new URL(streamUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Unsupported Xtream stream protocol.");
+  }
+  url.username = "";
+  url.password = "";
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.origin;
+}
 
 function originalPath(value: string) {
   const authorityIndex = value.indexOf("//");
@@ -15,7 +29,8 @@ function originalPath(value: string) {
 }
 
 export function createXtreamStreamDescriptor(streamUrl: string): XtreamStreamDescriptor {
-  try { new URL(streamUrl); } catch {
+  let streamOrigin: string;
+  try { streamOrigin = trustedStreamOrigin(streamUrl); } catch {
     throw new Error("The provider returned an invalid Xtream stream descriptor.");
   }
 
@@ -36,6 +51,9 @@ export function createXtreamStreamDescriptor(streamUrl: string): XtreamStreamDes
   if (!descriptor || (candidateContainer && !SAFE_CONTAINER.test(candidateContainer))) {
     throw new Error("The provider returned an invalid Xtream stream descriptor.");
   }
+  // Runtime provenance is intentionally tied to this exact descriptor object.
+  // Validation, JSON roundtrips, and snapshot sanitization reconstruct it and lose the origin.
+  RUNTIME_XTREAM_ORIGINS.set(descriptor, streamOrigin);
   return descriptor;
 }
 
@@ -77,6 +95,7 @@ export function materializeChannelForPlayback(
     return channel as MaterializedChannel;
   }
 
+  const runtimeOrigin = RUNTIME_XTREAM_ORIGINS.get(descriptor);
   const validatedDescriptor = validateXtreamStreamDescriptor(descriptor);
   if (!validatedDescriptor) throw new Error("The saved channel has an invalid Xtream stream descriptor.");
   if (source.id.length === 0 || source.kind !== "xtream" || !source.domain?.trim() || !source.username?.trim() || !source.password) {
@@ -84,7 +103,7 @@ export function materializeChannelForPlayback(
   }
 
   let baseUrl: URL;
-  try { baseUrl = normalizeXtreamDomain(source.domain); }
+  try { baseUrl = normalizeXtreamDomain(runtimeOrigin ?? source.domain); }
   catch { throw new Error("The Xtream provider address is invalid."); }
 
   const basePath = baseUrl.pathname.replace(/\/+$/, "");
