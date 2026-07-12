@@ -112,8 +112,8 @@ jobs:
         run: |
           $msi = @(Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi -File -Recurse)
           $nsis = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe -File -Recurse)
-          if ($msi.Count -lt 1) { throw "Release gate failed: no MSI artifact was produced." }
-          if ($nsis.Count -lt 1) { throw "Release gate failed: no NSIS artifact was produced." }
+          if ($msi.Count -ne 1) { throw "Release gate failed: expected exactly one MSI artifact, found $($msi.Count)." }
+          if ($nsis.Count -ne 1) { throw "Release gate failed: expected exactly one NSIS artifact, found $($nsis.Count)." }
           $installers = @($msi) + @($nsis)
           foreach ($file in $installers) {
             if ($file.Length -le 0) { throw "Release gate failed: $($file.Name) is empty." }
@@ -125,6 +125,16 @@ jobs:
           }
           Set-Content -LiteralPath $sumFile -Value $lines -Encoding utf8NoBOM
           Get-Content -LiteralPath $sumFile
+          "msi=$($msi[0].FullName)" >> $env:GITHUB_OUTPUT
+          "nsis=$($nsis[0].FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Smoke packaged Windows installers
+        shell: pwsh
+        run: |
+          ./scripts/smoke-packaged-app.ps1 `
+            -MsiPath '${{ steps.artifacts.outputs.msi }}' `
+            -NsisPath '${{ steps.artifacts.outputs.nsis }}' `
+            -SecretScannerPath (Resolve-Path scripts/scan-repository-secrets.py)
 
       # actions/upload-artifact v7.0.1
       - name: Upload verified Windows installers
