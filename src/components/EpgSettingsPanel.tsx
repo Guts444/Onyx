@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   EPG_AUTO_UPDATE_OPTIONS,
   getEpgSourceLabel,
@@ -10,6 +11,7 @@ import {
   formatEpgDirectoryDiagnostics,
   sanitizeEpgSourceLabel,
 } from "../features/epg/diagnostics";
+import { editEpgUrlDraft } from "../features/epg/secrets";
 
 interface EpgSettingsPanelProps {
   sources: EpgSource[];
@@ -21,6 +23,7 @@ interface EpgSettingsPanelProps {
   onToggleSourceEnabled: (sourceId: string) => void;
   onRemoveSource: (sourceId: string) => void;
   onUpdateSource: (sourceId: string, patch: Partial<EpgSource>) => void;
+  onApplySourceUrl: (sourceId: string, draft: string) => Promise<boolean>;
   onRefreshSource: (sourceId: string) => void;
   onRefreshEnabledSources: () => void;
 }
@@ -43,10 +46,29 @@ export function EpgSettingsPanel({
   onToggleSourceEnabled,
   onRemoveSource,
   onUpdateSource,
+  onApplySourceUrl,
   onRefreshSource,
   onRefreshEnabledSources,
 }: EpgSettingsPanelProps) {
   const enabledSources = sources.filter((source) => source.enabled);
+  const [urlDrafts, setUrlDrafts] = useState<Record<string, string>>({});
+  const [applyingSourceIds, setApplyingSourceIds] = useState<string[]>([]);
+
+  async function applySourceUrl(sourceId: string, draft: string) {
+    if (applyingSourceIds.includes(sourceId)) return;
+    setApplyingSourceIds((current) => [...current, sourceId]);
+    try {
+      const applied = await onApplySourceUrl(sourceId, draft);
+      if (applied) {
+        setUrlDrafts((current) => ({
+          ...current,
+          [sourceId]: draft.trim().replace(/^xmltv\s*:\s*/i, ""),
+        }));
+      }
+    } finally {
+      setApplyingSourceIds((current) => current.filter((id) => id !== sourceId));
+    }
+  }
 
   let enabledGuideChannelCount = 0;
   let enabledProgrammeCount = 0;
@@ -137,6 +159,10 @@ export function EpgSettingsPanel({
             const directory = directoriesBySourceId[source.id] ?? null;
             const isReady = isEpgSourceReady(source);
             const isUpdating = updatingSourceIds.includes(source.id);
+            const isApplying = applyingSourceIds.includes(source.id);
+            const urlDraft = Object.prototype.hasOwnProperty.call(urlDrafts, source.id)
+              ? urlDrafts[source.id]
+              : source.url;
             const directoryDiagnostics = directory
               ? formatEpgDirectoryDiagnostics(directory)
               : "";
@@ -198,17 +224,32 @@ export function EpgSettingsPanel({
 
                 <div className="source-card__fields source-card__fields--single">
                   <input
-                    type="url"
-                    value={source.url}
-                    onChange={(event) =>
-                      onUpdateSource(source.id, {
-                        url: event.currentTarget.value,
-                      })
-                    }
+                    type="text"
+                    inputMode="url"
+                    value={urlDraft}
+                    onChange={(event) => setUrlDrafts((current) =>
+                      editEpgUrlDraft(current, source.id, event.currentTarget.value),
+                    )}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !isApplying) {
+                        event.preventDefault();
+                        void applySourceUrl(source.id, urlDraft);
+                      }
+                    }}
                     placeholder="https://provider.example/guide.xml.gz"
                     autoComplete="off"
                     spellCheck={false}
+                    aria-label={`EPG URL for ${sanitizeEpgSourceLabel(getEpgSourceLabel(source))}`}
                   />
+                  <button
+                    type="button"
+                    className="control-button"
+                    onClick={() => { void applySourceUrl(source.id, urlDraft); }}
+                    disabled={isApplying || urlDraft === source.url}
+                    aria-label={`Apply EPG URL for ${sanitizeEpgSourceLabel(getEpgSourceLabel(source))}`}
+                  >
+                    {isApplying ? "Applying..." : "Apply URL"}
+                  </button>
                 </div>
 
                 <div className="epg-settings-grid">

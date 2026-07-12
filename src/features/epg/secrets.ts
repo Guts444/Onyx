@@ -5,7 +5,22 @@ import { enqueuePersistentWork } from "../../hooks/usePersistentState.ts";
 export const EPG_SOURCES_STORAGE_KEY = "iptv-player:epg-sources";
 const EPG_SAVE_ERROR = "EPG URL changes could not be secured. Existing saved data was kept.";
 const EPG_DELETE_ERROR = "The saved EPG URL could not be removed. Existing saved data was kept.";
+export const EPG_URL_VALIDATION_ERROR = "Enter a complete HTTP or HTTPS EPG URL.";
 const browserEpgUrlStore = new Map<string, string>();
+
+export type EpgUrlDrafts = Readonly<Record<string, string>>;
+
+export function editEpgUrlDraft(drafts: EpgUrlDrafts, sourceId: string, value: string): EpgUrlDrafts {
+  return { ...drafts, [sourceId]: value };
+}
+
+export function canRunEpgMappingMigration(readiness: {
+  epgSourcesHydrated: boolean;
+  epgSecretsHydrated: boolean;
+  savedEpgMappingsHydrated: boolean;
+}) {
+  return readiness.epgSourcesHydrated && readiness.epgSecretsHydrated && readiness.savedEpgMappingsHydrated;
+}
 
 export async function loadEpgUrl(sourceId: string) {
   if (!isTauri()) return browserEpgUrlStore.get(sourceId) ?? null;
@@ -98,6 +113,36 @@ export async function requireEpgMappingMigrationReady(ready: boolean) {
 }
 
 type DeleteEpgUrl = (sourceId: string) => Promise<void>;
+
+function normalizeCompleteEpgUrlDraft(draft: string) {
+  const value = draft.trim().replace(/^xmltv\s*:\s*/i, "");
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) {
+      throw new Error(EPG_URL_VALIDATION_ERROR);
+    }
+    return value;
+  } catch {
+    throw new Error(EPG_URL_VALIDATION_ERROR);
+  }
+}
+
+export async function applyEpgUrlDraft(
+  sourceId: string,
+  draft: string,
+  commit: (url: string) => void,
+  save: SaveEpgUrl = saveEpgUrl,
+  remove: DeleteEpgUrl = deleteEpgUrl,
+) {
+  const url = normalizeCompleteEpgUrlDraft(draft);
+  if (!url) {
+    await deleteEpgUrlBeforeCommit(sourceId, () => commit(""), remove);
+    return true;
+  }
+  await saveEpgUrlBeforeCommit(sourceId, url, () => commit(url), save);
+  return true;
+}
 
 export async function saveEpgUrlBeforeCommit(
   sourceId: string,

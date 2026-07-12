@@ -35,6 +35,7 @@ interface SettingsDrawerProps {
   onToggleEpgSourceEnabled: (sourceId: string) => void;
   onRemoveEpgSource: (sourceId: string) => void;
   onUpdateEpgSource: (sourceId: string, patch: Partial<EpgSource>) => void;
+  onApplyEpgSourceUrl: (sourceId: string, draft: string) => Promise<boolean>;
   onRefreshEpgSource: (sourceId: string) => void;
   onRefreshEnabledEpgSources: () => void;
   onAddM3uProfile: () => void;
@@ -75,6 +76,7 @@ export function SettingsDrawer({
   onToggleEpgSourceEnabled,
   onRemoveEpgSource,
   onUpdateEpgSource,
+  onApplyEpgSourceUrl,
   onRefreshEpgSource,
   onRefreshEnabledEpgSources,
   onAddM3uProfile,
@@ -248,6 +250,7 @@ export function SettingsDrawer({
             onToggleSourceEnabled={onToggleEpgSourceEnabled}
             onRemoveSource={onRemoveEpgSource}
             onUpdateSource={onUpdateEpgSource}
+            onApplySourceUrl={onApplyEpgSourceUrl}
             onRefreshSource={onRefreshEpgSource}
             onRefreshEnabledSources={onRefreshEnabledEpgSources}
           />

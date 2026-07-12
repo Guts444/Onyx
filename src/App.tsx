@@ -44,7 +44,6 @@ import {
   createEpgMappingScope,
   getChannelManualMappingKeys,
   migrateSavedEpgMappings,
-  normalizeEpgUrlKey,
   reconstructEpgCacheDirectories,
   resolveEpgChannelMatch,
   serializeEpgMappings,
@@ -53,19 +52,22 @@ import {
   beginEpgSourceOperation,
   createEpgOperationCoordinator,
   finishEpgSourceOperation,
+  getEpgAutoUpdateIdentity,
   getEpgSourceCommitState,
+  getEpgStartupIdentity,
 
   type EpgOperationToken,
   type EpgSourceBusyState,
 } from "./features/epg/operations";
 import {
+  applyEpgUrlDraft,
+  canRunEpgMappingMigration,
   deleteEpgUrlBeforeCommit,
   EPG_SOURCES_STORAGE_KEY,
   getEpgSecretHydrationFingerprint,
   hydrateEpgSecrets,
   loadEpgUrl,
   requireEpgMappingMigrationReady,
-  saveEpgUrlBeforeCommit,
   saveEpgUrlsBeforePersist,
   serializeEpgSources,
 } from "./features/epg/secrets";
@@ -538,10 +540,6 @@ function App() {
         }));
         setEpgSources((currentSources) => {
           const hydrated = hydrateEpgSecrets(normalizeEpgSources(currentSources), settlements);
-          epgMappingMigrationReadyRef.current = true;
-          setSavedEpgMappings((currentMappings) =>
-            migrateSavedEpgMappings(currentMappings, hydrated.sources),
-          );
           if (hydrated.message) setMessage((currentMessage) => currentMessage ?? hydrated.message);
           return hydrated.sources;
         });
@@ -551,6 +549,24 @@ function App() {
       });
     return () => { cancelled = true; };
   }, [epgSources, epgSourcesHydrated, setEpgSources, setSavedEpgMappings]);
+
+  useEffect(() => {
+    if (
+      epgMappingMigrationReadyRef.current ||
+      !canRunEpgMappingMigration({
+        epgSourcesHydrated,
+        epgSecretsHydrated,
+        savedEpgMappingsHydrated,
+      })
+    ) {
+      return;
+    }
+    setSavedEpgMappings((currentMappings) => {
+      const migratedMappings = migrateSavedEpgMappings(currentMappings, epgSourcesRef.current);
+      epgMappingMigrationReadyRef.current = true;
+      return migratedMappings;
+    });
+  }, [epgSecretsHydrated, epgSourcesHydrated, savedEpgMappingsHydrated, setSavedEpgMappings]);
 
 
   useEffect(() => {
@@ -1449,13 +1465,21 @@ function App() {
 
   function handleUpdateEpgSource(sourceId: string, patch: Partial<EpgSource>) {
     const previousSource = epgSourcesRef.current.find((source) => source.id === sourceId);
-    if (!previousSource) return;
+    if (!previousSource || patch.url !== undefined) return;
 
-    if (patch.url !== undefined) {
-      void saveEpgUrlBeforeCommit(sourceId, patch.url, () => {
+    invalidateEpgSourceOperation(sourceId);
+    setEpgSources((currentSources) => currentSources.map((source) =>
+      source.id === sourceId ? updateEpgSource(source, patch) : source,
+    ));
+  }
+
+  async function handleApplyEpgSourceUrl(sourceId: string, draft: string) {
+    if (!epgSourcesRef.current.some((source) => source.id === sourceId)) return false;
+    try {
+      return await applyEpgUrlDraft(sourceId, draft, (url) => {
         invalidateEpgSourceOperation(sourceId);
         setEpgSources((currentSources) => currentSources.map((source) =>
-          source.id === sourceId ? updateEpgSource(source, patch) : source,
+          source.id === sourceId ? updateEpgSource(source, { url }) : source,
         ));
         setEpgStatusMessage(null);
         setGuideProgrammesByChannelKey({});
@@ -1468,18 +1492,13 @@ function App() {
         void deleteEpgCache(sourceId).catch(() => {
           // A URL rotation invalidates this source's previous cache on a best-effort basis.
         });
-      }).catch((error: unknown) => {
-        setMessage(error instanceof Error
-          ? error.message
-          : "EPG URL changes could not be secured. Existing saved data was kept.");
       });
-      return;
+    } catch (error) {
+      setMessage(error instanceof Error
+        ? error.message
+        : "EPG URL changes could not be secured. Existing saved data was kept.");
+      return false;
     }
-
-    invalidateEpgSourceOperation(sourceId);
-    setEpgSources((currentSources) => currentSources.map((source) =>
-      source.id === sourceId ? updateEpgSource(source, patch) : source,
-    ));
   }
 
   function handleRemoveEpgSource(sourceId: string) {
@@ -2121,9 +2140,7 @@ function App() {
     const timerIds: number[] = [];
 
     for (const [index, source] of enabledReadyEpgSources.entries()) {
-      const startupKey = `${source.id}\u0001${normalizeEpgUrlKey(source.url)}\u0001${
-        source.updateOnStartup ? "enabled" : "disabled"
-      }`;
+      const startupKey = getEpgStartupIdentity(source);
 
       if (startupEpgRefreshAttemptedRef.current.has(startupKey)) {
         continue;
@@ -2156,11 +2173,7 @@ function App() {
   const autoUpdatingGuideKey = useMemo(
     () =>
       enabledReadyEpgSources
-        .map((source) =>
-          source.autoUpdateEnabled
-            ? `${source.id}\u0001${normalizeEpgUrlKey(source.url)}\u0001${source.updateIntervalHours}`
-            : `${source.id}\u0001${normalizeEpgUrlKey(source.url)}\u00010`,
-        )
+        .map(getEpgAutoUpdateIdentity)
         .join("\u0001"),
     [enabledReadyEpgSources],
   );
@@ -2554,6 +2567,7 @@ function App() {
         onToggleEpgSourceEnabled={handleToggleEpgSourceEnabled}
         onRemoveEpgSource={handleRemoveEpgSource}
         onUpdateEpgSource={handleUpdateEpgSource}
+        onApplyEpgSourceUrl={handleApplyEpgSourceUrl}
         onRefreshEpgSource={(sourceId) => {
           void handleRefreshEpgSource(sourceId);
         }}

@@ -4,7 +4,9 @@ import {
   beginEpgSourceOperation,
   createEpgOperationCoordinator,
   finishEpgSourceOperation,
+  getEpgAutoUpdateIdentity,
   getEpgSourceCommitState,
+  getEpgStartupIdentity,
 } from "./operations.ts";
 
 const source = (id: string, updatedAt: string) => ({ id, updatedAt });
@@ -55,4 +57,29 @@ test("stale finally cannot clear the latest source updating state", () => {
   assert.strictEqual(finishEpgSourceOperation(latestBusy, first), latestBusy);
   assert.equal(finishEpgSourceOperation(firstBusy, first), null);
   assert.equal(finishEpgSourceOperation(latestBusy, latest), null);
+});
+
+test("startup and auto identities are secret-free and stable across credential rotation at one revision", () => {
+  const sentinel = "guide.invalid/feed.xml?token=sentinel";
+  const config = {
+    id: "epg-a",
+    updatedAt: "rev-a",
+    updateOnStartup: true,
+    autoUpdateEnabled: true,
+    updateIntervalHours: 24,
+  };
+  const firstCredential = { ...config, url: `https://${sentinel}` };
+  const rotatedCredential = { ...config, url: "https://rotated.invalid/feed?token=changed" };
+  const startupBefore = getEpgStartupIdentity(firstCredential);
+  const startupAfter = getEpgStartupIdentity(rotatedCredential);
+  const autoBefore = getEpgAutoUpdateIdentity(firstCredential);
+  const autoAfter = getEpgAutoUpdateIdentity(rotatedCredential);
+  assert.equal(startupBefore, startupAfter);
+  assert.equal(autoBefore, autoAfter);
+  for (const identity of [startupBefore, autoBefore]) {
+    assert.equal(identity.includes("guide.invalid"), false);
+    assert.equal(identity.includes("sentinel"), false);
+  }
+  assert.notEqual(getEpgStartupIdentity({ ...config, updatedAt: "rev-b" }), startupBefore);
+  assert.notEqual(getEpgAutoUpdateIdentity({ ...config, updatedAt: "rev-b" }), autoBefore);
 });

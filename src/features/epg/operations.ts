@@ -24,6 +24,24 @@ export interface EpgSourceBusyState {
   readonly generation: number;
 }
 
+interface EpgRefreshIdentitySource {
+  id: string;
+  updatedAt: string;
+  updateOnStartup: boolean;
+  autoUpdateEnabled: boolean;
+  updateIntervalHours: number;
+}
+
+export function getEpgStartupIdentity(source: EpgRefreshIdentitySource) {
+  return `${source.id}\u0001${source.updatedAt}\u0001${source.updateOnStartup ? "enabled" : "disabled"}`;
+}
+
+export function getEpgAutoUpdateIdentity(source: EpgRefreshIdentitySource) {
+  return `${source.id}\u0001${source.updatedAt}\u0001${source.autoUpdateEnabled ? "enabled" : "disabled"}\u0001${
+    source.autoUpdateEnabled ? source.updateIntervalHours : 0
+  }`;
+}
+
 interface EpgSourceLike { id: string; updatedAt: string; }
 
 export function createEpgOperationCoordinator() {

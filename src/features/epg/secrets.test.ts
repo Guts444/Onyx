@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert";
 import {
   EPG_SOURCES_STORAGE_KEY,
+  applyEpgUrlDraft,
+  canRunEpgMappingMigration,
   deleteEpgUrlBeforeCommit,
+  editEpgUrlDraft,
   getEpgSecretHydrationFingerprint,
   hydrateEpgSecrets,
   requireEpgMappingMigrationReady,
@@ -11,7 +14,8 @@ import {
   serializeEpgSources,
 } from "./secrets.ts";
 import { enqueuePersistentWork, persistPreparedValue } from "../../hooks/usePersistentState.ts";
-import type { EpgSource } from "../../domain/epg.ts";
+import type { EpgSource, SavedEpgMappingStore } from "../../domain/epg.ts";
+import { migrateSavedEpgMappings } from "./matching.ts";
 
 const source = (id: string, url: string, updatedAt = "2026-01-01T00:00:00.000Z"): EpgSource => ({
   id, url, enabled: true, autoUpdateEnabled: false, updateOnStartup: true,
@@ -121,4 +125,91 @@ test("EPG delete waits for older saves, commits only after success, and can retr
   await deleteEpgUrlBeforeCommit("epg-a", () => { committed = true; events.push("commit"); }, remove);
   assert.equal(committed, true);
   assert.deepStrictEqual(events, ["save-start", "save-end", "delete", "delete", "commit"]);
+});
+
+test("editing an EPG URL draft accepts partial and empty text without performing secret work", () => {
+  const original = { "epg-a": "https://old.invalid/guide.xml" };
+  const partial = editEpgUrlDraft(original, "epg-a", "https://");
+  const empty = editEpgUrlDraft(partial, "epg-a", "");
+  const arbitrary = editEpgUrlDraft(empty, "epg-a", "not a complete URL yet");
+  assert.equal(partial["epg-a"], "https://");
+  assert.equal(empty["epg-a"], "");
+  assert.equal(arbitrary["epg-a"], "not a complete URL yet");
+  assert.equal(original["epg-a"], "https://old.invalid/guide.xml");
+});
+
+test("applying a complete EPG URL saves before committing the normalized draft", async () => {
+  const events: string[] = [];
+  const result = await applyEpgUrlDraft(
+    "epg-a",
+    "  https://guide.invalid/feed.xml?token=private  ",
+    (url) => events.push(`commit:${url}`),
+    async (_id, url) => { events.push(`save:${url}`); },
+  );
+  assert.equal(result, true);
+  assert.deepStrictEqual(events, [
+    "save:https://guide.invalid/feed.xml?token=private",
+    "commit:https://guide.invalid/feed.xml?token=private",
+  ]);
+});
+
+test("applying an empty EPG URL deletes before committing an intentional clear", async () => {
+  const events: string[] = [];
+  const result = await applyEpgUrlDraft(
+    "epg-a",
+    "   ",
+    (url) => events.push(`commit:${url}`),
+    async () => { events.push("unexpected-save"); },
+    async () => { events.push("delete"); },
+  );
+  assert.equal(result, true);
+  assert.deepStrictEqual(events, ["delete", "commit:"]);
+});
+
+test("invalid or failed EPG URL apply retains runtime state and exposes no URL or raw error", async () => {
+  const privateDraft = "guide.invalid/feed.xml?token=private";
+  let runtimeUrl = "https://old.invalid/guide.xml";
+  let secretCalls = 0;
+  const invalidError = await applyEpgUrlDraft(
+    "epg-a",
+    privateDraft,
+    (url) => { runtimeUrl = url; },
+    async () => { secretCalls += 1; },
+  ).then(() => null, (reason: unknown) => reason);
+  assert.equal(runtimeUrl, "https://old.invalid/guide.xml");
+  assert.equal(secretCalls, 0);
+  assert.equal((invalidError as Error).message, "Enter a complete HTTP or HTTPS EPG URL.");
+  assert.equal((invalidError as Error).message.includes(privateDraft), false);
+
+  const rawError = `keyring rejected ${privateDraft}`;
+  const failedError = await applyEpgUrlDraft(
+    "epg-a",
+    `https://${privateDraft}`,
+    (url) => { runtimeUrl = url; },
+    async () => { throw new Error(rawError); },
+  ).then(() => null, (reason: unknown) => reason);
+  assert.equal(runtimeUrl, "https://old.invalid/guide.xml");
+  assert.equal((failedError as Error).message.includes(privateDraft), false);
+  assert.equal((failedError as Error).message.includes(rawError), false);
+});
+
+test("mapping migration waits for sources, secrets, and late mappings hydration and runs once", () => {
+  const privateUrl = "https://guide.invalid/feed.xml?token=private";
+  const legacy = { [`${privateUrl}\u0001playlist-a`]: { "channel:one": "guide-one" } };
+  const sources = [source("epg-a", privateUrl)];
+  let current: SavedEpgMappingStore = legacy;
+  let migrationCount = 0;
+  const attempt = (epgSourcesHydrated: boolean, epgSecretsHydrated: boolean, savedEpgMappingsHydrated: boolean) => {
+    if (!canRunEpgMappingMigration({ epgSourcesHydrated, epgSecretsHydrated, savedEpgMappingsHydrated })) return;
+    if (migrationCount > 0) return;
+    migrationCount += 1;
+    current = migrateSavedEpgMappings(current, sources);
+  };
+  attempt(true, false, false);
+  attempt(true, true, false);
+  assert.deepStrictEqual(current, legacy);
+  attempt(true, true, true);
+  attempt(true, true, true);
+  assert.equal(migrationCount, 1);
+  assert.deepStrictEqual(current, { "epg-a\u0001playlist-a": { "channel:one": "guide-one" } });
 });
