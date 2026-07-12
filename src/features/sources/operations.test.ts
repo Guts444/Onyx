@@ -82,6 +82,42 @@ test("an older operation finally cannot clear a newer busy state", () => {
   assert.equal(finishSourceBusy(busyB, operationB), null);
 });
 
+test("a foreign coordinator token with the same generation cannot clear busy state", () => {
+  const first = createSourceOperationCoordinator();
+  const second = createSourceOperationCoordinator();
+  const firstToken = first.start({
+    origin: "saved",
+    sourceId: "source-a",
+    expectedFingerprint: "config-a",
+  });
+  const foreignToken = second.start({
+    origin: "saved",
+    sourceId: "source-a",
+    expectedFingerprint: "config-a",
+  });
+  const busy = beginSourceBusy(firstToken);
+
+  assert.equal(firstToken.generation, foreignToken.generation);
+  assert.strictEqual(finishSourceBusy(busy, foreignToken), busy);
+  assert.equal(finishSourceBusy(busy, firstToken), null);
+});
+
+test("busy state rejects forged tokens and coordinator tokens cannot be mutated", () => {
+  const operations = createSourceOperationCoordinator();
+  const token = operations.start({
+    origin: "saved",
+    sourceId: "source-a",
+    expectedFingerprint: "config-a",
+  });
+  const busy = beginSourceBusy(token);
+  const forged = { ...token } as typeof token;
+
+  assert.throws(() => beginSourceBusy(forged), TypeError);
+  assert.strictEqual(finishSourceBusy(busy, forged), busy);
+  assert.throws(() => Object.assign(token, { generation: 999 }), TypeError);
+  assert.equal(token.generation, 1);
+});
+
 test("coordinators are isolated and do not accept tokens from another instance", () => {
   const first = createSourceOperationCoordinator();
   const second = createSourceOperationCoordinator();

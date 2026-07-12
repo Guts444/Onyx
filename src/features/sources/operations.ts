@@ -1,5 +1,10 @@
 export type SourceOperationOrigin = "local" | "saved" | "startup";
 
+declare const sourceOperationTokenBrand: unique symbol;
+declare const sourceBusyStateBrand: unique symbol;
+const tokenIdentities = new WeakMap<SourceOperationToken, symbol>();
+const busyIdentities = new WeakMap<SourceBusyState, symbol>();
+
 export interface SourceOperationRequest {
   origin: SourceOperationOrigin;
   sourceId: string | null;
@@ -7,6 +12,7 @@ export interface SourceOperationRequest {
 }
 
 export interface SourceOperationToken extends Readonly<SourceOperationRequest> {
+  readonly [sourceOperationTokenBrand]: true;
   readonly generation: number;
   isCurrent(): boolean;
 }
@@ -26,24 +32,38 @@ export interface SourceOperationCoordinator {
 }
 
 export interface SourceBusyState {
+  readonly [sourceBusyStateBrand]: true;
   readonly generation: number;
   readonly origin: SourceOperationOrigin;
   readonly sourceId: string | null;
 }
 
 export function beginSourceBusy(token: SourceOperationToken): SourceBusyState {
-  return {
+  const identity = tokenIdentities.get(token);
+  if (!identity) {
+    throw new TypeError("Source operation token was not issued by a coordinator");
+  }
+
+  const busy = {
     generation: token.generation,
     origin: token.origin,
     sourceId: token.sourceId,
-  };
+  } as SourceBusyState;
+  busyIdentities.set(busy, identity);
+  return Object.freeze(busy);
 }
 
 export function finishSourceBusy(
   current: SourceBusyState | null,
   token: SourceOperationToken,
 ): SourceBusyState | null {
-  return current?.generation === token.generation ? null : current;
+  if (!current) {
+    return null;
+  }
+
+  const busyIdentity = busyIdentities.get(current);
+  const tokenIdentity = tokenIdentities.get(token);
+  return busyIdentity !== undefined && busyIdentity === tokenIdentity ? null : current;
 }
 
 export function createSourceOperationCoordinator(): SourceOperationCoordinator {
@@ -55,11 +75,13 @@ export function createSourceOperationCoordinator(): SourceOperationCoordinator {
   return {
     start(request) {
       generation += 1;
-      const token: SourceOperationToken = {
+      const token = {
         ...request,
         generation,
         isCurrent: () => isCurrent(token),
-      };
+      } as SourceOperationToken;
+      tokenIdentities.set(token, Symbol("source-operation-identity"));
+      Object.freeze(token);
       currentToken = token;
       return token;
     },
