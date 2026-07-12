@@ -521,9 +521,7 @@ function App() {
 
   useEffect(() => {
     if (playlistSnapshotPersistenceFailed || playlistSelectionPersistenceFailed) {
-      setMessage((currentMessage) =>
-        currentMessage ?? "Playlist changes could not be saved. They may be lost when the app closes.",
-      );
+      setMessage("Playlist changes could not be saved. They may be lost when the app closes.");
     }
   }, [playlistSelectionPersistenceFailed, playlistSnapshotPersistenceFailed]);
 
