@@ -59,9 +59,9 @@ import {
   migrateStartupPlaybackSession,
 } from "./features/sources/appIntegration";
 import {
-  getXtreamCredentialHydrationFingerprint,
-  hydrateXtreamCredentials,
-  type XtreamCredentialHydrationSettlement,
+  getSourceSecretHydrationFingerprint,
+  hydrateSourceSecrets,
+  type SourceSecretHydrationSettlement,
 } from "./features/sources/hydration";
 import {
   beginSourceBusy,
@@ -80,8 +80,11 @@ import {
   updateSourceProfile,
 } from "./features/sources/profiles";
 import {
+  deleteM3uUrl,
   deleteXtreamPassword,
+  loadM3uUrl,
   loadXtreamPassword,
+  saveM3uUrlsBeforePersist,
   saveXtreamPassword,
 } from "./features/sources/secrets";
 import { usePersistentState } from "./hooks/usePersistentState";
@@ -227,7 +230,7 @@ function App() {
   >(COLLAPSED_GROUPS_STORAGE_KEY, {});
   const [collapsedSourceIds, setCollapsedSourceIds, collapsedSourceIdsHydrated] =
     usePersistentState<string[]>(COLLAPSED_SOURCE_CARDS_STORAGE_KEY, []);
-  const [savedSources, setSavedSources, savedSourcesHydrated, savedSourcesMetadata] =
+  const [savedSources, setSavedSources, savedSourcesHydrated, savedSourcesMetadata, savedSourcesPersistenceFailed] =
     usePersistentState<Record<string, SavedPlaylistSource>>(
       SAVED_SOURCES_STORAGE_KEY,
       {},
@@ -242,6 +245,7 @@ function App() {
       return parsedValue as Record<string, SavedPlaylistSource>;
     },
     scrubSourceProfileSecrets,
+    saveM3uUrlsBeforePersist,
   );
   const [sourceLibraryIndex, setSourceLibraryIndex, sourceLibraryIndexHydrated, sourceLibraryIndexMetadata] =
     usePersistentState<SourceLibraryIndex>(SOURCE_LIBRARY_INDEX_STORAGE_KEY, {});
@@ -301,7 +305,7 @@ function App() {
   >({});
   const [updatingEpgSourceIds, setUpdatingEpgSourceIds] = useState<string[]>([]);
   const [hasLoadedEpgCacheDirectories, setHasLoadedEpgCacheDirectories] = useState(false);
-  const [savedSourcePasswordsHydrated, setSavedSourcePasswordsHydrated] = useState(false);
+  const [savedSourceSecretsHydrated, setSavedSourceSecretsHydrated] = useState(false);
   const [epgStatusMessage, setEpgStatusMessage] = useState<string | null>(null);
   const [matcherChannel, setMatcherChannel] = useState<Channel | null>(null);
   const [guideNowMs, setGuideNowMs] = useState(() => Date.now());
@@ -345,7 +349,7 @@ function App() {
     savedSourcesHydrated &&
     sourceLibraryIndexHydrated &&
     activeSourceIdHydrated &&
-    savedSourcePasswordsHydrated &&
+    savedSourceSecretsHydrated &&
     epgSourcesHydrated &&
     savedEpgMappingsHydrated &&
     playbackSessionHydrated &&
@@ -417,76 +421,63 @@ function App() {
     sourceLibraryIndexMetadata,
   ]);
 
-  const xtreamSourceIdsKey = useMemo(
-    () =>
-      Object.values(savedSources)
-        .filter((source) => source.kind === "xtream")
-        .map((source) => source.id)
-        .sort((left, right) => left.localeCompare(right))
-        .join("\u0001"),
+  useEffect(() => {
+    if (savedSourcesPersistenceFailed) {
+      setMessage((currentMessage) =>
+        currentMessage ?? "Saved source changes could not be secured. Existing saved data was kept.",
+      );
+    }
+  }, [savedSourcesPersistenceFailed]);
+
+  const secretSourceIdsKey = useMemo(
+    () => Object.values(savedSources)
+      .map((source) => `${source.kind}:${source.id}`)
+      .sort((left, right) => left.localeCompare(right))
+      .join("\u0001"),
     [savedSources],
   );
 
   useEffect(() => {
-    if (!savedSourcesHydrated) {
-      return;
-    }
+    if (!savedSourcesHydrated) return;
 
     let cancelled = false;
-    setSavedSourcePasswordsHydrated(false);
-
-    const xtreamSources = Object.values(savedSources).filter(
-      (source): source is SavedPlaylistSource & { kind: "xtream" } => source.kind === "xtream",
-    );
-
-    const pendingReads = xtreamSources.map((source) => ({
+    setSavedSourceSecretsHydrated(false);
+    const pendingReads = Object.values(savedSources).map((source) => ({
       sourceId: source.id,
-      expectedFingerprint: getXtreamCredentialHydrationFingerprint(source),
-      password: loadXtreamPassword(source.id),
+      kind: source.kind,
+      expectedFingerprint: getSourceSecretHydrationFingerprint(source),
+      read: source.kind === "m3u_url" ? loadM3uUrl(source.id) : loadXtreamPassword(source.id),
     }));
 
-    void Promise.allSettled(pendingReads.map((pending) => pending.password))
+    void Promise.allSettled(pendingReads.map((pending) => pending.read))
       .then((results) => {
-        if (cancelled) {
-          return;
-        }
-
-        const settlements: XtreamCredentialHydrationSettlement[] = pendingReads.map(
+        if (cancelled) return;
+        const settlements: SourceSecretHydrationSettlement[] = pendingReads.map(
           (pending, index) => ({
             sourceId: pending.sourceId,
+            kind: pending.kind,
             expectedFingerprint: pending.expectedFingerprint,
             result: results[index],
           }),
         );
-        const hydration = hydrateXtreamCredentials(savedSourcesRef.current, settlements);
+        const hydration = hydrateSourceSecrets(savedSourcesRef.current, settlements);
         const passwordSnapshot: Record<string, string> = {};
         for (const currentSource of Object.values(hydration.sources)) {
-          if (currentSource.kind === "xtream") {
-            passwordSnapshot[currentSource.id] = currentSource.password;
-          }
+          if (currentSource.kind === "xtream") passwordSnapshot[currentSource.id] = currentSource.password;
         }
-
         savedXtreamPasswordsRef.current = passwordSnapshot;
-        setSavedSources((currentSources) =>
-          hydrateXtreamCredentials(currentSources, settlements).sources,
-        );
-        if (hydration.message) {
-          setMessage((currentMessage) => currentMessage ?? hydration.message);
-        }
+        setSavedSources((currentSources) => hydrateSourceSecrets(currentSources, settlements).sources);
+        if (hydration.message) setMessage((currentMessage) => currentMessage ?? hydration.message);
       })
       .finally(() => {
-        if (!cancelled) {
-          setSavedSourcePasswordsHydrated(true);
-        }
+        if (!cancelled) setSavedSourceSecretsHydrated(true);
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [savedSourcesHydrated, setSavedSources, xtreamSourceIdsKey]);
+    return () => { cancelled = true; };
+  }, [savedSourcesHydrated, setSavedSources, secretSourceIdsKey]);
 
   useEffect(() => {
-    if (!savedSourcesHydrated || !savedSourcePasswordsHydrated) {
+    if (!savedSourcesHydrated || !savedSourceSecretsHydrated) {
       return;
     }
 
@@ -522,7 +513,7 @@ function App() {
         // Removing stale saved credentials is best-effort.
       });
     }
-  }, [savedSourcePasswordsHydrated, savedSources, savedSourcesHydrated]);
+  }, [savedSourceSecretsHydrated, savedSources, savedSourcesHydrated]);
 
   useEffect(() => {
     if (!playlistSnapshotHydrated || hydratedPlaylistSnapshotAppliedRef.current) {
@@ -1223,6 +1214,12 @@ function App() {
         [sourceId]: updateSourceProfile(source, patch),
       };
     });
+    const patchedUrl = "url" in patch ? patch.url : undefined;
+    if (typeof patchedUrl === "string" && patchedUrl.trim().length === 0) {
+      void deleteM3uUrl(sourceId).catch(() => {
+        // Intentional URL clearing is best-effort and never exposes store details.
+      });
+    }
   }
 
   async function handleRemoveSource(sourceId: string) {
@@ -1338,6 +1335,10 @@ function App() {
         const errorMessage =
           error instanceof Error ? error.message : "The saved Xtream password could not be removed.";
         setMessage(errorMessage);
+      });
+    } else {
+      void deleteM3uUrl(sourceId).catch(() => {
+        // Removing a deleted source credential is best-effort.
       });
     }
   }

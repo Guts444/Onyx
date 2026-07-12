@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import {
   enqueuePersistentWrite,
+  persistPreparedValue,
   persistMigratedValue,
   resolvePersistentPayload,
   type AppStatePayload,
@@ -52,6 +53,56 @@ test("a rejected persistent write does not poison the next write for that key", 
   await assert.rejects(failedWrite, /disk full/);
   await recoveredWrite;
   assert.deepStrictEqual(events, ["failed-started", "recovered-started"]);
+});
+
+test("beforePersist finishes before serialization and backend save", async () => {
+  const secretUrl = "https://migration.invalid/unique-playlist-token.m3u";
+  const events: string[] = [];
+  let persisted: unknown;
+
+  await persistPreparedValue(
+    { url: secretUrl },
+    async (value) => { assert.equal(value.url, secretUrl); events.push("keyring"); },
+    (value) => { events.push("serialize"); return { ...value, url: "" }; },
+    async (value) => { events.push("backend"); persisted = value; },
+    () => events.push("remove-legacy"),
+  );
+
+  assert.deepStrictEqual(events, ["keyring", "serialize", "backend", "remove-legacy"]);
+  assert.equal(JSON.stringify(persisted).includes(secretUrl), false);
+});
+
+test("failed beforePersist leaves backend and legacy storage untouched", async () => {
+  const secretUrl = "https://migration.invalid/failing-playlist-token.m3u";
+  const events: string[] = [];
+  await assert.rejects(() => persistPreparedValue(
+    { url: secretUrl },
+    async () => { events.push("keyring-attempted"); throw new Error("bounded non-secret warning"); },
+    (value) => ({ ...value, url: "" }),
+    async () => { events.push("backend"); },
+    () => events.push("remove-legacy"),
+  ), /bounded non-secret warning/);
+  assert.deepStrictEqual(events, ["keyring-attempted"]);
+  assert.equal(JSON.stringify(events).includes(secretUrl), false);
+});
+
+test("failed prepared persistence does not poison a later save in the same queue", async () => {
+  const events: string[] = [];
+  const first = enqueuePersistentWrite("prepared-recovery", () => persistPreparedValue(
+    "first",
+    async () => { events.push("first-before"); throw new Error("credential unavailable"); },
+    (value) => value,
+    async () => { events.push("first-save"); },
+  ));
+  const second = enqueuePersistentWrite("prepared-recovery", () => persistPreparedValue(
+    "second",
+    async () => { events.push("second-before"); },
+    (value) => value,
+    async () => { events.push("second-save"); },
+  ));
+  await assert.rejects(first, /credential unavailable/);
+  await second;
+  assert.deepStrictEqual(events, ["first-before", "second-before", "second-save"]);
 });
 
 test("legacy localStorage is removed only after the sanitized backend migration succeeds", async () => {

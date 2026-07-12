@@ -98,11 +98,8 @@ export function scrubSourceProfileSecrets(
   for (const [sourceId, source] of Object.entries(sources)) {
     scrubbedSources[sourceId] =
       source.kind === "xtream"
-        ? {
-            ...source,
-            password: "",
-          }
-        : source;
+        ? { ...source, password: "" }
+        : { ...source, url: "" };
   }
 
   return scrubbedSources;

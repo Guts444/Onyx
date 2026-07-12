@@ -34,14 +34,22 @@ const savedSources: Record<string, SavedPlaylistSource> = {
   },
 };
 
-test("scrubSourceProfileSecrets removes Xtream passwords before persistence", () => {
-  assert.deepStrictEqual(scrubSourceProfileSecrets(savedSources), {
+test("scrubSourceProfileSecrets removes all remote URLs and Xtream passwords before persistence", () => {
+  const scrubbed = scrubSourceProfileSecrets(savedSources);
+  assert.deepStrictEqual(scrubbed, {
     ...savedSources,
+    source_m3u_url_1: {
+      ...savedSources.source_m3u_url_1,
+      url: "",
+    },
     source_xtream_1: {
       ...savedSources.source_xtream_1,
       password: "",
     },
   });
+  const serialized = JSON.stringify(scrubbed);
+  assert.equal(serialized.includes("https://example.com/list.m3u"), false);
+  assert.equal(serialized.includes("secret-password"), false);
 });
 
 test("mergeSourceLibraryIndexEntry unions known channel ids and playlist keys", () => {

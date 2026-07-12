@@ -14,6 +14,9 @@ const CONNECT_TIMEOUT_SECS: u64 = 15;
 const READ_TIMEOUT_SECS: u64 = 45;
 const APP_STATE_DIRECTORY: &str = "state";
 const XTREAM_SECRET_SERVICE: &str = "Onyx Xtream";
+const M3U_URL_SECRET_SERVICE: &str = "Onyx M3U URL";
+const INVALID_M3U_URL_MESSAGE: &str = "The playlist URL is not valid.";
+const UNSUPPORTED_M3U_URL_SCHEME_MESSAGE: &str = "Only http and https playlist URLs are supported.";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +71,23 @@ fn get_xtream_secret_entry(source_id: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(XTREAM_SECRET_SERVICE, source_id).map_err(map_secret_error)
 }
 
+fn get_m3u_url_secret_entry(source_id: &str) -> Result<keyring::Entry, String> {
+    validate_source_id(source_id)?;
+    keyring::Entry::new(M3U_URL_SECRET_SERVICE, source_id).map_err(map_secret_error)
+}
+
+fn validate_m3u_url_for_storage(url: &str) -> Result<String, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err(INVALID_M3U_URL_MESSAGE.to_string());
+    }
+    let parsed = Url::parse(trimmed).map_err(|_| INVALID_M3U_URL_MESSAGE.to_string())?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(trimmed.to_string()),
+        _ => Err(UNSUPPORTED_M3U_URL_SCHEME_MESSAGE.to_string()),
+    }
+}
+
 fn get_app_state_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     app.path()
         .resolve(APP_STATE_DIRECTORY, BaseDirectory::AppLocalData)
@@ -113,6 +133,33 @@ fn save_xtream_password(source_id: String, password: String) -> Result<(), Strin
 fn delete_xtream_password(source_id: String) -> Result<(), String> {
     let entry = get_xtream_secret_entry(&source_id)?;
 
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(map_secret_error(error)),
+    }
+}
+
+#[tauri::command]
+fn load_m3u_url(source_id: String) -> Result<Option<String>, String> {
+    let entry = get_m3u_url_secret_entry(&source_id)?;
+    match entry.get_password() {
+        Ok(url) => Ok(Some(url)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(map_secret_error(error)),
+    }
+}
+
+#[tauri::command]
+fn save_m3u_url(source_id: String, url: String) -> Result<(), String> {
+    let validated_url = validate_m3u_url_for_storage(&url)?;
+    get_m3u_url_secret_entry(&source_id)?
+        .set_password(&validated_url)
+        .map_err(map_secret_error)
+}
+
+#[tauri::command]
+fn delete_m3u_url(source_id: String) -> Result<(), String> {
+    let entry = get_m3u_url_secret_entry(&source_id)?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(map_secret_error(error)),
@@ -559,6 +606,9 @@ pub fn run() {
             load_xtream_password,
             save_xtream_password,
             delete_xtream_password,
+            load_m3u_url,
+            save_m3u_url,
+            delete_m3u_url,
             epg::refresh_epg_cache,
             epg::load_epg_cache_directories,
             epg::delete_epg_cache,
@@ -571,7 +621,42 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_xtream_stream, XtreamChannelPayload};
+    use super::{
+        choose_xtream_stream, validate_m3u_url_for_storage, XtreamChannelPayload,
+        INVALID_M3U_URL_MESSAGE, M3U_URL_SECRET_SERVICE, UNSUPPORTED_M3U_URL_SCHEME_MESSAGE,
+        XTREAM_SECRET_SERVICE,
+    };
+
+    #[test]
+    fn m3u_url_secret_service_is_distinct_from_xtream_credentials() {
+        assert_ne!(M3U_URL_SECRET_SERVICE, XTREAM_SECRET_SERVICE);
+    }
+
+    #[test]
+    fn m3u_url_storage_accepts_only_http_and_https_without_leaking_invalid_input() {
+        let sentinel = "private-token-must-not-appear";
+        assert_eq!(
+            validate_m3u_url_for_storage(" https://example.invalid/list.m3u?token=safe ")
+                .expect("https URL should be accepted"),
+            "https://example.invalid/list.m3u?token=safe"
+        );
+        assert!(validate_m3u_url_for_storage("http://example.invalid/list.m3u").is_ok());
+
+        for (invalid, expected_error) in [
+            (
+                format!("file:///tmp/{sentinel}"),
+                UNSUPPORTED_M3U_URL_SCHEME_MESSAGE,
+            ),
+            (format!("not-a-url-{sentinel}"), INVALID_M3U_URL_MESSAGE),
+            ("   ".to_string(), INVALID_M3U_URL_MESSAGE),
+        ] {
+            let error = validate_m3u_url_for_storage(&invalid).expect_err("URL must be rejected");
+            assert_eq!(error, expected_error);
+            assert!(!error.contains(sentinel));
+            assert!(!error.contains(&invalid));
+        }
+        assert!(validate_m3u_url_for_storage("").is_err());
+    }
 
     #[test]
     fn xtream_direct_source_selection_marks_provider_provenance() {

@@ -174,21 +174,37 @@ export async function persistMigratedValue(
   removeLegacy();
 }
 
+export async function persistPreparedValue<T>(
+  value: T,
+  beforePersist: ((value: T) => Promise<void>) | undefined,
+  serializer: (value: T) => unknown,
+  save: (serializedValue: unknown) => Promise<void>,
+  removeLegacy?: () => void,
+) {
+  await beforePersist?.(value);
+  const serializedValue = serializer(value);
+  await save(serializedValue);
+  removeLegacy?.();
+}
+
 export function usePersistentState<T>(
   key: string,
   initialValue: T,
   reviver?: (val: unknown) => T,
   serializer?: (value: T) => unknown,
+  beforePersist?: (value: T) => Promise<void>,
 ) {
   const initialValueRef = useRef(initialValue);
   const reviverRef = useRef(reviver);
   const serializerRef = useRef(serializer);
+  const beforePersistRef = useRef(beforePersist);
   const skipNextSaveRef = useRef(true);
   const migrateNextSaveRef = useRef(false);
   const removeLegacyNextSaveRef = useRef(false);
   const [value, setValue] = useState<T>(() => initialValue);
   const [isHydrated, setIsHydrated] = useState(false);
   const [metadata, setMetadata] = useState<PersistentStateMetadata>(cleanBackendMetadata);
+  const [persistenceFailed, setPersistenceFailed] = useState(false);
 
   useEffect(() => {
     reviverRef.current = reviver;
@@ -197,6 +213,10 @@ export function usePersistentState<T>(
   useEffect(() => {
     serializerRef.current = serializer;
   }, [serializer]);
+
+  useEffect(() => {
+    beforePersistRef.current = beforePersist;
+  }, [beforePersist]);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,22 +267,27 @@ export function usePersistentState<T>(
       }
     }
 
-    const serializedValue = serializerRef.current ? serializerRef.current(value) : value;
-    const save = () => enqueuePersistentWrite(key, () => savePersistentValue(key, serializedValue));
-    const persistence = removeLegacyNextSaveRef.current
-      ? persistMigratedValue(save, () => window.localStorage.removeItem(key))
-      : save();
+    const shouldRemoveLegacy = removeLegacyNextSaveRef.current;
+    const persistence = enqueuePersistentWrite(key, () => persistPreparedValue(
+      value,
+      beforePersistRef.current,
+      (currentValue) => serializerRef.current ? serializerRef.current(currentValue) : currentValue,
+      (serializedValue) => savePersistentValue(key, serializedValue),
+      shouldRemoveLegacy ? () => window.localStorage.removeItem(key) : undefined,
+    ));
 
     void persistence
       .then(() => {
         migrateNextSaveRef.current = false;
         removeLegacyNextSaveRef.current = false;
+        setPersistenceFailed(false);
       })
       .catch(() => {
         // App state persistence is best-effort so the UI can keep running. A
         // failed migration deliberately leaves legacy localStorage untouched.
+        setPersistenceFailed(true);
       });
   }, [isHydrated, key, value]);
 
-  return [value, setValue, isHydrated, metadata] as const;
+  return [value, setValue, isHydrated, metadata, persistenceFailed] as const;
 }
