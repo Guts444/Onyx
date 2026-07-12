@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import {
+  enqueuePersistentWork,
   enqueuePersistentWrite,
   persistPreparedValue,
   persistMigratedValue,
@@ -8,6 +9,15 @@ import {
   type AppStatePayload,
   type LoadedPersistentValue,
 } from "./usePersistentState.ts";
+import {
+  deleteSourceSecretBeforeCommit,
+  loadM3uUrl,
+  loadXtreamPassword,
+  SAVED_SOURCES_PERSISTENCE_KEY,
+  saveSourceSecretsBeforePersist,
+} from "../features/sources/secrets.ts";
+import { scrubSourceProfileSecrets } from "../features/sources/profiles.ts";
+import type { SavedPlaylistSource } from "../domain/sourceProfiles.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -55,6 +65,81 @@ test("a rejected persistent write does not poison the next write for that key", 
   assert.deepStrictEqual(events, ["failed-started", "recovered-started"]);
 });
 
+function sourceFixture(kind: "m3u_url" | "xtream"): SavedPlaylistSource {
+  const base = {
+    id: `source_${kind}`,
+    name: kind,
+    enabled: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    lastLoadedAt: null,
+  };
+  return kind === "m3u_url"
+    ? { ...base, kind, url: "https://example.invalid/private-token/list.m3u" }
+    : { ...base, kind, domain: "example.invalid", username: "viewer", password: "private-password" };
+}
+
+test("M3U and Xtream deletion waits for an older queued save and commits only after delete runs last", async () => {
+  for (const kind of ["m3u_url", "xtream"] as const) {
+    const oldSave = deferred();
+    const events: string[] = [];
+    let credentialPresent = false;
+    let transitionCommitted = false;
+    const queuedSave = enqueuePersistentWork(SAVED_SOURCES_PERSISTENCE_KEY, async () => {
+      events.push(`${kind}-save-started`);
+      await oldSave.promise;
+      credentialPresent = true;
+      events.push(`${kind}-save-finished`);
+    });
+    const deletion = deleteSourceSecretBeforeCommit(
+      sourceFixture(kind),
+      () => { transitionCommitted = true; events.push(`${kind}-committed`); },
+      async () => { credentialPresent = false; events.push(`${kind}-deleted`); },
+    );
+
+    await Promise.resolve();
+    assert.equal(transitionCommitted, false);
+    assert.deepStrictEqual(events, [`${kind}-save-started`]);
+    oldSave.resolve();
+    await Promise.all([queuedSave, deletion]);
+    assert.equal(credentialPresent, false);
+    assert.equal(transitionCommitted, true);
+    assert.deepStrictEqual(events, [
+      `${kind}-save-started`,
+      `${kind}-save-finished`,
+      `${kind}-deleted`,
+      `${kind}-committed`,
+    ]);
+  }
+});
+
+test("failed M3U and Xtream deletion leaves transitions uncommitted and a later retry succeeds safely", async () => {
+  for (const kind of ["m3u_url", "xtream"] as const) {
+    const secret = kind === "m3u_url" ? "private-url-token" : "private-password";
+    const rawError = `raw-keyring-failure-${secret}`;
+    let transitionCommitted = false;
+    let attempts = 0;
+    const commit = () => { transitionCommitted = true; };
+    const remove = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error(rawError);
+    };
+
+    const firstError = await deleteSourceSecretBeforeCommit(sourceFixture(kind), commit, remove)
+      .then(() => null, (error: unknown) => error);
+    assert.equal(transitionCommitted, false);
+    assert.equal(firstError instanceof Error, true);
+    const safeMessage = (firstError as Error).message;
+    assert.equal(safeMessage, "The saved source credential could not be removed. Existing saved data was kept.");
+    assert.equal(safeMessage.includes(rawError), false);
+    assert.equal(safeMessage.includes(secret), false);
+
+    await deleteSourceSecretBeforeCommit(sourceFixture(kind), commit, remove);
+    assert.equal(attempts, 2);
+    assert.equal(transitionCommitted, true);
+  }
+});
+
 test("beforePersist finishes before serialization and backend save", async () => {
   const secretUrl = "https://migration.invalid/unique-playlist-token.m3u";
   const events: string[] = [];
@@ -70,6 +155,27 @@ test("beforePersist finishes before serialization and backend save", async () =>
 
   assert.deepStrictEqual(events, ["keyring", "serialize", "backend", "remove-legacy"]);
   assert.equal(JSON.stringify(persisted).includes(secretUrl), false);
+});
+
+test("beforePersist secures edited M3U and Xtream secrets before scrubbed backend persistence", async () => {
+  const m3u = sourceFixture("m3u_url");
+  const xtream = sourceFixture("xtream");
+  const sources = { [m3u.id]: m3u, [xtream.id]: xtream };
+  const events: string[] = [];
+  let persisted: unknown;
+
+  await persistPreparedValue(
+    sources,
+    async (value) => { await saveSourceSecretsBeforePersist(value); events.push("keyring"); },
+    (value) => { events.push("scrub"); return scrubSourceProfileSecrets(value); },
+    async (value) => { events.push("backend"); persisted = value; },
+  );
+
+  assert.deepStrictEqual(events, ["keyring", "scrub", "backend"]);
+  assert.equal(await loadM3uUrl(m3u.id), m3u.kind === "m3u_url" ? m3u.url : null);
+  assert.equal(await loadXtreamPassword(xtream.id), xtream.kind === "xtream" ? xtream.password : null);
+  assert.equal(JSON.stringify(persisted).includes("private-token"), false);
+  assert.equal(JSON.stringify(persisted).includes("private-password"), false);
 });
 
 test("failed beforePersist leaves backend and legacy storage untouched", async () => {

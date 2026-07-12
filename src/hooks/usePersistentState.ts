@@ -150,10 +150,10 @@ async function savePersistentValue(key: string, value: unknown) {
   await invoke("save_app_state", { key, value });
 }
 
-export function enqueuePersistentWrite(key: string, write: () => Promise<void>) {
-  const previousWrite = persistentWriteQueues.get(key) ?? Promise.resolve();
-  const currentWrite = previousWrite.then(write);
-  const queueTail = currentWrite.then(
+export function enqueuePersistentWork(key: string, work: () => Promise<void>) {
+  const previousWork = persistentWriteQueues.get(key) ?? Promise.resolve();
+  const currentWork = previousWork.then(work);
+  const queueTail = currentWork.then(
     () => undefined,
     () => undefined,
   );
@@ -163,8 +163,11 @@ export function enqueuePersistentWrite(key: string, write: () => Promise<void>) 
       persistentWriteQueues.delete(key);
     }
   });
-  return currentWrite;
+  return currentWork;
 }
+
+/** @deprecated Use enqueuePersistentWork for writes and other ordered persistence work. */
+export const enqueuePersistentWrite = enqueuePersistentWork;
 
 export async function persistMigratedValue(
   save: () => Promise<void>,

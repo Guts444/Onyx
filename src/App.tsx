@@ -96,12 +96,11 @@ import {
   updateSourceProfile,
 } from "./features/sources/profiles";
 import {
-  deleteM3uUrl,
-  deleteXtreamPassword,
+  deleteSourceSecretBeforeCommit,
   loadM3uUrl,
   loadXtreamPassword,
-  saveM3uUrlsBeforePersist,
-  saveXtreamPassword,
+  SAVED_SOURCES_PERSISTENCE_KEY,
+  saveSourceSecretsBeforePersist,
 } from "./features/sources/secrets";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { hashString } from "./utils/hash";
@@ -111,7 +110,7 @@ const FAVORITES_STORAGE_KEY = "iptv-player:favorites";
 const RECENTS_STORAGE_KEY = "iptv-player:recents";
 const GROUP_VISIBILITY_STORAGE_KEY = "iptv-player:hidden-groups";
 const COLLAPSED_GROUPS_STORAGE_KEY = "iptv-player:collapsed-groups";
-const SAVED_SOURCES_STORAGE_KEY = "iptv-player:saved-sources";
+const SAVED_SOURCES_STORAGE_KEY = SAVED_SOURCES_PERSISTENCE_KEY;
 const SOURCE_LIBRARY_INDEX_STORAGE_KEY = "iptv-player:source-library-index";
 const ACTIVE_SOURCE_STORAGE_KEY = "iptv-player:active-source";
 const PLAYLIST_SNAPSHOT_STORAGE_KEY = "iptv-player:playlist-snapshot";
@@ -261,7 +260,7 @@ function App() {
       return parsedValue as Record<string, SavedPlaylistSource>;
     },
     scrubSourceProfileSecrets,
-    saveM3uUrlsBeforePersist,
+    saveSourceSecretsBeforePersist,
   );
   const [sourceLibraryIndex, setSourceLibraryIndex, sourceLibraryIndexHydrated, sourceLibraryIndexMetadata] =
     usePersistentState<SourceLibraryIndex>(SOURCE_LIBRARY_INDEX_STORAGE_KEY, {});
@@ -336,7 +335,6 @@ function App() {
   const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
   const hydratedPlaylistSnapshotAppliedRef = useRef(false);
   const hydratedVolumeAppliedRef = useRef(false);
-  const savedXtreamPasswordsRef = useRef<Record<string, string>>({});
   const savedSourcesRef = useRef(savedSources);
   const activeSourceIdRef = useRef(activeSourceId);
   const sourceOperationsRef = useRef(createSourceOperationCoordinator());
@@ -478,11 +476,6 @@ function App() {
           }),
         );
         const hydration = hydrateSourceSecrets(savedSourcesRef.current, settlements);
-        const passwordSnapshot: Record<string, string> = {};
-        for (const currentSource of Object.values(hydration.sources)) {
-          if (currentSource.kind === "xtream") passwordSnapshot[currentSource.id] = currentSource.password;
-        }
-        savedXtreamPasswordsRef.current = passwordSnapshot;
         setSavedSources((currentSources) => hydrateSourceSecrets(currentSources, settlements).sources);
         if (hydration.message) setMessage((currentMessage) => currentMessage ?? hydration.message);
       })
@@ -493,44 +486,6 @@ function App() {
     return () => { cancelled = true; };
   }, [savedSourcesHydrated, setSavedSources, secretSourceIdsKey]);
 
-  useEffect(() => {
-    if (!savedSourcesHydrated || !savedSourceSecretsHydrated) {
-      return;
-    }
-
-    const nextPasswordSnapshot: Record<string, string> = {};
-
-    for (const source of Object.values(savedSources)) {
-      if (source.kind === "xtream") {
-        nextPasswordSnapshot[source.id] = source.password;
-      }
-    }
-
-    const previousPasswordSnapshot = savedXtreamPasswordsRef.current;
-    savedXtreamPasswordsRef.current = nextPasswordSnapshot;
-
-    for (const [sourceId, password] of Object.entries(nextPasswordSnapshot)) {
-      if (previousPasswordSnapshot[sourceId] === password) {
-        continue;
-      }
-
-      void saveXtreamPassword(sourceId, password).catch((error) => {
-        const errorMessage =
-          error instanceof Error ? error.message : "The Xtream password could not be saved.";
-        setMessage(errorMessage);
-      });
-    }
-
-    for (const sourceId of Object.keys(previousPasswordSnapshot)) {
-      if (Object.prototype.hasOwnProperty.call(nextPasswordSnapshot, sourceId)) {
-        continue;
-      }
-
-      void deleteXtreamPassword(sourceId).catch(() => {
-        // Removing stale saved credentials is best-effort.
-      });
-    }
-  }, [savedSourceSecretsHydrated, savedSources, savedSourcesHydrated]);
 
   useEffect(() => {
     if (!playlistSnapshotHydrated || hydratedPlaylistSnapshotAppliedRef.current) {
@@ -1215,34 +1170,71 @@ function App() {
     });
   }
 
-  function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
-    sourceOperationsRef.current.invalidateSource(sourceId);
-    sourceRevisionsRef.current.bump(sourceId);
-    startupSourceRefreshResultRef.current = "pending";
-    setStartupRestoreToken((currentToken) =>
-      currentToken?.sourceId === sourceId ? null : currentToken,
-    );
-    setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
-    setSavedSources((currentSources) => {
-      const source = currentSources[sourceId];
-      if (!source) return currentSources;
-      return {
-        ...currentSources,
-        [sourceId]: updateSourceProfile(source, patch),
-      };
-    });
-    const patchedUrl = "url" in patch ? patch.url : undefined;
-    if (typeof patchedUrl === "string" && patchedUrl.trim().length === 0) {
-      void deleteM3uUrl(sourceId).catch(() => {
-        // Intentional URL clearing is best-effort and never exposes store details.
+  async function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
+    const source = savedSourcesRef.current[sourceId];
+    if (!source) return;
+
+    const commitUpdate = () => {
+      sourceOperationsRef.current.invalidateSource(sourceId);
+      sourceRevisionsRef.current.bump(sourceId);
+      startupSourceRefreshResultRef.current = "pending";
+      setStartupRestoreToken((currentToken) =>
+        currentToken?.sourceId === sourceId ? null : currentToken,
+      );
+      setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
+      setSavedSources((currentSources) => {
+        const currentSource = currentSources[sourceId];
+        if (!currentSource) return currentSources;
+        return {
+          ...currentSources,
+          [sourceId]: updateSourceProfile(currentSource, patch),
+        };
       });
+    };
+    const clearsM3uUrl =
+      source.kind === "m3u_url" &&
+      "url" in patch &&
+      typeof patch.url === "string" &&
+      source.url.trim().length > 0 &&
+      patch.url.trim().length === 0;
+    const clearsXtreamPassword =
+      source.kind === "xtream" &&
+      "password" in patch &&
+      typeof patch.password === "string" &&
+      source.password.length > 0 &&
+      patch.password.length === 0;
+
+    if (clearsM3uUrl || clearsXtreamPassword) {
+      try {
+        await deleteSourceSecretBeforeCommit(source, commitUpdate);
+      } catch (error) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "The saved source credential could not be removed. Existing saved data was kept.",
+        );
+      }
+      return;
     }
+
+    commitUpdate();
   }
 
   async function handleRemoveSource(sourceId: string) {
     const source = savedSources[sourceId];
 
     if (!source) {
+      return;
+    }
+
+    try {
+      await deleteSourceSecretBeforeCommit(source, () => undefined);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "The saved source credential could not be removed. Existing saved data was kept.",
+      );
       return;
     }
 
@@ -1346,18 +1338,6 @@ function App() {
     }
 
     setMessage(`Removed ${sourceLabel} and cleared its saved data.`);
-
-    if (source.kind === "xtream") {
-      void deleteXtreamPassword(sourceId).catch((error) => {
-        const errorMessage =
-          error instanceof Error ? error.message : "The saved Xtream password could not be removed.";
-        setMessage(errorMessage);
-      });
-    } else {
-      void deleteM3uUrl(sourceId).catch(() => {
-        // Removing a deleted source credential is best-effort.
-      });
-    }
   }
 
   function openSettings(tab: SettingsTab) {

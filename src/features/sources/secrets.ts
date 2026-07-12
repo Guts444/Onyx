@@ -1,4 +1,10 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import type { SavedPlaylistSource } from "../../domain/sourceProfiles";
+import { enqueuePersistentWork } from "../../hooks/usePersistentState.ts";
+
+export const SAVED_SOURCES_PERSISTENCE_KEY = "iptv-player:saved-sources";
+const SOURCE_SECRET_DELETE_ERROR =
+  "The saved source credential could not be removed. Existing saved data was kept.";
 
 const browserPasswordStore = new Map<string, string>();
 const browserM3uUrlStore = new Map<string, string>();
@@ -24,18 +30,24 @@ export async function deleteM3uUrl(sourceId: string) {
   await invoke("delete_m3u_url", { sourceId });
 }
 
-export async function saveM3uUrlsBeforePersist(
-  sources: Record<string, import("../../domain/sourceProfiles").SavedPlaylistSource>,
+export async function saveSourceSecretsBeforePersist(
+  sources: Record<string, SavedPlaylistSource>,
 ) {
-  const writes = Object.values(sources)
-    .filter((source) => source.kind === "m3u_url" && source.url.trim().length > 0)
-    .map((source) => saveM3uUrl(source.id, source.kind === "m3u_url" ? source.url : ""));
+  const writes = Object.values(sources).flatMap((source) => {
+    if (source.kind === "m3u_url") {
+      return source.url.trim().length > 0 ? [saveM3uUrl(source.id, source.url)] : [];
+    }
+    return source.password.length > 0 ? [saveXtreamPassword(source.id, source.password)] : [];
+  });
   try {
     await Promise.all(writes);
   } catch {
     throw new Error("Saved source changes could not be secured. Existing saved data was kept.");
   }
 }
+
+/** @deprecated Use saveSourceSecretsBeforePersist so both source kinds share ordering. */
+export const saveM3uUrlsBeforePersist = saveSourceSecretsBeforePersist;
 
 export async function loadXtreamPassword(sourceId: string) {
   if (!isTauri()) {
@@ -65,4 +77,27 @@ export async function deleteXtreamPassword(sourceId: string) {
   }
 
   await invoke("delete_xtream_password", { sourceId });
+}
+
+type DeleteSourceSecret = (source: SavedPlaylistSource) => Promise<void>;
+
+async function deleteSourceSecret(source: SavedPlaylistSource) {
+  if (source.kind === "m3u_url") {
+    await deleteM3uUrl(source.id);
+  } else {
+    await deleteXtreamPassword(source.id);
+  }
+}
+
+export async function deleteSourceSecretBeforeCommit(
+  source: SavedPlaylistSource,
+  commit: () => void,
+  removeSecret: DeleteSourceSecret = deleteSourceSecret,
+) {
+  try {
+    await enqueuePersistentWork(SAVED_SOURCES_PERSISTENCE_KEY, () => removeSecret(source));
+  } catch {
+    throw new Error(SOURCE_SECRET_DELETE_ERROR);
+  }
+  commit();
 }
