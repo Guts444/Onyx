@@ -1,11 +1,13 @@
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// App-state files are capped at 16 MiB, including the version envelope. This is
@@ -13,6 +15,7 @@ use std::{
 pub const MAX_STATE_BYTES: usize = 16 * 1024 * 1024;
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MAX_KEY_BYTES: usize = 160;
+const ENVELOPE_MAGIC: &str = "onyx-app-state";
 
 static UNIQUE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static KEY_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
@@ -20,6 +23,14 @@ static KEY_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock:
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StateEnvelope {
+    format: String,
+    schema_version: u32,
+    value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyStateEnvelope {
     schema_version: u32,
     value: Value,
 }
@@ -33,12 +44,19 @@ pub struct ReadOutcome {
     pub recovered: bool,
     pub corrupt: bool,
     pub quarantined: bool,
+    pub unsafe_legacy_playlist: bool,
 }
 
 struct ParsedState {
     value: Value,
     schema_version: u32,
     unsafe_legacy_playlist: bool,
+}
+
+struct LoadedState {
+    bytes: Vec<u8>,
+    parsed: Result<ParsedState, String>,
+    unsafe_bytes: bool,
 }
 
 pub struct Store {
@@ -81,6 +99,11 @@ impl Store {
             .join(format!("{}.json.bak", Self::encoded_name(key)))
     }
 
+    fn lock_path(&self, key: &str) -> PathBuf {
+        self.directory
+            .join(format!("{}.lock", Self::encoded_name(key)))
+    }
+
     fn lock_for(&self, key: &str) -> Arc<Mutex<()>> {
         let path = self.path(key);
         let mut locks = KEY_LOCKS
@@ -96,9 +119,22 @@ impl Store {
         lock
     }
 
+    fn acquire_process_lock(&self, key: &str) -> Result<File, String> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        configure_private_file(&mut options);
+        let file = options
+            .open(self.lock_path(key))
+            .map_err(|error| format!("Could not open the app state lock: {error}"))?;
+        file.lock_exclusive()
+            .map_err(|error| format!("Could not lock the app state: {error}"))?;
+        Ok(file)
+    }
+
     pub fn write(&self, key: &str, value: &Value) -> Result<(), String> {
         Self::validate_key(key)?;
         let serialized = serde_json::to_vec(&StateEnvelope {
+            format: ENVELOPE_MAGIC.to_string(),
             schema_version: CURRENT_SCHEMA_VERSION,
             value: value.clone(),
         })
@@ -120,24 +156,31 @@ impl Store {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.prepare_directory()?;
-        self.cleanup_temporary_files(key)?;
+        let _process_lock = self.acquire_process_lock(key)?;
 
         let primary = self.path(key);
         let backup = self.backup_path(key);
         if primary.exists() {
-            match self.read_and_parse(key, &primary) {
-                Ok(parsed) if !parsed.unsafe_legacy_playlist => {
-                    let bytes = read_bounded(&primary)?;
-                    atomic_write(&backup, &bytes)?;
+            let loaded = self.load_file(key, &primary)?;
+            if let Ok(parsed) = loaded.parsed {
+                if !parsed.unsafe_legacy_playlist {
+                    atomic_write(&backup, &loaded.bytes)?;
                 }
-                Ok(_) => {
-                    remove_if_exists(&backup)?;
-                }
-                Err(_) => {}
             }
         }
 
+        // Replacement is the only operation that removes an unsafe primary. A
+        // separately validated backup remains untouched until this succeeds.
         atomic_write(&primary, &serialized)?;
+
+        // Preserve every backup until the safe primary is durable. Once it is,
+        // credential-bearing legacy backup bytes are no longer a valid LKG.
+        if backup.exists() {
+            let loaded = self.load_file(key, &backup)?;
+            if loaded.unsafe_bytes {
+                secure_delete_best_effort(&backup)?;
+            }
+        }
         Ok(())
     }
 
@@ -147,9 +190,8 @@ impl Store {
         let _guard = key_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if self.directory.exists() {
-            self.cleanup_temporary_files(key)?;
-        }
+        self.prepare_directory()?;
+        let _process_lock = self.acquire_process_lock(key)?;
         self.read_locked(key)
     }
 
@@ -157,78 +199,56 @@ impl Store {
         let primary = self.path(key);
         let backup = self.backup_path(key);
         if !primary.exists() {
-            if !backup.exists() {
-                return Ok(missing_outcome(false, false));
-            }
-            return match self.read_and_parse(key, &backup) {
-                Ok(parsed) if !parsed.unsafe_legacy_playlist => {
-                    let bytes = read_bounded(&backup)?;
-                    atomic_write(&primary, &bytes)?;
-                    Ok(outcome_from_parsed(parsed, true, false, false))
-                }
-                Ok(_) | Err(_) => {
-                    let quarantined = quarantine(&backup)?;
-                    Ok(missing_outcome(true, quarantined))
-                }
-            };
+            return self.read_backup(key, &backup, false, false);
         }
 
-        match self.read_and_parse(key, &primary) {
+        let loaded = self.load_file(key, &primary)?;
+        match loaded.parsed {
             Ok(parsed) => Ok(outcome_from_parsed(parsed, false, false, false)),
             Err(_) => {
-                let primary_quarantined = quarantine(&primary)?;
-                if backup.exists() {
-                    match self.read_and_parse(key, &backup) {
-                        Ok(parsed) if !parsed.unsafe_legacy_playlist => {
-                            let bytes = read_bounded(&backup)?;
-                            atomic_write(&primary, &bytes)?;
-                            return Ok(outcome_from_parsed(
-                                parsed,
-                                true,
-                                true,
-                                primary_quarantined,
-                            ));
-                        }
-                        Ok(_) | Err(_) => {
-                            let backup_quarantined = quarantine(&backup)?;
-                            return Ok(missing_outcome(
-                                true,
-                                primary_quarantined || backup_quarantined,
-                            ));
-                        }
-                    }
-                }
-                Ok(missing_outcome(true, primary_quarantined))
+                let quarantined = dispose_invalid(&primary, loaded.unsafe_bytes)?;
+                self.read_backup(key, &backup, true, quarantined)
             }
         }
     }
 
-    fn read_and_parse(&self, key: &str, path: &Path) -> Result<ParsedState, String> {
-        let bytes = read_bounded(path)?;
-        let raw: Value = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("Could not parse the app state: {error}"))?;
-
-        if raw.get("schemaVersion").is_some() {
-            let envelope: StateEnvelope = serde_json::from_value(raw)
-                .map_err(|error| format!("Could not validate the app state: {error}"))?;
-            if envelope.schema_version != CURRENT_SCHEMA_VERSION {
-                return Err(format!(
-                    "Unsupported app state schema version {}.",
-                    envelope.schema_version
-                ));
-            }
-            return Ok(ParsedState {
-                value: envelope.value,
-                schema_version: envelope.schema_version,
-                unsafe_legacy_playlist: false,
-            });
+    fn read_backup(
+        &self,
+        key: &str,
+        backup: &Path,
+        corrupt: bool,
+        quarantined: bool,
+    ) -> Result<ReadOutcome, String> {
+        if !backup.exists() {
+            return Ok(missing_outcome(corrupt, quarantined));
         }
 
-        let unsafe_legacy_playlist = is_unsafe_legacy_playlist(key, &bytes);
-        Ok(ParsedState {
-            value: raw,
-            schema_version: 0,
-            unsafe_legacy_playlist,
+        let loaded = self.load_file(key, backup)?;
+        match loaded.parsed {
+            Ok(parsed) if parsed.unsafe_legacy_playlist => {
+                // Return credential-bearing legacy data only in memory so the
+                // frontend can sanitize it and atomically rewrite the primary.
+                Ok(outcome_from_parsed(parsed, true, corrupt, quarantined))
+            }
+            Ok(parsed) => {
+                atomic_write(&self.path(key), &loaded.bytes)?;
+                Ok(outcome_from_parsed(parsed, true, corrupt, quarantined))
+            }
+            Err(_) => {
+                let backup_quarantined = dispose_invalid(backup, loaded.unsafe_bytes)?;
+                Ok(missing_outcome(true, quarantined || backup_quarantined))
+            }
+        }
+    }
+
+    fn load_file(&self, key: &str, path: &Path) -> Result<LoadedState, String> {
+        let bytes = read_bounded(path)?;
+        let unsafe_bytes = is_unsafe_legacy_playlist(key, &bytes);
+        let parsed = parse_state(key, &bytes);
+        Ok(LoadedState {
+            bytes,
+            parsed,
+            unsafe_bytes,
         })
     }
 
@@ -237,30 +257,50 @@ impl Store {
             .map_err(|error| format!("Could not create the app state directory: {error}"))?;
         restrict_directory_permissions(&self.directory)
     }
+}
 
-    fn cleanup_temporary_files(&self, key: &str) -> Result<(), String> {
-        let prefixes = [
-            format!(
-                "{}.tmp-",
-                self.path(key).file_name().unwrap().to_string_lossy()
-            ),
-            format!(
-                "{}.tmp-",
-                self.backup_path(key).file_name().unwrap().to_string_lossy()
-            ),
-        ];
-        for entry in fs::read_dir(&self.directory)
-            .map_err(|error| format!("Could not inspect the app state directory: {error}"))?
-        {
-            let entry = entry.map_err(|error| format!("Could not inspect app state: {error}"))?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if prefixes.iter().any(|prefix| name.starts_with(prefix)) {
-                remove_if_exists(&entry.path())?;
+fn parse_state(key: &str, bytes: &[u8]) -> Result<ParsedState, String> {
+    let raw: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("Could not parse the app state: {error}"))?;
+
+    if raw.get("format").and_then(Value::as_str) == Some(ENVELOPE_MAGIC) {
+        let envelope: StateEnvelope = serde_json::from_value(raw)
+            .map_err(|error| format!("Could not validate the app state: {error}"))?;
+        if envelope.schema_version != CURRENT_SCHEMA_VERSION {
+            return Err(format!(
+                "Unsupported app state schema version {}.",
+                envelope.schema_version
+            ));
+        }
+        return Ok(ParsedState {
+            value: envelope.value,
+            schema_version: envelope.schema_version,
+            unsafe_legacy_playlist: false,
+        });
+    }
+
+    // ddeedd2 wrote envelopes without a discriminator. Accept only the exact
+    // two-field shape; ordinary application objects containing schemaVersion
+    // remain unambiguously legacy values.
+    if raw.as_object().is_some_and(|object| {
+        object.len() == 2 && object.contains_key("schemaVersion") && object.contains_key("value")
+    }) {
+        if let Ok(envelope) = serde_json::from_value::<LegacyStateEnvelope>(raw.clone()) {
+            if envelope.schema_version == CURRENT_SCHEMA_VERSION {
+                return Ok(ParsedState {
+                    value: envelope.value,
+                    schema_version: envelope.schema_version,
+                    unsafe_legacy_playlist: is_unsafe_legacy_playlist(key, bytes),
+                });
             }
         }
-        Ok(())
     }
+
+    Ok(ParsedState {
+        unsafe_legacy_playlist: is_unsafe_legacy_playlist(key, bytes),
+        value: raw,
+        schema_version: 0,
+    })
 }
 
 fn outcome_from_parsed(
@@ -276,6 +316,7 @@ fn outcome_from_parsed(
         recovered,
         corrupt,
         quarantined,
+        unsafe_legacy_playlist: parsed.unsafe_legacy_playlist,
     }
 }
 
@@ -287,6 +328,7 @@ fn missing_outcome(corrupt: bool, quarantined: bool) -> ReadOutcome {
         recovered: false,
         corrupt,
         quarantined,
+        unsafe_legacy_playlist: false,
     }
 }
 
@@ -313,17 +355,139 @@ fn is_unsafe_legacy_playlist(key: &str, bytes: &[u8]) -> bool {
     if !key.to_ascii_lowercase().contains("playlist") {
         return false;
     }
+
+    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+        return value_contains_credentials(&value);
+    }
+
+    // Malformed legacy files cannot be traversed structurally. Keep this raw
+    // fail-closed check narrow so credential bytes are deleted, never copied.
     let lower = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     [
         "password=",
         "username=",
+        "user=",
+        "pass=",
+        "token=",
+        "auth=",
+        "api_key=",
+        "apikey=",
         "\"password\"",
         "\"credential",
-        "authorization",
-        "bearer ",
+        "\"authorization\"",
     ]
     .iter()
     .any(|marker| lower.contains(marker))
+        || contains_xtream_path(&lower)
+        || contains_url_userinfo(&lower)
+}
+
+fn value_contains_credentials(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            let key = key.to_ascii_lowercase();
+            matches!(
+                key.as_str(),
+                "password"
+                    | "passwd"
+                    | "pass"
+                    | "username"
+                    | "user"
+                    | "credential"
+                    | "credentials"
+                    | "authorization"
+                    | "token"
+                    | "access_token"
+                    | "auth"
+                    | "api_key"
+                    | "apikey"
+            ) || value_contains_credentials(value)
+        }),
+        Value::Array(values) => values.iter().any(value_contains_credentials),
+        Value::String(text) => string_contains_credentials(text),
+        _ => false,
+    }
+}
+
+fn string_contains_credentials(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    if lower.trim_start().starts_with("bearer ")
+        || [
+            "password=",
+            "username=",
+            "user=",
+            "pass=",
+            "token=",
+            "auth=",
+            "api_key=",
+            "apikey=",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return true;
+    }
+
+    if let Ok(url) = reqwest::Url::parse(text) {
+        if !url.username().is_empty() || url.password().is_some() {
+            return true;
+        }
+        if url.query_pairs().any(|(name, value)| {
+            !value.is_empty()
+                && matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "password"
+                        | "passwd"
+                        | "pass"
+                        | "username"
+                        | "user"
+                        | "token"
+                        | "access_token"
+                        | "auth"
+                        | "api_key"
+                        | "apikey"
+                )
+        }) {
+            return true;
+        }
+    }
+
+    contains_xtream_path(&lower)
+}
+
+fn contains_xtream_path(text: &str) -> bool {
+    let path = text.split(['?', '#']).next().unwrap_or(text);
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    segments.windows(4).any(|window| {
+        matches!(window[0], "live" | "movie" | "series")
+            && !window[1].is_empty()
+            && !window[2].is_empty()
+            && !window[3].is_empty()
+    })
+}
+
+fn contains_url_userinfo(text: &str) -> bool {
+    text.split_whitespace().any(|part| {
+        part.find("://").is_some_and(|scheme_end| {
+            let authority = &part[scheme_end + 3..];
+            authority
+                .split(['/', '?', '#'])
+                .next()
+                .is_some_and(|host| host.contains('@') && host.contains(':'))
+        })
+    })
+}
+
+fn unique_suffix() -> String {
+    let id = UNIQUE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{}-{nanos}-{id}", std::process::id())
 }
 
 fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -334,8 +498,7 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .ok_or_else(|| "The app state path has no file name.".to_string())?
         .to_string_lossy();
-    let id = UNIQUE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temporary = parent.join(format!("{name}.tmp-{}-{id}", std::process::id()));
+    let temporary = parent.join(format!("{name}.tmp-{}", unique_suffix()));
 
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -360,16 +523,51 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
+fn dispose_invalid(path: &Path, unsafe_bytes: bool) -> Result<bool, String> {
+    if unsafe_bytes {
+        secure_delete_best_effort(path)?;
+        Ok(false)
+    } else {
+        quarantine(path)
+    }
+}
+
 fn quarantine(path: &Path) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
-    let id = UNIQUE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let destination = path.with_file_name(format!("{name}.corrupt-{}-{id}", std::process::id()));
+    let destination = path.with_file_name(format!("{name}.corrupt-{}", unique_suffix()));
     fs::rename(path, destination)
         .map_err(|error| format!("Could not quarantine corrupt app state: {error}"))?;
     Ok(true)
+}
+
+fn secure_delete_best_effort(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    // Overwriting is advisory (copy-on-write filesystems and SSD wear leveling
+    // may retain blocks), but it reduces exposure on conventional filesystems.
+    if let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) {
+        if let Ok(length) = file.metadata().map(|metadata| metadata.len()) {
+            if file.seek(SeekFrom::Start(0)).is_ok() {
+                let zeroes = [0_u8; 8192];
+                let mut remaining = length;
+                while remaining > 0 {
+                    let count = remaining.min(zeroes.len() as u64) as usize;
+                    if file.write_all(&zeroes[..count]).is_err() {
+                        break;
+                    }
+                    remaining -= count as u64;
+                }
+                let _ = file.sync_all();
+            }
+        }
+    }
+
+    remove_if_exists(path)
 }
 
 fn remove_if_exists(path: &Path) -> Result<(), String> {
@@ -527,15 +725,20 @@ mod tests {
     }
 
     #[test]
-    fn oversize_payload_is_rejected_without_touching_primary() {
+    fn oversize_payload_is_rejected_without_touching_primary_or_backup() {
         let directory = TestDirectory::new("oversize");
         let store = Store::new(directory.0.clone());
+        store.write("large", &json!({"generation": 1})).unwrap();
+        store.write("large", &json!({"generation": 2})).unwrap();
+        let primary_before = fs::read(store.path("large")).unwrap();
+        let backup_before = fs::read(store.backup_path("large")).unwrap();
         let oversized = json!("x".repeat(MAX_STATE_BYTES));
 
         let error = store.write("large", &oversized).unwrap_err();
 
         assert!(error.contains("too large"));
-        assert!(!store.path("large").exists());
+        assert_eq!(fs::read(store.path("large")).unwrap(), primary_before);
+        assert_eq!(fs::read(store.backup_path("large")).unwrap(), backup_before);
     }
 
     #[test]
@@ -589,6 +792,7 @@ mod tests {
         let names = fs::read_dir(&directory.0)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".corrupt-"))
             .collect::<Vec<_>>();
         assert!(names.iter().all(|name| !name.contains("secret")));
         assert_eq!(names.len(), 2);
@@ -608,6 +812,108 @@ mod tests {
 
         assert!(error.contains("credentials"));
         assert!(!store.path("playlist:snapshot").exists());
+    }
+
+    #[test]
+    fn detects_real_legacy_playlist_credential_variants_conservatively() {
+        let unsafe_urls = [
+            "http://tv/live/alice/s3cret/123.ts",
+            "https://tv/movie/alice/s3cret/456.mkv",
+            "https://tv/series/alice/s3cret/789.mkv",
+            "http://alice:s3cret@tv.example/list.m3u",
+            "http://tv/get.php?user=alice&pass=s3cret&type=m3u_plus",
+            "http://tv/list?token=secret-token",
+            "http://tv/list?auth=secret-token",
+            "http://tv/list?api_key=secret-token",
+        ];
+        for url in unsafe_urls {
+            let bytes = serde_json::to_vec(&json!({"url": url})).unwrap();
+            assert!(
+                is_unsafe_legacy_playlist("playlist:snapshot", &bytes),
+                "missed {url}"
+            );
+        }
+
+        for safe in [
+            "http://tv/live/news/123.ts",
+            "http://tv/list?category=movies",
+            "a bearer of good news",
+        ] {
+            let bytes = serde_json::to_vec(&json!({"label": safe})).unwrap();
+            assert!(
+                !is_unsafe_legacy_playlist("playlist:snapshot", &bytes),
+                "false positive for {safe}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsafe_legacy_playlist_is_returned_only_with_explicit_flag() {
+        let directory = TestDirectory::new("unsafe-read-metadata");
+        let store = Store::new(directory.0.clone());
+        let key = "playlist:snapshot";
+        let legacy = json!({"url": "http://tv/live/alice/s3cret/123.ts"});
+        fs::write(store.path(key), serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert_eq!(loaded.value, Some(legacy));
+        assert_eq!(loaded.schema_version, Some(0));
+        assert!(loaded.unsafe_legacy_playlist);
+        assert!(!loaded.quarantined);
+    }
+
+    #[test]
+    fn application_value_with_schema_version_is_legacy_not_an_envelope() {
+        let directory = TestDirectory::new("schema-version-value");
+        let store = Store::new(directory.0.clone());
+        let value = json!({"schemaVersion": 99, "theme": "dark"});
+        fs::write(store.path("settings"), serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let loaded = store.read("settings").unwrap();
+
+        assert_eq!(loaded.value, Some(value));
+        assert_eq!(loaded.schema_version, Some(0));
+    }
+
+    #[test]
+    fn exact_ddeedd2_envelope_remains_readable() {
+        let directory = TestDirectory::new("old-envelope");
+        let store = Store::new(directory.0.clone());
+        fs::write(
+            store.path("settings"),
+            serde_json::to_vec(&json!({"schemaVersion": 1, "value": {"theme": "dark"}})).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.read("settings").unwrap();
+
+        assert_eq!(loaded.value, Some(json!({"theme": "dark"})));
+        assert_eq!(loaded.schema_version, Some(1));
+    }
+
+    #[test]
+    fn ddeedd2_playlist_envelope_with_missed_credentials_is_flagged_for_rewrite() {
+        let directory = TestDirectory::new("old-unsafe-envelope");
+        let store = Store::new(directory.0.clone());
+        let key = "playlist:snapshot";
+        fs::write(
+            store.path(key),
+            serde_json::to_vec(&json!({
+                "schemaVersion": 1,
+                "value": {"url": "http://tv/live/alice/secret/123.ts"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert!(loaded.unsafe_legacy_playlist);
+        assert_eq!(
+            loaded.value,
+            Some(json!({"url": "http://tv/live/alice/secret/123.ts"}))
+        );
     }
 
     #[test]
@@ -635,7 +941,77 @@ mod tests {
     }
 
     #[test]
-    fn stale_temporary_files_are_cleaned_before_write() {
+    fn replacing_unsafe_primary_preserves_safe_backup_until_primary_succeeds() {
+        let directory = TestDirectory::new("unsafe-safe-lkg");
+        let store = Store::new(directory.0.clone());
+        let key = "playlist:snapshot";
+        store
+            .write(key, &json!({"safe": "last-known-good"}))
+            .unwrap();
+        store.write(key, &json!({"safe": "newer"})).unwrap();
+        fs::write(
+            store.path(key),
+            serde_json::to_vec(&json!({"url": "http://alice:secret@tv/list"})).unwrap(),
+        )
+        .unwrap();
+        let backup_before = fs::read(store.backup_path(key)).unwrap();
+
+        store.write(key, &json!({"migrated": true})).unwrap();
+
+        assert_eq!(fs::read(store.backup_path(key)).unwrap(), backup_before);
+        assert_eq!(
+            store.read(key).unwrap().value,
+            Some(json!({"migrated": true}))
+        );
+    }
+
+    #[test]
+    fn unsafe_corrupt_files_are_deleted_instead_of_quarantined() {
+        let directory = TestDirectory::new("unsafe-corrupt-delete");
+        let store = Store::new(directory.0.clone());
+        let key = "playlist:snapshot";
+        fs::write(store.path(key), b"{broken password=plain-secret").unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert!(!loaded.exists);
+        assert!(loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(!store.path(key).exists());
+        assert!(fs::read_dir(&directory.0).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("corrupt")));
+    }
+
+    #[test]
+    fn safe_rewrite_securely_deletes_an_unsafe_backup_after_primary_succeeds() {
+        let directory = TestDirectory::new("unsafe-backup-rewrite");
+        let store = Store::new(directory.0.clone());
+        let key = "playlist:snapshot";
+        let unsafe_backup = json!({"url": "http://tv/movie/alice/secret/456.mkv"});
+        fs::write(
+            store.backup_path(key),
+            serde_json::to_vec(&unsafe_backup).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.read(key).unwrap();
+        assert!(loaded.unsafe_legacy_playlist);
+        assert!(store.backup_path(key).exists());
+
+        store.write(key, &json!({"sanitized": true})).unwrap();
+
+        assert!(!store.backup_path(key).exists());
+        assert_eq!(
+            store.read(key).unwrap().value,
+            Some(json!({"sanitized": true}))
+        );
+    }
+
+    #[test]
+    fn temporary_files_owned_by_other_operations_are_not_deleted() {
         let directory = TestDirectory::new("temp-cleanup");
         let store = Store::new(directory.0.clone());
         let stale = directory.0.join(format!(
@@ -650,12 +1026,7 @@ mod tests {
 
         store.write("settings", &json!(1)).unwrap();
 
-        assert!(!stale.exists());
-        assert!(fs::read_dir(&directory.0).unwrap().all(|entry| !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .contains(".tmp-")));
+        assert!(stale.exists());
     }
 
     #[test]
