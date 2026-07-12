@@ -2,9 +2,9 @@
 
 **Metadata date:** 2026-07-12
 
-**Status:** Hardened release candidate metadata; packaging, installer smoke testing, and final release review are pending.
+**Status:** Hardened release candidate; local packaging and installer smoke testing are complete, while final release review remains pending.
 
-Onyx v0.5.8 hardens credential handling, local-state integrity, EPG processing, and release inputs. These notes describe the code and metadata prepared for verification; they do not certify that installers have been built or approved for publication.
+Onyx v0.5.8 hardens credential handling, local-state integrity, EPG processing, and release inputs. These notes record completed local verification evidence; publication still requires final approval and a clean rebuild whenever review changes code.
 
 ## Security and privacy
 
@@ -44,20 +44,20 @@ The 2026-07-12 pinned-lockfile audit reports **0 vulnerabilities** and **17 warn
 
 The following status is intentionally explicit and must be updated from real gate output before publication:
 
-- [x] Clean `npm ci`, `npm run check`, `npm test` (**157 tests**), and `npm run build` passed at `7b3ceae` on 2026-07-12
-- [x] Locked Windows-target Rust tests (**73 tests**) passed at `7b3ceae` on 2026-07-12
+- [x] Clean `npm ci`, `npm run check`, `npm test` (**157 tests**), and `npm run build` passed for candidate `324c6ae` on 2026-07-12
+- [x] Locked Windows-target Rust tests (**77 tests**) passed for candidate `324c6ae` on 2026-07-12
 - [x] Rust formatting, strict Clippy (`-D warnings`), and npm audit (**0 vulnerabilities**) passed
 - [x] Cargo audit warnings reviewed and dispositioned in [`docs/security/cargo-audit-v0.5.8.md`](docs/security/cargo-audit-v0.5.8.md) on 2026-07-12
 - [x] Pinned Node 24.18.0, npm 11.16.0, Rust 1.95.0, and native dependency hash/PE checks completed
 - [x] MSI and NSIS packaging completed from locked dependencies
-- [x] Packaged smoke completed with isolated state: MSI administrative extraction, NSIS silent install, exact production window title, stability window, payload checks, cleanup, and restoration of the pre-existing app-data directory
+- [x] Exact-candidate packaged smoke completed with isolated state: MSI administrative extraction, NSIS silent install, rendered `NATIVE PLAYER READY`/empty state, UI Automation opening and verifying Settings/Sources/EPG, stability window, payload checks, cleanup, and restoration of the pre-existing app-data directory
 - [x] Windows Credential Manager save/load/delete roundtrip passed with a temporary non-secret `example.invalid` value; the smoke credential was confirmed absent afterward
 - [x] Credential/artifact scan completed for `dist`, MSI extraction, NSIS installation, and final bundle directories
 - [ ] Final independent security, specification, and code-quality review approved
 
 Final local artifacts:
 
-- `Onyx_0.5.8_x64_en-US.msi` — 45,084,672 bytes — SHA-256 `eb5fca47fd2f9c9280886f848b02cb989841deb78d3211b793ee3e4609074722`
-- `Onyx_0.5.8_x64-setup.exe` — 33,436,975 bytes — SHA-256 `e231980333b8bac6aedb5636451aabd5e06d3d25e185da65ca25692cd46f207c`
+- `Onyx_0.5.8_x64_en-US.msi` — 45,092,864 bytes — SHA-256 `1154c5a5e1823bbd7de791bab64890cfdfc7050d394537fbe965b565fc0f8853`
+- `Onyx_0.5.8_x64-setup.exe` — 33,440,988 bytes — SHA-256 `3bd11972481d68b32a0da5a5da0cd369549c7c541252770a68af6bc6b425771c`
 
 Do not publish or describe v0.5.8 as release-complete until every applicable item above has evidence and the packaging/smoke/final-review items are checked.
