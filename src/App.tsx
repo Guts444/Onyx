@@ -826,7 +826,7 @@ function App() {
     try {
       const playlistText = await file.text();
       const importedPlaylist = parseM3u(playlistText, file.name, {
-        sourceId: createLocalM3uSourceIdentity(file.name),
+        sourceId: createLocalM3uSourceIdentity(file.name, playlistText),
         trust: "trusted-local",
       });
       await applyImportedPlaylist(importedPlaylist, {

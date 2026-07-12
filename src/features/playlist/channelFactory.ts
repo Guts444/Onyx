@@ -39,6 +39,8 @@ const SHA_256_ROUND_CONSTANTS = [
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
   0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
+const SENSITIVE_QUERY_PARAMETER = /^(?:access_?token|api_?key|auth|authorization|credential|key|pass|password|secret|signature|token|user|username)$/i;
+const XTREAM_PATH_KINDS = new Set(["live", "movie", "series"]);
 
 export interface ChannelSeed {
   name: string;
@@ -144,8 +146,40 @@ function sha256(value: string) {
   return state.map((word) => word.toString(16).padStart(8, "0")).join("");
 }
 
-function createChannelId(sourceId: string, name: string, group: string, stream: string) {
-  return `channel_${sha256(JSON.stringify([sourceId, name, group, stream]))}`;
+export function canonicalizeStreamIdentity(stream: string) {
+  const trimmedStream = stream.trim();
+
+  try {
+    const url = new URL(trimmedStream);
+    url.username = "";
+    url.password = "";
+
+    const pathSegments = url.pathname.split("/");
+    const xtreamKindIndex = pathSegments.findIndex((segment) =>
+      XTREAM_PATH_KINDS.has(segment.toLowerCase()),
+    );
+
+    if (xtreamKindIndex >= 0 && pathSegments.length > xtreamKindIndex + 3) {
+      pathSegments[xtreamKindIndex + 1] = "__user__";
+      pathSegments[xtreamKindIndex + 2] = "__secret__";
+      url.pathname = pathSegments.join("/");
+    }
+
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (SENSITIVE_QUERY_PARAMETER.test(key)) {
+        url.searchParams.set(key, "__secret__");
+      }
+    }
+    url.searchParams.sort();
+    url.hash = "";
+    return url.href;
+  } catch {
+    return trimmedStream;
+  }
+}
+
+function createChannelId(sourceId: string, stream: string) {
+  return `channel_${sha256(JSON.stringify([sourceId, canonicalizeStreamIdentity(stream)]))}`;
 }
 
 export function createLegacyChannelId(name: string, group: string, stream: string) {
@@ -160,8 +194,8 @@ export function createLegacyChannelId(name: string, group: string, stream: strin
   return `channel_${Math.abs(hash).toString(36)}`;
 }
 
-export function createLocalM3uSourceIdentity(fileName: string) {
-  return `local-file_${sha256(fileName.trim().toLowerCase())}`;
+export function createLocalM3uSourceIdentity(fileName: string, playlistText: string) {
+  return `local-file_${sha256(JSON.stringify([fileName.trim().toLowerCase(), sha256(playlistText)]))}`;
 }
 
 export function normalizeStreamReference(
@@ -235,7 +269,7 @@ export function buildChannel(seed: ChannelSeed, context: StreamOriginContext): C
   const normalizedStream = normalizeStreamReference(seed.stream, context);
 
   return {
-    id: createChannelId(context.sourceId, name, group, normalizedStream.stream),
+    id: createChannelId(context.sourceId, normalizedStream.stream),
     name,
     group,
     stream: normalizedStream.stream,

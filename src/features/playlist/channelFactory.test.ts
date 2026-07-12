@@ -149,7 +149,7 @@ test("normalizeStreamReference trims whitespace before processing", () => {
   });
 });
 
-test("buildChannel creates deterministic 256-bit source-aware IDs", () => {
+test("buildChannel creates deterministic standards-compatible source-aware IDs", () => {
   const seed = {
     name: "News",
     group: "Live",
@@ -166,6 +166,58 @@ test("buildChannel creates deterministic 256-bit source-aware IDs", () => {
   assert.equal(first.id, repeated.id);
   assert.notEqual(first.id, otherSource.id);
   assert.match(first.id, /^channel_[0-9a-f]{64}$/);
+  assert.equal(
+    first.id,
+    "channel_18013436aecfd18d8d0c81f11232f292045f205a34df8440966e8fe6f2dd4eb8",
+  );
+});
+
+test("buildChannel identity survives Xtream credential rotation", () => {
+  const before = buildChannel(
+    {
+      name: "News",
+      group: "Live",
+      stream: "https://provider.example/live/old-user/old-password/42.ts",
+    },
+    REMOTE_SOURCE,
+  );
+  const after = buildChannel(
+    {
+      name: "Renamed News",
+      group: "Updated Group",
+      stream: "https://provider.example/live/new-user/new-password/42.ts",
+    },
+    REMOTE_SOURCE,
+  );
+
+  assert.equal(before.id, after.id);
+});
+
+test("buildChannel identity redacts rotating URL credentials but distinguishes streams", () => {
+  const first = buildChannel(
+    {
+      name: "News",
+      stream: "https://user:password@example.com/watch/42?token=first&username=old&password=old",
+    },
+    REMOTE_SOURCE,
+  );
+  const rotated = buildChannel(
+    {
+      name: "News renamed",
+      stream: "https://new:secret@example.com/watch/42?token=second&username=new&password=new",
+    },
+    REMOTE_SOURCE,
+  );
+  const otherStream = buildChannel(
+    {
+      name: "News",
+      stream: "https://user:password@example.com/watch/43?token=first",
+    },
+    REMOTE_SOURCE,
+  );
+
+  assert.equal(first.id, rotated.id);
+  assert.notEqual(first.id, otherStream.id);
 });
 
 test("buildChannel identity encoding keeps field boundaries unambiguous", () => {
@@ -203,11 +255,16 @@ test("buildChannel IDs remain unique for a large deterministic fixture", () => {
   assert.equal(ids.size, fixtureSize);
 });
 
-test("createLocalM3uSourceIdentity is deterministic and does not expose the file name", () => {
-  const first = createLocalM3uSourceIdentity("Private Channels.m3u");
-  const repeated = createLocalM3uSourceIdentity("Private Channels.m3u");
+test("createLocalM3uSourceIdentity is content-aware and does not expose the file name", () => {
+  const first = createLocalM3uSourceIdentity("Private Channels.m3u", "#EXTM3U\nhttps://one");
+  const repeated = createLocalM3uSourceIdentity("Private Channels.m3u", "#EXTM3U\nhttps://one");
+  const sameNameDifferentContent = createLocalM3uSourceIdentity(
+    "Private Channels.m3u",
+    "#EXTM3U\nhttps://two",
+  );
 
   assert.equal(first, repeated);
+  assert.notEqual(first, sameNameDifferentContent);
   assert.match(first, /^local-file_[0-9a-f]{64}$/);
   assert.equal(first.includes("Private Channels"), false);
 });
