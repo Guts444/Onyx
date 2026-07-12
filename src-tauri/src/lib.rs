@@ -705,6 +705,35 @@ mod tests {
         XTREAM_SECRET_SERVICE_PROD,
     };
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_credential_entries_build_with_native_backend_for_all_secret_types() {
+        for (credential_type, entry) in [
+            (
+                "M3U",
+                super::get_m3u_url_secret_entry("test:m3u-builder")
+                    .expect("M3U credential entry should build"),
+            ),
+            (
+                "Xtream",
+                super::get_xtream_secret_entry("test:xtream-builder")
+                    .expect("Xtream credential entry should build"),
+            ),
+            (
+                "EPG",
+                super::get_epg_url_secret_entry("test:epg-builder")
+                    .expect("EPG credential entry should build"),
+            ),
+        ] {
+            assert!(
+                entry
+                    .get_credential()
+                    .is::<keyring::windows::WinCredential>(),
+                "{credential_type} entry should use the Windows native credential builder"
+            );
+        }
+    }
+
     #[test]
     fn secret_services_are_isolated_between_build_profiles_and_credential_types() {
         let production = [
