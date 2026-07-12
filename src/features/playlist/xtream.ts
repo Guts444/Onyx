@@ -7,6 +7,7 @@ interface XtreamChannelPayload {
   name: string;
   group: string;
   stream: string;
+  isDirectSource: boolean;
   logo: string | null;
   tvgId: string | null;
   tvgName: string | null;
@@ -40,6 +41,7 @@ export async function importXtreamPlaylist(
         tvgName: channel.tvgName,
       },
       sourceId,
+      channel.isDirectSource,
     ),
   );
 

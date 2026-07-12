@@ -147,6 +147,50 @@ function sha256(value: string) {
   return state.map((word) => word.toString(16).padStart(8, "0")).join("");
 }
 
+function rawUrlPath(value: string) {
+  const authorityIndex = value.indexOf("//");
+  const pathIndex = value.indexOf("/", authorityIndex + 2);
+  return pathIndex < 0 ? "/" : value.slice(pathIndex).split(/[?#]/, 1)[0];
+}
+
+function looksLikeXtreamKind(rawSegment: string) {
+  let decoded = rawSegment;
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = decoded.replace(/%([0-9a-f]{2})/gi, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
+    if (next === decoded) break;
+    decoded = next;
+  }
+
+  const normalized = decoded.toLowerCase().replace(/%[0-9a-z]{2}/g, "");
+  return Array.from(XTREAM_PATH_KINDS).some(
+    (kind) => normalized === kind || normalized.startsWith(`${kind}/`) || normalized.startsWith(`${kind}\\`),
+  );
+}
+
+function opaqueStreamIdentity(url: URL, originalPath: string) {
+  const pathSegments = originalPath.split("/");
+  const xtreamKindIndex = pathSegments.findIndex(looksLikeXtreamKind);
+  if (xtreamKindIndex >= 0 && pathSegments.length > xtreamKindIndex + 3) {
+    pathSegments[xtreamKindIndex + 1] = "__user__";
+    pathSegments[xtreamKindIndex + 2] = "__secret__";
+  }
+
+  for (const key of Array.from(url.searchParams.keys())) {
+    if (SENSITIVE_QUERY_PARAMETER.test(key)) url.searchParams.set(key, "__secret__");
+  }
+  url.searchParams.sort();
+
+  return `opaque-stream:${sha256(JSON.stringify([
+    url.protocol,
+    url.hostname.toLowerCase(),
+    url.port,
+    pathSegments.join("/"),
+    url.search,
+  ]))}`;
+}
+
 export function canonicalizeStreamIdentity(stream: string) {
   const trimmedStream = stream.trim();
 
@@ -156,10 +200,13 @@ export function canonicalizeStreamIdentity(stream: string) {
     url.password = "";
 
     const pathSegments = url.pathname.split("/");
-    const authorityIndex = trimmedStream.indexOf("//");
-    const pathIndex = trimmedStream.indexOf("/", authorityIndex + 2);
-    const originalPath = pathIndex < 0 ? "/" : trimmedStream.slice(pathIndex).split(/[?#]/, 1)[0];
-    const decodedSegments = decodeSafePathSegments(originalPath);
+    const originalPath = rawUrlPath(trimmedStream);
+    let decodedSegments: string[];
+    try {
+      decodedSegments = decodeSafePathSegments(originalPath);
+    } catch {
+      return opaqueStreamIdentity(url, originalPath);
+    }
     const xtreamKindIndex = decodedSegments.findIndex((segment) =>
       XTREAM_PATH_KINDS.has(segment.toLowerCase()),
     );
@@ -180,7 +227,7 @@ export function canonicalizeStreamIdentity(stream: string) {
     url.hash = "";
     return url.href;
   } catch {
-    return trimmedStream;
+    return `opaque-stream:${sha256(trimmedStream)}`;
   }
 }
 

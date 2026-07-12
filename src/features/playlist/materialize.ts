@@ -43,19 +43,27 @@ export function stripXtreamChannelCredentials(channel: Channel, streamUrl: strin
   return { ...channel, stream: null, originalStream: null, streamDescriptor: createXtreamStreamDescriptor(streamUrl) };
 }
 
-export function buildCredentialFreeXtreamChannel(seed: ChannelSeed, sourceId: string): Channel {
+function buildDisplayOnlyDirectChannel(channel: Channel): Channel {
+  return {
+    ...channel,
+    stream: null,
+    originalStream: null,
+    streamDescriptor: { kind: "direct" },
+    isPlayable: false,
+    playabilityError: "This provider direct source cannot be saved safely. Refresh the source to retry.",
+  };
+}
+
+export function buildCredentialFreeXtreamChannel(
+  seed: ChannelSeed,
+  sourceId: string,
+  isDirectSource = false,
+): Channel {
   const channel = buildChannel(seed, { sourceId, trust: "remote" });
+  if (isDirectSource) return buildDisplayOnlyDirectChannel(channel);
+
   try { return stripXtreamChannelCredentials(channel, seed.stream); }
-  catch {
-    return {
-      ...channel,
-      stream: null,
-      originalStream: null,
-      streamDescriptor: { kind: "direct" },
-      isPlayable: false,
-      playabilityError: "This provider direct source cannot be saved safely. Refresh the source to retry.",
-    };
-  }
+  catch { return buildDisplayOnlyDirectChannel(channel); }
 }
 
 export function materializeChannelForPlayback(

@@ -21,6 +21,7 @@ struct XtreamChannelPayload {
     name: String,
     group: String,
     stream: String,
+    is_direct_source: bool,
     logo: Option<String>,
     tvg_id: Option<String>,
     tvg_name: Option<String>,
@@ -363,6 +364,19 @@ fn build_xtream_stream_url(
     Ok(url.to_string())
 }
 
+fn choose_xtream_stream<F>(
+    direct_source: Option<String>,
+    build_generated_stream: F,
+) -> Result<(String, bool), String>
+where
+    F: FnOnce() -> Result<String, String>,
+{
+    match direct_source {
+        Some(source) => Ok((source, true)),
+        None => build_generated_stream().map(|stream| (stream, false)),
+    }
+}
+
 #[tauri::command]
 async fn fetch_playlist_from_url(url: String) -> Result<String, String> {
     let normalized_url = normalize_playlist_url_input(&url)?;
@@ -501,22 +515,21 @@ async fn fetch_xtream_live_channels(
             .cloned()
             .unwrap_or_else(|| "Ungrouped".to_string());
         let direct_source = get_string(stream.get("direct_source"));
-        let stream_url = if let Some(source) = direct_source {
-            source
-        } else {
+        let (stream_url, is_direct_source) = choose_xtream_stream(direct_source, || {
             build_xtream_stream_url(
                 &stream_origin,
                 trimmed_username,
                 trimmed_password,
                 &stream_id,
                 &output_extension,
-            )?
-        };
+            )
+        })?;
 
         channels.push(XtreamChannelPayload {
             name: channel_name,
             group: group_name,
             stream: stream_url,
+            is_direct_source,
             logo: get_string(stream.get("stream_icon")),
             tvg_id: get_string(stream.get("epg_channel_id")),
             tvg_name: get_string(stream.get("name")),
@@ -531,6 +544,38 @@ async fn fetch_xtream_live_channels(
         provider_name,
         channels,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{choose_xtream_stream, XtreamChannelPayload};
+
+    #[test]
+    fn xtream_direct_source_selection_marks_provider_provenance() {
+        let direct = "https://cdn.example/live/vendor/provider-pass/42.ts".to_string();
+        let selected = choose_xtream_stream(Some(direct.clone()), || {
+            panic!("generated Xtream URL must not be selected for a direct source")
+        })
+        .expect("direct source should be selected");
+
+        assert_eq!(selected, (direct, true));
+    }
+
+    #[test]
+    fn xtream_channel_payload_serializes_explicit_direct_source_provenance() {
+        let payload = XtreamChannelPayload {
+            name: "Direct News".to_string(),
+            group: "Live".to_string(),
+            stream: "https://cdn.example/live/vendor/provider-pass/42.ts".to_string(),
+            is_direct_source: true,
+            logo: None,
+            tvg_id: None,
+            tvg_name: None,
+        };
+
+        let serialized = serde_json::to_value(payload).expect("payload should serialize");
+        assert_eq!(serialized["isDirectSource"], true);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

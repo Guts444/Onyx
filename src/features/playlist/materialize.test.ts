@@ -108,6 +108,21 @@ test("materialization validates forged descriptors and normalizes the runtime do
   }
 });
 
+test("Xtream-shaped provider direct sources remain credential-free display-only channels", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    { name: "Direct", stream: "https://cdn.example/live/vendor/provider-pass/42.ts" },
+    "source_xtream",
+    true,
+  );
+
+  assert.equal(channel.stream, null);
+  assert.equal(channel.originalStream, null);
+  assert.deepStrictEqual(channel.streamDescriptor, { kind: "direct" });
+  assert.equal(channel.isPlayable, false);
+  assert.match(channel.playabilityError ?? "", /direct source|refresh/i);
+  assert.equal(JSON.stringify(channel).includes("provider-pass"), false);
+});
+
 test("nonstandard Xtream direct sources become credential-free display-only channels", () => {
   const channel = buildCredentialFreeXtreamChannel(
     { name: "Direct", stream: "https://cdn.example/watch.m3u8?username=viewer&password=super-secret" },

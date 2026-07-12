@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import {
   buildChannel,
+  canonicalizeStreamIdentity,
   createLegacyChannelId,
   createLocalM3uSourceIdentity,
   normalizeStreamReference,
@@ -197,6 +198,31 @@ test("buildChannel identity survives Xtream credential rotation", () => {
   );
 
   assert.equal(before.id, after.id);
+});
+
+test("malformed Xtream paths produce stable credential-free opaque identities", () => {
+  const malformedPaths = [
+    (user: string, password: string) => `l%ZZive/${user}/${password}/42.ts`,
+    (user: string, password: string) => `%256cive/${user}/${password}/42.ts`,
+    (user: string, password: string) => `live%252fadmin/${user}/${password}/42.ts`,
+    (user: string, password: string) => `live%255cadmin/${user}/${password}/42.ts`,
+    (user: string, password: string) => `live/${user}/${password}/../42.ts`,
+  ];
+
+  for (const buildPath of malformedPaths) {
+    const before = canonicalizeStreamIdentity(
+      `https://old-login:old-userinfo-secret@provider.example/${buildPath("old-user", "old-password")}?token=old-token`,
+    );
+    const after = canonicalizeStreamIdentity(
+      `https://new-login:new-userinfo-secret@provider.example/${buildPath("new-user", "new-password")}?token=new-token`,
+    );
+
+    assert.equal(before, after);
+    assert.match(before, /^opaque-stream:[0-9a-f]{64}$/);
+    for (const secret of ["old-login", "old-userinfo-secret", "old-user", "old-password", "old-token"]) {
+      assert.equal(before.includes(secret), false, `identity retained ${secret}`);
+    }
+  }
 });
 
 test("buildChannel identity redacts rotating URL credentials but distinguishes streams", () => {
