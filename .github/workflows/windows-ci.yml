@@ -1,0 +1,97 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-and-build:
+    name: Windows security and build gates
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      # actions/checkout v7.0.0
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      # actions/setup-node v6.4.0
+      - name: Set up Node.js 24.18.0 with lockfile cache
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install pinned npm
+        shell: pwsh
+        run: npm install --global npm@11.16.0
+
+      - name: Set up pinned Rust MSVC toolchain
+        shell: pwsh
+        run: |
+          rustup set profile minimal
+          rustup toolchain install 1.95.0-x86_64-pc-windows-msvc --component rustfmt,clippy --target x86_64-pc-windows-msvc
+          rustup default 1.95.0-x86_64-pc-windows-msvc
+
+      - name: Verify toolchain
+        shell: pwsh
+        run: ./scripts/check-toolchain.ps1
+
+      - name: Install JavaScript dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: JavaScript tests, type check, build, and audit
+        shell: pwsh
+        run: |
+          npm test
+          npm run check
+          npm run build
+          npm audit --audit-level=high
+
+      - name: Fetch and verify immutable native dependencies
+        shell: pwsh
+        run: |
+          ./scripts/fetch-native-deps.ps1
+          ./scripts/verify-native-deps.ps1
+
+      - name: Rust formatting, tests, and Clippy
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --all-features --target x86_64-pc-windows-msvc
+          cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-features --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+      - name: Install and run pinned cargo-audit
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file src-tauri/Cargo.lock
+
+      - name: Repository and generated-artifact secret scan
+        shell: pwsh
+        run: |
+          python scripts/scan-repository-secrets.py --self-test
+          python scripts/scan-repository-secrets.py dist
+
+      - name: Check patch whitespace
+        shell: pwsh
+        run: |
+          git diff --check
+          if (git rev-parse --verify HEAD^ 2>$null) { git diff --check HEAD^ HEAD }
+
+      - name: Compile Tauri release without bundling
+        shell: pwsh
+        run: npm run tauri -- build --no-bundle --ci
