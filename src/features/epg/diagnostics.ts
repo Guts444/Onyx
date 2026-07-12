@@ -10,6 +10,16 @@ interface EpgDirectoryDiagnosticInput extends EpgDiagnosticInput {
   skippedProgrammeCount: number;
 }
 
+function isStorageRepairWarning(warning: string) {
+  const normalized = warning.toLowerCase();
+  return (
+    normalized.includes("recovered") &&
+    normalized.includes("epg cache") &&
+    normalized.includes("disk") &&
+    (normalized.includes("could not be repaired") || normalized.includes("repair failed"))
+  );
+}
+
 function categorizeParserWarning(warning: string) {
   const normalized = warning.toLowerCase();
   if (normalized.includes("timestamp") || normalized.includes("time")) {
@@ -27,6 +37,7 @@ function categorizeParserWarning(warning: string) {
 function formatSafeWarningCategories(warnings: string[]) {
   const categories: string[] = [];
   for (const warning of warnings) {
+    if (isStorageRepairWarning(warning)) continue;
     const category = categorizeParserWarning(warning);
     if (!categories.includes(category)) categories.push(category);
     if (categories.length >= MAX_VISIBLE_WARNING_CATEGORIES) break;
@@ -36,10 +47,17 @@ function formatSafeWarningCategories(warnings: string[]) {
 
 function formatRecoveryDiagnostics(input: EpgDiagnosticInput) {
   const messages: string[] = [];
-  if (input.recovered) {
+  const repairFailed = input.recovered && input.warnings.some(isStorageRepairWarning);
+  if (repairFailed) {
+    const corruptDescription = input.corrupt ? " of the corrupt saved EPG cache" : "";
+    messages.push(
+      `A usable recovered copy${corruptDescription} is loaded in memory; disk repair failed and will retry on the next cache load.`,
+    );
+  } else if (input.recovered && input.corrupt) {
+    messages.push("The corrupt saved EPG cache was recovered from backup.");
+  } else if (input.recovered) {
     messages.push("The saved EPG cache was recovered from backup.");
-  }
-  if (input.corrupt) {
+  } else if (input.corrupt) {
     messages.push("The corrupt saved EPG cache was reset.");
   }
   return messages;

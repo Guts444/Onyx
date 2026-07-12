@@ -1,12 +1,4 @@
-function normalizeEpgOperationUrlKey(value: string) {
-  const normalizedValue = value.trim().replace(/^xmltv\s*:\s*/i, "");
-  if (!normalizedValue) return "";
-  try {
-    return new URL(normalizedValue).toString().toLowerCase();
-  } catch {
-    return normalizedValue.toLowerCase();
-  }
-}
+import { normalizeEpgUrlKey } from "./matching.ts";
 
 declare const epgOperationTokenBrand: unique symbol;
 declare const epgBusyStateBrand: unique symbol;
@@ -53,7 +45,7 @@ export function createEpgOperationCoordinator() {
       generation += 1;
       const token = {
         sourceId,
-        urlKey: normalizeEpgOperationUrlKey(url),
+        urlKey: normalizeEpgUrlKey(url),
         configRevision,
         generation,
         isCurrent: () => isCurrent(token),
@@ -89,7 +81,7 @@ export function getEpgSourceCommitState(
   const source = sources.find((candidate) => candidate.id === sourceId);
   return {
     sourceId,
-    urlKey: source ? normalizeEpgOperationUrlKey(source.url) : "",
+    urlKey: source ? normalizeEpgUrlKey(source.url) : "",
     configRevision,
     exists: source !== undefined,
   };
@@ -119,9 +111,9 @@ export function finishEpgSourceOperation(
 export function shouldDeleteSharedEpgCache(sources: EpgSourceLike[], sourceId: string) {
   const removed = sources.find((source) => source.id === sourceId);
   if (!removed) return false;
-  const removedUrlKey = normalizeEpgOperationUrlKey(removed.url);
+  const removedUrlKey = normalizeEpgUrlKey(removed.url);
   if (!removedUrlKey) return false;
   return !sources.some(
-    (source) => source.id !== sourceId && normalizeEpgOperationUrlKey(source.url) === removedUrlKey,
+    (source) => source.id !== sourceId && normalizeEpgUrlKey(source.url) === removedUrlKey,
   );
 }

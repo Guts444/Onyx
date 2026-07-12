@@ -193,9 +193,11 @@ export function normalizeEpgUrlKey(value: string) {
   const normalizedValue = trimmedValue.replace(/^xmltv\s*:\s*/i, "");
 
   try {
-    return new URL(normalizedValue).toString().toLowerCase();
+    const url = new URL(normalizedValue);
+    url.hash = "";
+    return url.toString();
   } catch {
-    return normalizedValue.toLowerCase();
+    return normalizedValue;
   }
 }
 

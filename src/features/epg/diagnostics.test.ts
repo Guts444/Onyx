@@ -7,7 +7,7 @@ import {
   sanitizeEpgSourceLabel,
 } from "./diagnostics.ts";
 
-test("directory diagnostics surface skipped, recovered, and corrupt reset state", () => {
+test("directory diagnostics distinguish corrupt cache recovery from reset", () => {
   const status = formatEpgDirectoryDiagnostics({
     skippedProgrammeCount: 7,
     warnings: [],
@@ -16,8 +16,8 @@ test("directory diagnostics surface skipped, recovered, and corrupt reset state"
   });
 
   assert.match(status, /Skipped 7 malformed programmes/);
-  assert.match(status, /recovered from backup/i);
-  assert.match(status, /corrupt.*reset/i);
+  assert.match(status, /corrupt.*recovered from backup/i);
+  assert.doesNotMatch(status, /reset|repaired/i);
 });
 
 test("parser diagnostics are capped, categorized, and never expose credentials", () => {
@@ -50,6 +50,24 @@ test("empty corrupt store diagnostics remain visible as a recovery warning", () 
 
   assert.match(status, /corrupt.*reset/i);
   assert.doesNotMatch(status, /C:\/|Users|cache\.json/i);
+});
+
+test("failed backup repair reports usable memory state and retry without parser or secret leakage", () => {
+  const secret = "https://provider.test/Guide.xml?Token=top-secret";
+  const status = formatEpgStoreDiagnostics({
+    recovered: true,
+    corrupt: true,
+    warnings: [
+      `The recovered EPG cache could not be repaired on disk. ${secret}`,
+      "The recovered EPG cache could not be repaired on disk again.",
+    ],
+  });
+
+  assert.match(status, /usable.*in memory/i);
+  assert.match(status, /disk repair failed.*will retry/i);
+  assert.doesNotMatch(status, /guide entries|parsed|reset|was repaired/i);
+  assert.doesNotMatch(status, /provider\.test|Guide\.xml|Token|top-secret/i);
+  assert.equal((status.match(/disk repair failed/gi) ?? []).length, 1);
 });
 
 test("refresh failures use a safe source label and omit raw backend errors", () => {

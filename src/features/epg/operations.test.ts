@@ -71,3 +71,25 @@ test("shared normalized URL is deleted only after its last profile is removed", 
   assert.equal(shouldDeleteSharedEpgCache(sources, "epg-a"), false);
   assert.equal(shouldDeleteSharedEpgCache(sources, "epg-c"), true);
 });
+
+test("cache deletion does not collide case-sensitive paths or queries", () => {
+  const sources = [
+    source("epg-a", "https://guide.test/Guide.xml?Token=A"),
+    source("epg-b", "https://guide.test/guide.xml?token=a"),
+  ];
+
+  assert.equal(shouldDeleteSharedEpgCache(sources, "epg-a"), true);
+});
+
+test("operation commit deduplicates equivalent scheme and host casing", () => {
+  const coordinator = createEpgOperationCoordinator();
+  const token = coordinator.start("epg-a", "HTTPS://Guide.Test:443/Guide.xml?Token=A#one", "rev-a");
+  const state = getEpgSourceCommitState(
+    [source("epg-a", "https://guide.test/Guide.xml?Token=A#two")],
+    "epg-a",
+    "https://ignored.test",
+    "rev-a",
+  );
+
+  assert.equal(coordinator.canCommit(token, state), true);
+});
