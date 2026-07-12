@@ -44,8 +44,8 @@ The 2026-07-12 pinned-lockfile audit reports **0 vulnerabilities** and **17 warn
 
 The following status is intentionally explicit and must be updated from real gate output before publication:
 
-- [x] Clean `npm ci`, `npm run check`, `npm test` (**157 tests**), and `npm run build` passed for candidate `324c6ae` on 2026-07-12
-- [x] Locked Windows-target Rust tests (**77 tests**) passed for candidate `324c6ae` on 2026-07-12
+- [x] Clean `npm ci`, `npm run check`, `npm test` (**165 tests**), and `npm run build` passed for candidate `8c164c2` on 2026-07-12
+- [x] Locked Windows-target Rust tests (**77 tests**) passed for candidate `8c164c2` on 2026-07-12
 - [x] Rust formatting, strict Clippy (`-D warnings`), and npm audit (**0 vulnerabilities**) passed
 - [x] Cargo audit warnings reviewed and dispositioned in [`docs/security/cargo-audit-v0.5.8.md`](docs/security/cargo-audit-v0.5.8.md) on 2026-07-12
 - [x] Pinned Node 24.18.0, npm 11.16.0, Rust 1.95.0, and native dependency hash/PE checks completed
@@ -57,7 +57,7 @@ The following status is intentionally explicit and must be updated from real gat
 
 Final local artifacts:
 
-- `Onyx_0.5.8_x64_en-US.msi` — 45,092,864 bytes — SHA-256 `1154c5a5e1823bbd7de791bab64890cfdfc7050d394537fbe965b565fc0f8853`
-- `Onyx_0.5.8_x64-setup.exe` — 33,440,988 bytes — SHA-256 `3bd11972481d68b32a0da5a5da0cd369549c7c541252770a68af6bc6b425771c`
+- `Onyx_0.5.8_x64_en-US.msi` — 45,092,864 bytes — SHA-256 `8c2f054d60f3c8e5ac61e650336137248849c8106872426c93ab553abf0c8fec`
+- `Onyx_0.5.8_x64-setup.exe` — 33,432,220 bytes — SHA-256 `965a7fdc9f5d29ed06caaec9ee40473174de6f805e557e9f1cb69308664957a2`
 
 Do not publish or describe v0.5.8 as release-complete until every applicable item above has evidence and the packaging/smoke/final-review items are checked.
