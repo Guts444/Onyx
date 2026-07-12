@@ -139,9 +139,9 @@ impl Store {
             value: value.clone(),
         })
         .map_err(|error| format!("Could not serialize the app state: {error}"))?;
-        if is_unsafe_legacy_playlist(key, &serialized) {
+        if contains_unsafe_credentials(key, &serialized) {
             return Err(
-                "Playlist snapshots containing credentials cannot be persisted; use the OS credential store."
+                "App state containing credentials cannot be persisted; use the OS credential store."
                     .to_string(),
             );
         }
@@ -243,7 +243,7 @@ impl Store {
 
     fn load_file(&self, key: &str, path: &Path) -> Result<LoadedState, String> {
         let bytes = read_bounded(path)?;
-        let unsafe_bytes = is_unsafe_legacy_playlist(key, &bytes);
+        let unsafe_bytes = contains_unsafe_credentials(key, &bytes);
         let parsed = parse_state(key, &bytes);
         Ok(LoadedState {
             bytes,
@@ -272,10 +272,11 @@ fn parse_state(key: &str, bytes: &[u8]) -> Result<ParsedState, String> {
                 envelope.schema_version
             ));
         }
+        let unsafe_legacy_playlist = value_contains_credentials(&envelope.value);
         return Ok(ParsedState {
             value: envelope.value,
             schema_version: envelope.schema_version,
-            unsafe_legacy_playlist: false,
+            unsafe_legacy_playlist,
         });
     }
 
@@ -290,14 +291,14 @@ fn parse_state(key: &str, bytes: &[u8]) -> Result<ParsedState, String> {
                 return Ok(ParsedState {
                     value: envelope.value,
                     schema_version: envelope.schema_version,
-                    unsafe_legacy_playlist: is_unsafe_legacy_playlist(key, bytes),
+                    unsafe_legacy_playlist: contains_unsafe_credentials(key, bytes),
                 });
             }
         }
     }
 
     Ok(ParsedState {
-        unsafe_legacy_playlist: is_unsafe_legacy_playlist(key, bytes),
+        unsafe_legacy_playlist: contains_unsafe_credentials(key, bytes),
         value: raw,
         schema_version: 0,
     })
@@ -351,57 +352,106 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn is_unsafe_legacy_playlist(key: &str, bytes: &[u8]) -> bool {
-    if !key.to_ascii_lowercase().contains("playlist") {
-        return false;
-    }
-
+fn contains_unsafe_credentials(_key: &str, bytes: &[u8]) -> bool {
     if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
         return value_contains_credentials(&value);
     }
 
-    // Malformed legacy files cannot be traversed structurally. Keep this raw
-    // fail-closed check narrow so credential bytes are deleted, never copied.
+    // Malformed legacy files cannot be traversed structurally. Keep the raw
+    // fallback exact and conservative so credential bytes are deleted without
+    // treating harmless substrings such as `compass` or `bypass` as secrets.
     let lower = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     [
-        "password=",
-        "username=",
-        "user=",
-        "pass=",
-        "token=",
-        "auth=",
-        "api_key=",
-        "apikey=",
         "\"password\"",
-        "\"credential",
+        "\"passwd\"",
+        "\"pass\"",
+        "\"username\"",
+        "\"user\"",
+        "\"credential\"",
+        "\"credentials\"",
         "\"authorization\"",
+        "\"token\"",
+        "\"access_token\"",
+        "\"accesstoken\"",
+        "\"auth\"",
+        "\"api_key\"",
+        "\"apikey\"",
     ]
     .iter()
     .any(|marker| lower.contains(marker))
+        || malformed_text_contains_sensitive_assignment(&lower)
         || contains_xtream_path(&lower)
         || contains_url_userinfo(&lower)
+}
+
+fn malformed_text_contains_sensitive_assignment(text: &str) -> bool {
+    text.split(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                '"' | '\'' | '\\' | '?' | '&' | '#' | '{' | '}' | ','
+            )
+    })
+    .any(|part| {
+        let Some((name, value)) = part.split_once('=') else {
+            return false;
+        };
+        !value.is_empty()
+            && percent_decode_query_name(name).is_some_and(|name| is_sensitive_name(&name))
+    })
+}
+
+fn percent_decode_query_name(encoded: &str) -> Option<String> {
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let high = (bytes[index + 1] as char).to_digit(16)?;
+                let low = (bytes[index + 2] as char).to_digit(16)?;
+                decoded.push((high * 16 + low) as u8);
+                index += 3;
+            }
+            b'%' => return None,
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn is_sensitive_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "password"
+            | "passwd"
+            | "pass"
+            | "username"
+            | "user"
+            | "credential"
+            | "credentials"
+            | "authorization"
+            | "token"
+            | "access_token"
+            | "accesstoken"
+            | "auth"
+            | "api_key"
+            | "apikey"
+    )
 }
 
 fn value_contains_credentials(value: &Value) -> bool {
     match value {
         Value::Object(object) => object.iter().any(|(key, value)| {
-            let key = key.to_ascii_lowercase();
-            matches!(
-                key.as_str(),
-                "password"
-                    | "passwd"
-                    | "pass"
-                    | "username"
-                    | "user"
-                    | "credential"
-                    | "credentials"
-                    | "authorization"
-                    | "token"
-                    | "access_token"
-                    | "auth"
-                    | "api_key"
-                    | "apikey"
-            ) || value_contains_credentials(value)
+            (is_sensitive_name(key) && sensitive_value_is_nonempty(value))
+                || value_contains_credentials(value)
         }),
         Value::Array(values) => values.iter().any(value_contains_credentials),
         Value::String(text) => string_contains_credentials(text),
@@ -409,22 +459,19 @@ fn value_contains_credentials(value: &Value) -> bool {
     }
 }
 
+fn sensitive_value_is_nonempty(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(object) => !object.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
 fn string_contains_credentials(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    if lower.trim_start().starts_with("bearer ")
-        || [
-            "password=",
-            "username=",
-            "user=",
-            "pass=",
-            "token=",
-            "auth=",
-            "api_key=",
-            "apikey=",
-        ]
-        .iter()
-        .any(|marker| lower.contains(marker))
-    {
+    if lower.trim_start().starts_with("bearer ") {
         return true;
     }
 
@@ -432,22 +479,10 @@ fn string_contains_credentials(text: &str) -> bool {
         if !url.username().is_empty() || url.password().is_some() {
             return true;
         }
-        if url.query_pairs().any(|(name, value)| {
-            !value.is_empty()
-                && matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "password"
-                        | "passwd"
-                        | "pass"
-                        | "username"
-                        | "user"
-                        | "token"
-                        | "access_token"
-                        | "auth"
-                        | "api_key"
-                        | "apikey"
-                )
-        }) {
+        if url
+            .query_pairs()
+            .any(|(name, value)| !value.is_empty() && is_sensitive_name(&name))
+        {
             return true;
         }
     }
@@ -815,6 +850,20 @@ mod tests {
     }
 
     #[test]
+    fn credential_fields_are_rejected_for_legacy_saved_sources_key() {
+        let directory = TestDirectory::new("unsafe-saved-sources");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:saved-sources";
+
+        let error = store
+            .write(key, &json!({"source": {"accessToken": "plain-secret"}}))
+            .unwrap_err();
+
+        assert!(error.contains("credentials"));
+        assert!(!store.path(key).exists());
+    }
+
+    #[test]
     fn detects_real_legacy_playlist_credential_variants_conservatively() {
         let unsafe_urls = [
             "http://tv/live/alice/s3cret/123.ts",
@@ -829,7 +878,7 @@ mod tests {
         for url in unsafe_urls {
             let bytes = serde_json::to_vec(&json!({"url": url})).unwrap();
             assert!(
-                is_unsafe_legacy_playlist("playlist:snapshot", &bytes),
+                contains_unsafe_credentials("playlist:snapshot", &bytes),
                 "missed {url}"
             );
         }
@@ -841,10 +890,64 @@ mod tests {
         ] {
             let bytes = serde_json::to_vec(&json!({"label": safe})).unwrap();
             assert!(
-                !is_unsafe_legacy_playlist("playlist:snapshot", &bytes),
+                !contains_unsafe_credentials("playlist:snapshot", &bytes),
                 "false positive for {safe}"
             );
         }
+    }
+
+    #[test]
+    fn benign_substrings_and_empty_sensitive_fields_are_not_credentials() {
+        let benign = json!({
+            "compass": "north",
+            "bypass": true,
+            "notpassword": "harmless",
+            "password": " ",
+            "token": null,
+            "urls": [
+                "https://example.test/search?compass=north",
+                "https://example.test/search?bypass=yes",
+                "https://example.test/search?notpassword=harmless"
+            ]
+        });
+
+        assert!(!value_contains_credentials(&benign));
+    }
+
+    #[test]
+    fn url_query_credential_names_are_matched_exactly_after_percent_decoding() {
+        for url in [
+            "https://example.test/list?access%54oken=secret",
+            "https://example.test/list?api%4Bey=secret",
+            "https://example.test/list?authoriza%74ion=secret",
+        ] {
+            assert!(string_contains_credentials(url), "missed {url}");
+        }
+        for url in [
+            "https://example.test/list?not%70assword=harmless",
+            "https://example.test/list?comp%61ss=north",
+            "https://example.test/list?by%70ass=yes",
+        ] {
+            assert!(
+                !string_contains_credentials(url),
+                "false positive for {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_json_fallback_uses_exact_query_names_without_substring_false_positives() {
+        for benign in [
+            br#"{broken "url":"https://example.test/list?compass=north""# as &[u8],
+            br#"{broken "url":"https://example.test/list?bypass=yes""#,
+            br#"{broken "url":"https://example.test/list?notpassword=no""#,
+        ] {
+            assert!(!contains_unsafe_credentials("settings", benign));
+        }
+        assert!(contains_unsafe_credentials(
+            "settings",
+            br#"{broken "url":"https://example.test/list?pass=secret""#,
+        ));
     }
 
     #[test]
@@ -861,6 +964,27 @@ mod tests {
         assert_eq!(loaded.schema_version, Some(0));
         assert!(loaded.unsafe_legacy_playlist);
         assert!(!loaded.quarantined);
+    }
+
+    #[test]
+    fn unsafe_saved_sources_envelope_is_flagged_without_quarantine() {
+        let directory = TestDirectory::new("unsafe-saved-sources-read");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:saved-sources";
+        let value = json!({"nested": {"apiKey": "plain-secret"}});
+        let envelope = StateEnvelope {
+            format: ENVELOPE_MAGIC.to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+            value: value.clone(),
+        };
+        fs::write(store.path(key), serde_json::to_vec(&envelope).unwrap()).unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert_eq!(loaded.value, Some(value));
+        assert!(loaded.unsafe_legacy_playlist);
+        assert!(!loaded.quarantined);
+        assert!(store.path(key).exists());
     }
 
     #[test]
@@ -938,6 +1062,32 @@ mod tests {
             let bytes = fs::read(entry.unwrap().path()).unwrap();
             assert!(!String::from_utf8_lossy(&bytes).contains(secret));
         }
+    }
+
+    #[test]
+    fn unsafe_current_envelope_never_replaces_an_existing_safe_backup() {
+        let directory = TestDirectory::new("unsafe-envelope-backup");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:saved-sources";
+        store
+            .write(key, &json!({"safe": "last-known-good"}))
+            .unwrap();
+        store.write(key, &json!({"safe": "newer"})).unwrap();
+        let safe_backup = fs::read(store.backup_path(key)).unwrap();
+        let unsafe_envelope = StateEnvelope {
+            format: ENVELOPE_MAGIC.to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+            value: json!({"accessToken": "plain-secret"}),
+        };
+        fs::write(
+            store.path(key),
+            serde_json::to_vec(&unsafe_envelope).unwrap(),
+        )
+        .unwrap();
+
+        store.write(key, &json!({"migrated": true})).unwrap();
+
+        assert_eq!(fs::read(store.backup_path(key)).unwrap(), safe_backup);
     }
 
     #[test]
