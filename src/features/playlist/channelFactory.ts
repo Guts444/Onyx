@@ -1,5 +1,5 @@
 import type { Channel } from "../../domain/iptv";
-import { decodeSafePathSegments } from "./redaction.ts";
+import { decodeSafePathSegments, redactCredentials } from "./redaction.ts";
 
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]+/g;
 const COLLAPSE_WHITESPACE = /\s+/g;
@@ -170,7 +170,11 @@ function looksLikeXtreamKind(rawSegment: string) {
   );
 }
 
-function opaqueStreamIdentity(url: URL, originalPath: string) {
+function opaqueStreamIdentity(
+  url: URL,
+  originalPath: string,
+  fallbackDiscriminator?: string,
+) {
   const pathSegments = originalPath.split("/");
   const xtreamKindIndex = pathSegments.findIndex(looksLikeXtreamKind);
   if (xtreamKindIndex >= 0) {
@@ -182,13 +186,18 @@ function opaqueStreamIdentity(url: URL, originalPath: string) {
     // Unsafe or ambiguous Xtream path structure means no middle path or query value is
     // trustworthy: any of them may be a shifted credential. Keep only origin metadata
     // and a narrowly allowlisted terminal stream file.
-    return `opaque-stream:${sha256(JSON.stringify([
+    const identityParts = [
       url.protocol,
       url.hostname.toLowerCase(),
       url.port,
       "__malformed_xtream__",
       safeTerminal,
-    ]))}`;
+    ];
+    if (safeTerminal === "__unknown_stream__" && fallbackDiscriminator) {
+      identityParts.push(`metadata:${fallbackDiscriminator}`);
+    }
+
+    return `opaque-stream:${sha256(JSON.stringify(identityParts))}`;
   }
 
   for (const key of Array.from(url.searchParams.keys())) {
@@ -205,7 +214,7 @@ function opaqueStreamIdentity(url: URL, originalPath: string) {
   ]))}`;
 }
 
-export function canonicalizeStreamIdentity(stream: string) {
+export function canonicalizeStreamIdentity(stream: string, fallbackDiscriminator?: string) {
   const trimmedStream = stream.trim();
 
   try {
@@ -219,7 +228,7 @@ export function canonicalizeStreamIdentity(stream: string) {
     try {
       decodedSegments = decodeSafePathSegments(originalPath);
     } catch {
-      return opaqueStreamIdentity(url, originalPath);
+      return opaqueStreamIdentity(url, originalPath, fallbackDiscriminator);
     }
     const xtreamKindIndex = decodedSegments.findIndex((segment) =>
       XTREAM_PATH_KINDS.has(segment.toLowerCase()),
@@ -245,8 +254,22 @@ export function canonicalizeStreamIdentity(stream: string) {
   }
 }
 
-function createChannelId(sourceId: string, stream: string) {
-  return `channel_${sha256(JSON.stringify([sourceId, canonicalizeStreamIdentity(stream)]))}`;
+function createFallbackMetadataDiscriminator(seed: ChannelSeed) {
+  const metadata = [
+    sanitizeLabel(redactCredentials(seed.name), "Unnamed channel", 120),
+    sanitizeLabel(redactCredentials(seed.group ?? "Ungrouped"), "Ungrouped", 80),
+    sanitizeOptionalLabel(redactCredentials(seed.tvgId ?? ""), 120),
+    sanitizeOptionalLabel(redactCredentials(seed.tvgName ?? ""), 120),
+  ];
+  return sha256(JSON.stringify(metadata));
+}
+
+function createChannelId(sourceId: string, stream: string, seed: ChannelSeed) {
+  const streamIdentity = canonicalizeStreamIdentity(
+    stream,
+    createFallbackMetadataDiscriminator(seed),
+  );
+  return `channel_${sha256(JSON.stringify([sourceId, streamIdentity]))}`;
 }
 
 export function createLegacyChannelId(name: string, group: string, stream: string) {
@@ -336,7 +359,7 @@ export function buildChannel(seed: ChannelSeed, context: StreamOriginContext): C
   const normalizedStream = normalizeStreamReference(seed.stream, context);
 
   return {
-    id: createChannelId(context.sourceId, normalizedStream.stream),
+    id: createChannelId(context.sourceId, normalizedStream.stream, seed),
     legacyIds: [createLegacyChannelId(name, group, normalizedStream.stream)],
     name,
     group,

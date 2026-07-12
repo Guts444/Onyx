@@ -272,6 +272,80 @@ test("malformed Xtream fallback distinguishes safe terminal stream identifiers",
   assert.notEqual(first, otherHost);
 });
 
+test("malformed Xtream fallback distinguishes channels using sanitized metadata", () => {
+  const alpha = buildChannel(
+    {
+      name: "Alpha News",
+      group: "News",
+      tvgId: "alpha.example",
+      tvgName: "Alpha",
+      stream: "https://provider.example/l%ZZive/old-user/old-password/alpha.ts?token=old-token",
+    },
+    REMOTE_SOURCE,
+  );
+  const beta = buildChannel(
+    {
+      name: "Beta Sports",
+      group: "Sports",
+      tvgId: "beta.example",
+      tvgName: "Beta",
+      stream: "https://provider.example/l%ZZive/old-user/old-password/beta.ts?token=old-token",
+    },
+    REMOTE_SOURCE,
+  );
+
+  assert.notEqual(alpha.id, beta.id);
+  assert.match(alpha.id, /^channel_[0-9a-f]{64}$/);
+  assert.match(beta.id, /^channel_[0-9a-f]{64}$/);
+});
+
+test("malformed Xtream metadata fallback is credential-rotation stable and secret-free", () => {
+  const before = buildChannel(
+    {
+      name: "Alpha https://provider.example/live/old-user/old-password/42.ts?token=old-token",
+      group: "News",
+      stream: "https://provider.example/l%ZZive/old-user/old-password/alpha.ts?token=old-token",
+    },
+    REMOTE_SOURCE,
+  );
+  const after = buildChannel(
+    {
+      name: "Alpha https://provider.example/live/new-user/new-password/42.ts?token=new-token",
+      group: "News",
+      stream: "https://provider.example/l%ZZive/new-user/new-password/alpha.ts?token=new-token",
+    },
+    REMOTE_SOURCE,
+  );
+
+  assert.equal(before.id, after.id);
+  for (const secret of ["old-user", "old-password", "old-token", "new-user", "new-password", "new-token"]) {
+    assert.equal(before.id.includes(secret), false, `channel ID retained ${secret}`);
+  }
+});
+
+test("indistinguishable malformed Xtream records intentionally share the fallback identity", () => {
+  const first = buildChannel(
+    {
+      name: "Ambiguous",
+      group: "Unknown",
+      stream: "https://provider.example/l%ZZive/first-user/first-password/alpha.ts",
+    },
+    REMOTE_SOURCE,
+  );
+  const second = buildChannel(
+    {
+      name: "Ambiguous",
+      group: "Unknown",
+      stream: "https://provider.example/l%ZZive/second-user/second-password/beta.ts",
+    },
+    REMOTE_SOURCE,
+  );
+
+  // With neither a trusted terminal stream ID nor distinct safe metadata, collapsing
+  // is preferable to retaining potentially credential-bearing path material.
+  assert.equal(first.id, second.id);
+});
+
 test("buildChannel identity redacts rotating URL credentials but distinguishes streams", () => {
   const first = buildChannel(
     {
