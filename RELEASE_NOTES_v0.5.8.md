@@ -2,9 +2,9 @@
 
 **Metadata date:** 2026-07-12
 
-**Status:** Hardened release candidate; local packaging and installer smoke testing are complete, while final release review remains pending.
+**Status:** Hardened release candidate; local verification, packaging, installer smoke testing, and final independent review are complete.
 
-Onyx v0.5.8 hardens credential handling, local-state integrity, EPG processing, and release inputs. These notes record completed local verification evidence; publication still requires final approval and a clean rebuild whenever review changes code.
+Onyx v0.5.8 hardens credential handling, local-state integrity, EPG processing, and release inputs. These notes record completed local verification evidence; publication remains a separate tagged release operation.
 
 ## Security and privacy
 
@@ -53,11 +53,11 @@ The following status is intentionally explicit and must be updated from real gat
 - [x] Exact-candidate packaged smoke completed with isolated state: MSI administrative extraction, NSIS silent install, rendered `NATIVE PLAYER READY`/empty state, UI Automation opening and verifying Settings/Sources/EPG, stability window, payload checks, cleanup, and restoration of the pre-existing app-data directory
 - [x] Windows Credential Manager save/load/delete roundtrip passed with a temporary non-secret `example.invalid` value; the smoke credential was confirmed absent afterward
 - [x] Credential/artifact scan completed for `dist`, MSI extraction, NSIS installation, and final bundle directories
-- [ ] Final independent security, specification, and code-quality review approved
+- [x] Final independent security, specification, and code-quality review approved
 
 Final local artifacts:
 
 - `Onyx_0.5.8_x64_en-US.msi` — 45,092,864 bytes — SHA-256 `8c2f054d60f3c8e5ac61e650336137248849c8106872426c93ab553abf0c8fec`
 - `Onyx_0.5.8_x64-setup.exe` — 33,432,220 bytes — SHA-256 `965a7fdc9f5d29ed06caaec9ee40473174de6f805e557e9f1cb69308664957a2`
 
-Do not publish or describe v0.5.8 as release-complete until every applicable item above has evidence and the packaging/smoke/final-review items are checked.
+All applicable local release-candidate gates above are complete. Publication remains a separate tagged release operation.

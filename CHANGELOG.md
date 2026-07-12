@@ -8,7 +8,7 @@
 - **EPG integrity**: Download, decode, cache, and parser bounds were tightened; stale refresh races are rejected; malformed programmes are skipped with bounded, credential-free diagnostics rather than invalidating an otherwise usable guide.
 - **Hardened release inputs**: Dependencies, production CSP, and Tauri capabilities were tightened; pinned Node/npm/Rust toolchains, isolated development identity/state/credentials, and fixed native DLL provenance plus checksum verification are documented and enforced by release prerequisites.
 
-Local release packaging and installer smoke testing are complete. Publication remains blocked on final review and a clean rebuild whenever review changes code.
+Local release packaging, installer smoke testing, and final independent review are complete. Publication remains a separate tagged release operation.
 
 ## v0.5.7
 
