@@ -210,7 +210,19 @@ impl Store {
 
         let loaded = self.load_file(key, &primary)?;
         match loaded.parsed {
-            Ok(parsed) => Ok(outcome_from_parsed(parsed, false, false, false)),
+            Ok(parsed) => {
+                // A readable primary is sufficient for migration. Only now may a
+                // second credential-bearing EPG copy be securely discarded.
+                if is_epg_state_key(key)
+                    && backup.exists()
+                    && self
+                        .load_file(key, &backup)
+                        .is_ok_and(|loaded| loaded.parsed.is_ok() && loaded.unsafe_bytes)
+                {
+                    let _ = secure_delete_best_effort(&backup);
+                }
+                Ok(outcome_from_parsed(parsed, false, false, false))
+            }
             Err(_) => {
                 let quarantined = dispose_invalid(
                     &primary,
@@ -234,9 +246,7 @@ impl Store {
         }
 
         let loaded = self.load_file(key, backup)?;
-        if is_epg_state_key(key)
-            && (loaded.unsafe_bytes || loaded.oversized || loaded.parsed.is_err())
-        {
+        if is_epg_state_key(key) && (loaded.oversized || loaded.parsed.is_err()) {
             let _ = secure_delete_best_effort(backup);
             return Ok(missing_outcome(true, quarantined));
         }
@@ -312,9 +322,9 @@ impl Store {
 
         let backup = self.backup_path(key);
         if backup.exists()
-            && self.load_file(key, &backup).is_ok_and(|loaded| {
-                loaded.unsafe_bytes || loaded.oversized || loaded.parsed.is_err()
-            })
+            && self
+                .load_file(key, &backup)
+                .is_ok_and(|loaded| loaded.oversized || loaded.parsed.is_err())
         {
             let _ = secure_delete_best_effort(&backup);
         }
@@ -1262,6 +1272,126 @@ mod tests {
             let bytes = fs::read(entry.unwrap().path()).unwrap();
             assert!(!String::from_utf8_lossy(&bytes).contains(sentinel));
         }
+    }
+
+    fn sentinel_occurrence_count(directory: &Path, sentinel: &str) -> usize {
+        let needle = sentinel.as_bytes();
+        fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| fs::read(entry.path()).ok())
+            .map(|bytes| {
+                bytes
+                    .windows(needle.len())
+                    .filter(|window| *window == needle)
+                    .count()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn missing_epg_sources_primary_recovers_sole_unsafe_backup_in_memory() {
+        let directory = TestDirectory::new("unsafe-epg-backup-missing-primary");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-sources";
+        let sentinel = "sole-epg-source-url";
+        let legacy = json!([{
+            "id": "epg-1",
+            "url": format!("https://guide.example.test/{sentinel}.xml")
+        }]);
+        let original = serde_json::to_vec(&legacy).unwrap();
+        fs::write(store.backup_path(key), &original).unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert_eq!(loaded.value, Some(legacy));
+        assert!(loaded.recovered);
+        assert!(!loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(loaded.unsafe_legacy_playlist);
+        assert!(loaded.requires_safe_rewrite);
+        assert!(!store.path(key).exists());
+        assert_eq!(fs::read(store.backup_path(key)).unwrap(), original);
+        assert_eq!(sentinel_occurrence_count(&directory.0, sentinel), 1);
+    }
+
+    #[test]
+    fn corrupt_epg_manual_matches_primary_recovers_sole_unsafe_backup_in_memory() {
+        let directory = TestDirectory::new("unsafe-epg-matches-backup-corrupt-primary");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-manual-matches";
+        let sentinel = "sole-manual-match-url";
+        let legacy = json!({
+            format!("https://guide.example.test/{sentinel}.xml\u{1}playlist-a"): {
+                "channel-a": "xmltv-a"
+            }
+        });
+        let original = serde_json::to_vec(&legacy).unwrap();
+        fs::write(store.backup_path(key), &original).unwrap();
+        fs::write(store.path(key), b"{malformed epg primary").unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert_eq!(loaded.value, Some(legacy));
+        assert!(loaded.recovered);
+        assert!(loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(loaded.requires_safe_rewrite);
+        assert!(!store.path(key).exists());
+        assert_eq!(fs::read(store.backup_path(key)).unwrap(), original);
+        assert_eq!(sentinel_occurrence_count(&directory.0, sentinel), 1);
+    }
+
+    #[test]
+    fn successful_safe_rewrite_deletes_sole_unsafe_epg_backup_after_primary_is_durable() {
+        let directory = TestDirectory::new("unsafe-epg-backup-successful-rewrite");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-manual-matches";
+        let sentinel = "successful-rewrite-manual-url";
+        let legacy = json!({
+            format!("https://guide.example.test/{sentinel}.xml\u{1}playlist-a"): {
+                "channel-a": "xmltv-a"
+            }
+        });
+        fs::write(store.backup_path(key), serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let recovered = store.read(key).unwrap();
+        assert!(recovered.requires_safe_rewrite);
+        assert_eq!(sentinel_occurrence_count(&directory.0, sentinel), 1);
+
+        let migrated = json!({
+            "source-id-123\u{1}playlist-a": {"channel-a": "xmltv-a"}
+        });
+        store.write(key, &migrated).unwrap();
+
+        assert_eq!(store.read(key).unwrap().value, Some(migrated));
+        assert!(!store.backup_path(key).exists());
+        assert_eq!(sentinel_occurrence_count(&directory.0, sentinel), 0);
+    }
+
+    #[test]
+    fn failed_safe_rewrite_retains_sole_unsafe_epg_backup_without_creating_primary() {
+        let directory = TestDirectory::new("unsafe-epg-backup-failed-rewrite");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-sources";
+        let sentinel = "failed-rewrite-epg-url";
+        let legacy = json!([{
+            "id": "epg-1",
+            "url": format!("https://guide.example.test/{sentinel}.xml")
+        }]);
+        let original = serde_json::to_vec(&legacy).unwrap();
+        fs::write(store.backup_path(key), &original).unwrap();
+
+        assert!(store.read(key).unwrap().requires_safe_rewrite);
+        let error = store
+            .write(key, &json!("x".repeat(MAX_STATE_BYTES)))
+            .unwrap_err();
+
+        assert!(error.contains("too large"));
+        assert!(!store.path(key).exists());
+        assert_eq!(fs::read(store.backup_path(key)).unwrap(), original);
+        assert_eq!(sentinel_occurrence_count(&directory.0, sentinel), 1);
+        assert!(store.read(key).unwrap().requires_safe_rewrite);
     }
 
     #[test]
