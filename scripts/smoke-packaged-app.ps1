@@ -105,6 +105,140 @@ function Remove-ExactProcessTree {
     throw "The isolated Onyx process remained alive after tree termination."
 }
 
+function Initialize-UiAutomation {
+    try {
+        Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+        Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+    } catch {
+        throw "Windows UI Automation could not be initialized."
+    }
+}
+
+function Test-RenderedUiElement {
+    param([Parameter(Mandatory = $true)][System.Windows.Automation.AutomationElement]$Element)
+
+    try {
+        $bounds = $Element.Current.BoundingRectangle
+        return (-not $Element.Current.IsOffscreen -and -not $bounds.IsEmpty -and $bounds.Width -gt 0 -and $bounds.Height -gt 0)
+    } catch {
+        return $false
+    }
+}
+
+function Wait-UiDocument {
+    param(
+        [Parameter(Mandatory = $true)][System.Windows.Automation.AutomationElement]$Root,
+        [Parameter(Mandatory = $true)][DateTime]$Deadline
+    )
+
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Document
+    )
+    do {
+        try {
+            $document = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+            if ($null -ne $document -and (Test-RenderedUiElement -Element $document)) {
+                return $document
+            }
+        } catch {
+            # The WebView accessibility provider can be unavailable briefly while
+            # its renderer starts. Keep polling only until the caller's deadline.
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "Rendered WebView content was not available before the bounded timeout."
+}
+
+function Wait-UiNamedElement {
+    param(
+        [Parameter(Mandatory = $true)][System.Windows.Automation.AutomationElement]$Root,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][System.Windows.Automation.ControlType[]]$ControlTypes,
+        [Parameter(Mandatory = $true)][DateTime]$Deadline,
+        [switch]$RequireEnabled,
+        [Parameter(Mandatory = $true)][string]$FailureMessage
+    )
+
+    do {
+        try {
+            foreach ($controlType in $ControlTypes) {
+                $condition = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    $controlType
+                )
+                $elements = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+                for ($index = 0; $index -lt $elements.Count; $index++) {
+                    $element = $elements.Item($index)
+                    if (
+                        $element.Current.Name -ceq $Name -and
+                        (Test-RenderedUiElement -Element $element) -and
+                        (-not $RequireEnabled -or $element.Current.IsEnabled)
+                    ) {
+                        return $element
+                    }
+                }
+            }
+        } catch {
+            # Ignore transient provider failures and fail with the fixed,
+            # non-diagnostic message below if the bounded search never succeeds.
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw $FailureMessage
+}
+
+function Wait-UiText {
+    param(
+        [Parameter(Mandatory = $true)][System.Windows.Automation.AutomationElement]$Root,
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][DateTime]$Deadline,
+        [Parameter(Mandatory = $true)][string]$FailureMessage
+    )
+
+    do {
+        try {
+            $elements = $Root.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )
+            for ($index = 0; $index -lt $elements.Count; $index++) {
+                $element = $elements.Item($index)
+                $name = $element.Current.Name
+                if (
+                    -not [string]::IsNullOrEmpty($name) -and
+                    $name.IndexOf($Text, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                    (Test-RenderedUiElement -Element $element)
+                ) {
+                    return $element
+                }
+            }
+        } catch {
+            # See Wait-UiNamedElement: provider details must not escape the smoke
+            # test, and a transient failure is safe only inside the bounded poll.
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw $FailureMessage
+}
+
+function Invoke-UiElement {
+    param([Parameter(Mandatory = $true)][System.Windows.Automation.AutomationElement]$Element)
+
+    try {
+        $pattern = $null
+        if (-not $Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+            throw "InvokePattern unavailable."
+        }
+        ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    } catch {
+        throw "The rendered Settings control could not be invoked through Windows UI Automation."
+    }
+}
+
 $msi = Resolve-RequiredFile -Path $MsiPath -Description "MSI artifact" -Extension ".msi"
 $nsis = Resolve-RequiredFile -Path $NsisPath -Description "NSIS artifact" -Extension ".exe"
 $scanner = Resolve-RequiredFile -Path $SecretScannerPath -Description "Secret scanner" -Extension ".py"
@@ -152,6 +286,61 @@ try {
     }
     if ($onyxProcess.MainWindowTitle -cne "Onyx") {
         throw "Onyx main window did not have the exact production title."
+    }
+
+    Write-Host "Verifying rendered WebView content and native player readiness through Windows UI Automation."
+    Initialize-UiAutomation
+    try {
+        $automationRoot = [System.Windows.Automation.AutomationElement]::FromHandle($onyxProcess.MainWindowHandle)
+    } catch {
+        throw "Windows UI Automation could not attach to the production main window."
+    }
+    if ($null -eq $automationRoot) {
+        throw "Windows UI Automation could not attach to the production main window."
+    }
+
+    $renderDeadline = [DateTime]::UtcNow.AddSeconds($WindowTimeoutSeconds)
+    $webViewDocument = Wait-UiDocument -Root $automationRoot -Deadline $renderDeadline
+    $null = Wait-UiText `
+        -Root $webViewDocument `
+        -Text "NATIVE PLAYER READY" `
+        -Deadline $renderDeadline `
+        -FailureMessage "The rendered app did not reach the native-player-ready state before the bounded timeout."
+    $null = Wait-UiText `
+        -Root $webViewDocument `
+        -Text "No source loaded" `
+        -Deadline $renderDeadline `
+        -FailureMessage "The rendered app did not show the expected fresh-state source message before the bounded timeout."
+
+    Write-Host "Opening and verifying Settings through Windows UI Automation."
+    $settingsButton = Wait-UiNamedElement `
+        -Root $webViewDocument `
+        -Name "Settings" `
+        -ControlTypes @([System.Windows.Automation.ControlType]::Button) `
+        -Deadline $renderDeadline `
+        -RequireEnabled `
+        -FailureMessage "An enabled rendered Settings button was not available before the bounded timeout."
+    Invoke-UiElement -Element $settingsButton
+
+    $settingsDeadline = [DateTime]::UtcNow.AddSeconds($WindowTimeoutSeconds)
+    $settingsPanel = Wait-UiNamedElement `
+        -Root $webViewDocument `
+        -Name "Saved Sources" `
+        -ControlTypes @(
+            [System.Windows.Automation.ControlType]::Pane,
+            [System.Windows.Automation.ControlType]::Group,
+            [System.Windows.Automation.ControlType]::Window
+        ) `
+        -Deadline $settingsDeadline `
+        -FailureMessage "The rendered Saved Sources settings panel was not available before the bounded timeout."
+    foreach ($controlName in @("Sources", "EPG")) {
+        $null = Wait-UiNamedElement `
+            -Root $settingsPanel `
+            -Name $controlName `
+            -ControlTypes @([System.Windows.Automation.ControlType]::Button) `
+            -Deadline $settingsDeadline `
+            -RequireEnabled `
+            -FailureMessage "The rendered Settings navigation controls were not available before the bounded timeout."
     }
 
     Write-Host "Verifying that the production window remains stable."
