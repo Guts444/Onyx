@@ -2,9 +2,9 @@
 
 **Metadata date:** 2026-07-12
 
-**Status:** Hardened release candidate; local verification, packaging, installer smoke testing, and final independent review are complete.
+**Status:** Released; local verification, packaging, installer smoke testing, and final independent review are complete.
 
-Onyx v0.5.8 hardens credential handling, local-state integrity, EPG processing, and release inputs. These notes record completed local verification evidence; publication remains a separate tagged release operation.
+Onyx v0.5.8 hardens credential handling, local-state integrity, EPG processing, and release inputs. These notes record the completed verification evidence for the tagged release.
 
 ## Security and privacy
 
@@ -60,4 +60,4 @@ Final local artifacts:
 - `Onyx_0.5.8_x64_en-US.msi` — 45,092,864 bytes — SHA-256 `8c2f054d60f3c8e5ac61e650336137248849c8106872426c93ab553abf0c8fec`
 - `Onyx_0.5.8_x64-setup.exe` — 33,432,220 bytes — SHA-256 `965a7fdc9f5d29ed06caaec9ee40473174de6f805e557e9f1cb69308664957a2`
 
-All applicable local release-candidate gates above are complete. Publication remains a separate tagged release operation.
+All applicable local release gates above are complete. The installers and checksums are attached to the tagged GitHub release.
