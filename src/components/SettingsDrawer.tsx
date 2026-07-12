@@ -16,7 +16,7 @@ interface SettingsDrawerProps {
   enabledGroups: string[];
   hiddenGroups: string[];
   epgSources: EpgSource[];
-  epgDirectoriesByUrlKey: Record<string, EpgDirectoryResponse>;
+  epgDirectoriesBySourceId: Record<string, EpgDirectoryResponse>;
   matchedEpgChannelCount: number;
   updatingEpgSourceIds: string[];
   epgStatusMessage: string | null;
@@ -56,7 +56,7 @@ export function SettingsDrawer({
   enabledGroups,
   hiddenGroups,
   epgSources,
-  epgDirectoriesByUrlKey,
+  epgDirectoriesBySourceId,
   matchedEpgChannelCount,
   updatingEpgSourceIds,
   epgStatusMessage,
@@ -240,7 +240,7 @@ export function SettingsDrawer({
         ) : activeTab === "epg" ? (
           <EpgSettingsPanel
             sources={epgSources}
-            directoriesByUrlKey={epgDirectoriesByUrlKey}
+            directoriesBySourceId={epgDirectoriesBySourceId}
             matchedChannelCount={matchedEpgChannelCount}
             updatingSourceIds={updatingEpgSourceIds}
             statusMessage={epgStatusMessage}

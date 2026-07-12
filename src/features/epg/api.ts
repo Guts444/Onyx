@@ -6,8 +6,9 @@ import type {
   EpgProgrammeSnapshot,
 } from "../../domain/epg";
 
-export function refreshEpgCache(url: string) {
+export function refreshEpgCache(sourceId: string, url: string) {
   return invoke<EpgDirectoryResponse>("refresh_epg_cache", {
+    sourceId,
     url,
   });
 }
@@ -20,9 +21,9 @@ export function getEpgCacheDiagnostics() {
   return invoke<EpgCacheDiagnostics>("get_epg_cache_diagnostics");
 }
 
-export function deleteEpgCache(url: string) {
+export function deleteEpgCache(sourceId: string) {
   return invoke<boolean>("delete_epg_cache", {
-    url,
+    sourceId,
   });
 }
 

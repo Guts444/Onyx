@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getEpgSourceLabel, type EpgDirectoryChannel, type EpgResolvedGuide } from "../domain/epg";
+import type { EpgDirectoryChannel, EpgResolvedGuide } from "../domain/epg";
 import type { Channel } from "../domain/iptv";
 import { searchEpgChannelsForChannel } from "../features/epg/matching";
 
@@ -8,6 +8,7 @@ interface ChannelEpgMatchDialogProps {
   channel: Channel | null;
   epgChannels: EpgDirectoryChannel[];
   currentGuide: EpgResolvedGuide | null;
+  sourceLabelsById: Record<string, string>;
   onClose: () => void;
   onApplyMatch: (channel: Channel, epgChannel: EpgDirectoryChannel) => void;
   onClearMatch: (channel: Channel) => void;
@@ -18,6 +19,7 @@ export function ChannelEpgMatchDialog({
   channel,
   epgChannels,
   currentGuide,
+  sourceLabelsById,
   onClose,
   onApplyMatch,
   onClearMatch,
@@ -69,7 +71,7 @@ export function ChannelEpgMatchDialog({
         {currentGuide ? (
           <div className="settings-notice">
             Current match: <strong>{currentGuide.epgChannel.displayNames[0] ?? currentGuide.epgChannel.id}</strong>{" "}
-            from <strong>{getEpgSourceLabel(currentGuide.epgChannel.sourceUrl)}</strong> (
+            from <strong>{sourceLabelsById[currentGuide.epgChannel.sourceId] ?? "EPG guide"}</strong> (
             {currentGuide.matchSource === "manual" ? "manual" : "auto"}).
           </div>
         ) : null}
@@ -121,7 +123,7 @@ export function ChannelEpgMatchDialog({
                 <div className="settings-list__copy">
                   <strong>{epgChannel.displayNames[0] ?? epgChannel.id}</strong>
                   <span>{epgChannel.id}</span>
-                  <span>{getEpgSourceLabel(epgChannel.sourceUrl)}</span>
+                  <span>{sourceLabelsById[epgChannel.sourceId] ?? "EPG guide"}</span>
                   {epgChannel.displayNames.slice(1, 4).map((displayName) => (
                     <span key={`${epgChannel.uniqueId}\u0001${displayName}`}>{displayName}</span>
                   ))}

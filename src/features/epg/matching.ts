@@ -1,4 +1,10 @@
-import type { EpgDirectoryChannel, EpgResolvedChannel } from "../../domain/epg";
+import type {
+  EpgDirectoryChannel,
+  EpgDirectoryResponse,
+  EpgResolvedChannel,
+  EpgSource,
+  SavedEpgMappingStore,
+} from "../../domain/epg";
 import type { Channel } from "../../domain/iptv";
 
 const DIACRITIC_PATTERN = /[\u0300-\u036f]/g;
@@ -24,7 +30,7 @@ export interface EpgChannelIndex {
 }
 
 interface ScopedManualMappings {
-  sourceUrl: string;
+  sourceId: string;
   mappings: Record<string, string>;
 }
 
@@ -86,7 +92,7 @@ function resolveManualMatch(
   index: EpgChannelIndex,
 ) {
   for (const scopedMappings of manualMappingsBySource) {
-    const sourceIdIndex = index.sourceIdIndex.get(normalizeEpgUrlKey(scopedMappings.sourceUrl));
+    const sourceIdIndex = index.sourceIdIndex.get(scopedMappings.sourceId);
 
     if (!sourceIdIndex) {
       continue;
@@ -201,8 +207,73 @@ export function normalizeEpgUrlKey(value: string) {
   }
 }
 
-export function createEpgMappingScope(scopeId: string, epgUrl: string) {
-  return `${normalizeEpgUrlKey(epgUrl)}\u0001${scopeId}`;
+export function createEpgMappingScope(scopeId: string, sourceId: string) {
+  return `${sourceId}\u0001${scopeId}`;
+}
+
+export function migrateSavedEpgMappings(
+  mappings: SavedEpgMappingStore,
+  sources: readonly EpgSource[],
+  onAmbiguousLegacyScope?: () => void,
+): SavedEpgMappingStore {
+  const sourceIds = new Set(sources.map((source) => source.id));
+  const sourceIdsByUrl = new Map<string, string[]>();
+  for (const source of sources) {
+    const key = normalizeEpgUrlKey(source.url);
+    if (!key) continue;
+    sourceIdsByUrl.set(key, [...(sourceIdsByUrl.get(key) ?? []), source.id]);
+  }
+  const migrated: SavedEpgMappingStore = {};
+  for (const [mappingScope, values] of Object.entries(mappings)) {
+    const separator = mappingScope.indexOf("\u0001");
+    if (separator < 1) continue;
+    const identity = mappingScope.slice(0, separator);
+    const playlistScope = mappingScope.slice(separator + 1);
+    const legacySourceIds = sourceIdsByUrl.get(normalizeEpgUrlKey(identity)) ?? [];
+    if (!sourceIds.has(identity) && legacySourceIds.length > 1) onAmbiguousLegacyScope?.();
+    const targets = sourceIds.has(identity) ? [identity] : legacySourceIds.slice(0, 1);
+    for (const sourceId of targets) {
+      const target = createEpgMappingScope(playlistScope, sourceId);
+      migrated[target] = { ...(migrated[target] ?? {}), ...values };
+    }
+  }
+  return migrated;
+}
+
+export function serializeEpgMappings(
+  mappings: SavedEpgMappingStore,
+  sourceIds: ReadonlySet<string>,
+) {
+  const serialized: SavedEpgMappingStore = {};
+  for (const [scope, values] of Object.entries(mappings)) {
+    const separator = scope.indexOf("\u0001");
+    if (separator > 0 && sourceIds.has(scope.slice(0, separator))) {
+      serialized[scope] = { ...values };
+    }
+  }
+  return serialized;
+}
+
+export function reconstructEpgCacheDirectories(
+  directories: readonly EpgDirectoryResponse[],
+  sources: readonly EpgSource[],
+) {
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
+  const reconstructed: Record<string, EpgDirectoryResponse> = {};
+  for (const directory of directories) {
+    const source = sourceById.get(directory.sourceId);
+    if (!source) continue;
+    reconstructed[source.id] = {
+      ...directory,
+      sourceId: source.id,
+      channels: directory.channels.map((channel) => ({
+        ...channel,
+        sourceId: source.id,
+        uniqueId: `${source.id}\u0001${channel.id}`,
+      })),
+    };
+  }
+  return reconstructed;
 }
 
 export function createEpgChannelIndex(channels: EpgDirectoryChannel[]): EpgChannelIndex {
@@ -212,8 +283,6 @@ export function createEpgChannelIndex(channels: EpgDirectoryChannel[]): EpgChann
   const uniqueIdIndex = new Map<string, EpgDirectoryChannel>();
 
   for (const channel of channels) {
-    const sourceUrlKey = normalizeEpgUrlKey(channel.sourceUrl);
-
     uniqueIdIndex.set(channel.uniqueId, channel);
 
     for (const variant of buildLookupVariants(channel.id)) {
@@ -226,11 +295,11 @@ export function createEpgChannelIndex(channels: EpgDirectoryChannel[]): EpgChann
       }
     }
 
-    let scopedIndex = sourceIdIndex.get(sourceUrlKey);
+    let scopedIndex = sourceIdIndex.get(channel.sourceId);
 
     if (scopedIndex === undefined) {
       scopedIndex = new Map<string, EpgDirectoryChannel>();
-      sourceIdIndex.set(sourceUrlKey, scopedIndex);
+      sourceIdIndex.set(channel.sourceId, scopedIndex);
     }
 
     scopedIndex.set(normalizeEpgLookupText(channel.id), channel);
@@ -344,7 +413,7 @@ export function searchEpgChannelsForChannel(
         return nameComparison;
       }
 
-      return left.epgChannel.sourceUrl.localeCompare(right.epgChannel.sourceUrl);
+      return left.epgChannel.sourceId.localeCompare(right.epgChannel.sourceId);
     })
     .slice(0, limit)
     .map(({ epgChannel }) => epgChannel);

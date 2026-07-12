@@ -1,4 +1,3 @@
-import { hashString } from "../utils/hash.ts";
 
 export interface EpgSource {
   id: string;
@@ -82,9 +81,7 @@ export function normalizeEpgSources(value: unknown): EpgSource[] {
         id:
           typeof source.id === "string" && source.id.trim().length > 0
             ? source.id
-            : `epg_${hashString(
-                `${typeof source.url === "string" ? source.url : ""}\u0001${createdAt}`,
-              )}`,
+            : `epg_${crypto.randomUUID()}`,
         url: typeof source.url === "string" ? source.url : "",
         enabled: source.enabled !== false,
         autoUpdateEnabled: source.autoUpdateEnabled === true,
@@ -122,7 +119,7 @@ export function getEpgSourceLabel(sourceOrUrl: Pick<EpgSource, "url"> | string) 
 export interface EpgDirectoryChannel {
   id: string;
   uniqueId: string;
-  sourceUrl: string;
+  sourceId: string;
   displayNames: string[];
   icon: string | null;
 }
@@ -134,7 +131,7 @@ export interface EpgCacheDiagnostics {
 }
 
 export interface EpgDirectoryResponse {
-  sourceUrl: string;
+  sourceId: string;
   fetchedAt: string;
   channelCount: number;
   programmeCount: number;

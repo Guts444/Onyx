@@ -62,6 +62,15 @@ test("normalizeEpgSources normalizes valid and partially valid objects", () => {
   assert.strictEqual(result[1].updatedAt, "2023-01-02T00:00:00.000Z");
 });
 
+test("legacy EPG sources without IDs migrate to random UUID identities rather than URL fingerprints", () => {
+  const legacy = [{ url: "https://guide.invalid/private-token.xml", createdAt: "2023-01-01T00:00:00.000Z" }];
+  const first = normalizeEpgSources(legacy)[0];
+  const second = normalizeEpgSources(legacy)[0];
+  assert.match(first.id, /^epg_[0-9a-f-]{36}$/i);
+  assert.notEqual(first.id, second.id);
+  assert.equal(first.id.includes("guide.invalid"), false);
+});
+
 test("createEpgSource returns an object with correct default values", () => {
   const result = createEpgSource();
 

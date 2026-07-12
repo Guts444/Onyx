@@ -5,7 +5,7 @@ import {
   type EpgDirectoryResponse,
   type EpgSource,
 } from "../domain/epg";
-import { normalizeEpgUrlKey } from "../features/epg/matching";
+
 import {
   formatEpgDirectoryDiagnostics,
   sanitizeEpgSourceLabel,
@@ -13,7 +13,7 @@ import {
 
 interface EpgSettingsPanelProps {
   sources: EpgSource[];
-  directoriesByUrlKey: Record<string, EpgDirectoryResponse>;
+  directoriesBySourceId: Record<string, EpgDirectoryResponse>;
   matchedChannelCount: number;
   updatingSourceIds: string[];
   statusMessage: string | null;
@@ -35,7 +35,7 @@ function formatUpdatedAt(value: string | null) {
 
 export function EpgSettingsPanel({
   sources,
-  directoriesByUrlKey,
+  directoriesBySourceId,
   matchedChannelCount,
   updatingSourceIds,
   statusMessage,
@@ -47,7 +47,7 @@ export function EpgSettingsPanel({
   onRefreshEnabledSources,
 }: EpgSettingsPanelProps) {
   const enabledSources = sources.filter((source) => source.enabled);
-  const uniqueEnabledGuideKeys = new Set<string>();
+
   let enabledGuideChannelCount = 0;
   let enabledProgrammeCount = 0;
   let latestEnabledGuideUpdateAt: string | null = null;
@@ -57,15 +57,7 @@ export function EpgSettingsPanel({
       continue;
     }
 
-    const urlKey = normalizeEpgUrlKey(source.url);
-
-    if (!urlKey || uniqueEnabledGuideKeys.has(urlKey)) {
-      continue;
-    }
-
-    uniqueEnabledGuideKeys.add(urlKey);
-
-    const directory = directoriesByUrlKey[urlKey];
+    const directory = directoriesBySourceId[source.id];
 
     if (!directory) {
       continue;
@@ -125,7 +117,7 @@ export function EpgSettingsPanel({
             type="button"
             className="control-button"
             onClick={onRefreshEnabledSources}
-            disabled={uniqueEnabledGuideKeys.size === 0 || isUpdatingAny}
+            disabled={!enabledSources.some(isEpgSourceReady) || isUpdatingAny}
           >
             {isUpdatingAny ? "Updating..." : "Update Enabled"}
           </button>
@@ -142,8 +134,7 @@ export function EpgSettingsPanel({
       ) : (
         <div className="settings-list">
           {sources.map((source) => {
-            const urlKey = normalizeEpgUrlKey(source.url);
-            const directory = urlKey ? directoriesByUrlKey[urlKey] ?? null : null;
+            const directory = directoriesBySourceId[source.id] ?? null;
             const isReady = isEpgSourceReady(source);
             const isUpdating = updatingSourceIds.includes(source.id);
             const directoryDiagnostics = directory
