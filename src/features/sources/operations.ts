@@ -4,6 +4,7 @@ declare const sourceOperationTokenBrand: unique symbol;
 declare const sourceBusyStateBrand: unique symbol;
 const tokenIdentities = new WeakMap<SourceOperationToken, symbol>();
 const busyIdentities = new WeakMap<SourceBusyState, symbol>();
+const tokenAbortControllers = new WeakMap<SourceOperationToken, AbortController>();
 
 export interface SourceOperationRequest {
   origin: SourceOperationOrigin;
@@ -14,6 +15,8 @@ export interface SourceOperationRequest {
 export interface SourceOperationToken extends Readonly<SourceOperationRequest> {
   readonly [sourceOperationTokenBrand]: true;
   readonly generation: number;
+  readonly operationId: string;
+  readonly signal: AbortSignal;
   isCurrent(): boolean;
 }
 
@@ -29,6 +32,12 @@ export interface SourceOperationCoordinator {
   isCurrent(token: SourceOperationToken): boolean;
   canCommit(token: SourceOperationToken, state: SourceOperationCommitState): boolean;
   invalidateSource(sourceId: string): void;
+  cancelCurrent(): void;
+}
+
+export interface SourceOperationCoordinatorOptions {
+  createOperationId?: () => string;
+  cancelRemote?: (operationId: string) => void | Promise<void>;
 }
 
 export interface SourceBusyState {
@@ -66,21 +75,51 @@ export function finishSourceBusy(
   return busyIdentity !== undefined && busyIdentity === tokenIdentity ? null : current;
 }
 
-export function createSourceOperationCoordinator(): SourceOperationCoordinator {
+function defaultOperationId() {
+  return crypto.randomUUID();
+}
+
+export function createSourceOperationCoordinator(
+  options: SourceOperationCoordinatorOptions = {},
+): SourceOperationCoordinator {
   let generation = 0;
   let currentToken: SourceOperationToken | null = null;
+  const createOperationId = options.createOperationId ?? defaultOperationId;
 
   const isCurrent = (token: SourceOperationToken) => token === currentToken;
+  const cancelToken = (token: SourceOperationToken) => {
+    const controller = tokenAbortControllers.get(token);
+    if (!controller || controller.signal.aborted) return;
+    controller.abort();
+    try {
+      const cancellation = options.cancelRemote?.(token.operationId);
+      if (cancellation && "catch" in cancellation) void cancellation.catch(() => undefined);
+    } catch {
+      // Cancellation is best effort; generation checks still prevent a stale commit.
+    }
+  };
+  const cancelCurrent = () => {
+    if (!currentToken) return;
+    const token = currentToken;
+    currentToken = null;
+    generation += 1;
+    cancelToken(token);
+  };
 
   return {
     start(request) {
+      if (currentToken) cancelToken(currentToken);
       generation += 1;
+      const controller = new AbortController();
       const token = {
         ...request,
         generation,
+        operationId: createOperationId(),
+        signal: controller.signal,
         isCurrent: () => isCurrent(token),
       } as SourceOperationToken;
       tokenIdentities.set(token, Symbol("source-operation-identity"));
+      tokenAbortControllers.set(token, controller);
       Object.freeze(token);
       currentToken = token;
       return token;
@@ -97,9 +136,9 @@ export function createSourceOperationCoordinator(): SourceOperationCoordinator {
     },
     invalidateSource(sourceId) {
       if (currentToken?.sourceId === sourceId) {
-        generation += 1;
-        currentToken = null;
+        cancelCurrent();
       }
     },
+    cancelCurrent,
   };
 }

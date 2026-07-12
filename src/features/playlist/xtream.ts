@@ -23,11 +23,13 @@ export async function importXtreamPlaylist(
   username: string,
   password: string,
   sourceId: string,
+  operationId: string,
 ): Promise<PlaylistImport> {
   const response = await invoke<XtreamImportResponse>("fetch_xtream_live_channels", {
     domain,
     username,
     password,
+    operationId,
   });
 
   const channels = response.channels.map((channel) =>

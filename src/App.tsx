@@ -74,7 +74,7 @@ import {
 import { DEFAULT_PLAYER_VOLUME, useMpvPlayer } from "./features/player/mpv";
 import { parseM3u } from "./features/playlist/m3u";
 import { createLocalM3uSourceIdentity } from "./features/playlist/channelFactory";
-import { downloadPlaylistFromUrl } from "./features/playlist/remote";
+import { cancelPlaylistOperation, downloadPlaylistFromUrl } from "./features/playlist/remote";
 import { importXtreamPlaylist } from "./features/playlist/xtream";
 import { materializeChannelForPlayback } from "./features/playlist/materialize";
 import { redactCredentials } from "./features/playlist/redaction";
@@ -361,9 +361,14 @@ function App() {
   const hydratedVolumeAppliedRef = useRef(false);
   const savedSourcesRef = useRef(savedSources);
   const activeSourceIdRef = useRef(activeSourceId);
-  const sourceOperationsRef = useRef(createSourceOperationCoordinator());
+  const sourceOperationsRef = useRef(createSourceOperationCoordinator({
+    cancelRemote: cancelPlaylistOperation,
+  }));
   const sourceRevisionsRef = useRef(createSourceRevisionTracker());
   const persistenceNoticeShownRef = useRef(false);
+  useEffect(() => () => {
+    sourceOperationsRef.current.cancelCurrent();
+  }, []);
   const startupSourceRefreshResultRef = useRef<"pending" | "succeeded" | "failed">("pending");
   const importedReferencesRef = useRef({
     favoriteIds,
@@ -880,7 +885,11 @@ function App() {
     let importedPlaylist: PlaylistImport;
 
     if (source.kind === "m3u_url") {
-      const { fileName, playlistText } = await downloadPlaylistFromUrl(source.url);
+      const { fileName, playlistText } = await downloadPlaylistFromUrl(
+        source.url,
+        token.operationId,
+        token.signal,
+      );
       importedPlaylist = parseM3u(playlistText, fileName, {
         sourceId: source.id,
         trust: "remote",
@@ -891,6 +900,7 @@ function App() {
         source.username,
         source.password,
         source.id,
+        token.operationId,
       );
     }
 
@@ -1255,9 +1265,9 @@ function App() {
   async function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
     const source = savedSourcesRef.current[sourceId];
     if (!source) return;
+    sourceOperationsRef.current.invalidateSource(sourceId);
 
     const commitUpdate = () => {
-      sourceOperationsRef.current.invalidateSource(sourceId);
       sourceRevisionsRef.current.bump(sourceId);
       startupSourceRefreshResultRef.current = "pending";
       setStartupRestoreToken((currentToken) =>
@@ -1309,6 +1319,7 @@ function App() {
       return;
     }
 
+    sourceOperationsRef.current.invalidateSource(sourceId);
     try {
       await deleteSourceSecretBeforeCommit(source, () => undefined);
     } catch (error) {
@@ -1320,7 +1331,6 @@ function App() {
       return;
     }
 
-    sourceOperationsRef.current.invalidateSource(sourceId);
     sourceRevisionsRef.current.bump(sourceId);
     startupSourceRefreshResultRef.current = "failed";
     setStartupRestoreToken((currentToken) =>

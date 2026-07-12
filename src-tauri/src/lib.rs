@@ -1,17 +1,30 @@
 mod epg;
 mod persistence;
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use reqwest::{Client, Url};
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime};
+use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime, State};
+use tokio_util::sync::CancellationToken;
 
 const MAX_PLAYLIST_BYTES: usize = 32 * 1024 * 1024;
 const MAX_XTREAM_BYTES: usize = 32 * 1024 * 1024;
 const CONNECT_TIMEOUT_SECS: u64 = 15;
 const READ_TIMEOUT_SECS: u64 = 45;
+const PLAYLIST_OPERATION_TIMEOUT_SECS: u64 = 90;
+const MAX_PLAYLIST_OPERATION_ID_BYTES: usize = 128;
+const PLAYLIST_TIMEOUT_MESSAGE: &str = "The playlist import timed out.";
+const PLAYLIST_CANCELLED_MESSAGE: &str = "The playlist import was cancelled.";
+const INVALID_PLAYLIST_OPERATION_ID_MESSAGE: &str = "The playlist operation id is not valid.";
+const DUPLICATE_PLAYLIST_OPERATION_ID_MESSAGE: &str = "The playlist operation is already running.";
 const APP_STATE_DIRECTORY: &str = "state";
 const XTREAM_SECRET_SERVICE_PROD: &str = "Onyx Xtream";
 const XTREAM_SECRET_SERVICE_DEV: &str = "Onyx Dev Xtream";
@@ -54,6 +67,115 @@ struct XtreamChannelPayload {
 struct XtreamImportResponse {
     provider_name: String,
     channels: Vec<XtreamChannelPayload>,
+}
+
+#[derive(Clone, Default)]
+struct PlaylistOperationRegistry {
+    operations: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
+}
+
+struct RegisteredPlaylistOperation {
+    registry: PlaylistOperationRegistry,
+    operation_id: String,
+    token: Arc<CancellationToken>,
+}
+
+impl Drop for RegisteredPlaylistOperation {
+    fn drop(&mut self) {
+        if let Ok(mut operations) = self.registry.operations.lock() {
+            if operations
+                .get(&self.operation_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &self.token))
+            {
+                operations.remove(&self.operation_id);
+            }
+        }
+    }
+}
+
+fn validate_playlist_operation_id(operation_id: &str) -> Result<(), String> {
+    if operation_id.is_empty()
+        || operation_id.len() > MAX_PLAYLIST_OPERATION_ID_BYTES
+        || !operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(INVALID_PLAYLIST_OPERATION_ID_MESSAGE.to_string());
+    }
+    Ok(())
+}
+
+impl PlaylistOperationRegistry {
+    fn register(&self, operation_id: &str) -> Result<RegisteredPlaylistOperation, String> {
+        validate_playlist_operation_id(operation_id)?;
+        let token = Arc::new(CancellationToken::new());
+        let mut operations = self
+            .operations
+            .lock()
+            .map_err(|_| "Could not initialize the playlist operation.".to_string())?;
+        if operations.contains_key(operation_id) {
+            return Err(DUPLICATE_PLAYLIST_OPERATION_ID_MESSAGE.to_string());
+        }
+        operations.insert(operation_id.to_string(), token.clone());
+        Ok(RegisteredPlaylistOperation {
+            registry: self.clone(),
+            operation_id: operation_id.to_string(),
+            token,
+        })
+    }
+
+    fn cancel(&self, operation_id: &str) -> Result<bool, String> {
+        validate_playlist_operation_id(operation_id)?;
+        let token = self
+            .operations
+            .lock()
+            .map_err(|_| "Could not cancel the playlist operation.".to_string())?
+            .get(operation_id)
+            .cloned();
+        if let Some(token) = token {
+            token.cancel();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.operations
+            .lock()
+            .map(|operations| operations.len())
+            .unwrap_or(0)
+    }
+}
+
+async fn run_playlist_operation<T, F, Fut>(
+    registry: &PlaylistOperationRegistry,
+    operation_id: &str,
+    deadline: Duration,
+    operation: F,
+) -> Result<T, String>
+where
+    F: FnOnce(CancellationToken) -> Fut,
+    Fut: Future<Output = Result<T, String>>,
+{
+    let registered = registry.register(operation_id)?;
+    let token = registered.token.clone();
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => Err(PLAYLIST_CANCELLED_MESSAGE.to_string()),
+        result = tokio::time::timeout(deadline, operation(token.as_ref().clone())) => match result {
+            Ok(result) => result,
+            Err(_) => Err(PLAYLIST_TIMEOUT_MESSAGE.to_string()),
+        },
+    }
+}
+
+#[tauri::command]
+fn cancel_playlist_operation(
+    registry: State<'_, PlaylistOperationRegistry>,
+    operation_id: String,
+) -> Result<(), String> {
+    registry.cancel(&operation_id).map(|_| ())
 }
 
 fn build_http_client() -> Result<Client, String> {
@@ -495,8 +617,7 @@ where
     }
 }
 
-#[tauri::command]
-async fn fetch_playlist_from_url(url: String) -> Result<String, String> {
+async fn fetch_playlist_from_url_inner(url: String) -> Result<String, String> {
     let normalized_url = normalize_playlist_url_input(&url)?;
     let client = build_http_client()?;
 
@@ -529,8 +650,7 @@ async fn fetch_playlist_from_url(url: String) -> Result<String, String> {
     }
 }
 
-#[tauri::command]
-async fn fetch_xtream_live_channels(
+async fn fetch_xtream_live_channels_inner(
     domain: String,
     username: String,
     password: String,
@@ -664,14 +784,48 @@ async fn fetch_xtream_live_channels(
     })
 }
 
+#[tauri::command]
+async fn fetch_playlist_from_url(
+    registry: State<'_, PlaylistOperationRegistry>,
+    url: String,
+    operation_id: String,
+) -> Result<String, String> {
+    run_playlist_operation(
+        &registry,
+        &operation_id,
+        Duration::from_secs(PLAYLIST_OPERATION_TIMEOUT_SECS),
+        |_| fetch_playlist_from_url_inner(url),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn fetch_xtream_live_channels(
+    registry: State<'_, PlaylistOperationRegistry>,
+    domain: String,
+    username: String,
+    password: String,
+    operation_id: String,
+) -> Result<XtreamImportResponse, String> {
+    run_playlist_operation(
+        &registry,
+        &operation_id,
+        Duration::from_secs(PLAYLIST_OPERATION_TIMEOUT_SECS),
+        |_| fetch_xtream_live_channels_inner(domain, username, password),
+    )
+    .await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(epg::EpgState::default())
+        .manage(PlaylistOperationRegistry::default())
         .plugin(tauri_plugin_libmpv::init())
         .invoke_handler(tauri::generate_handler![
             fetch_playlist_from_url,
             fetch_xtream_live_channels,
+            cancel_playlist_operation,
             load_app_state,
             save_app_state,
             load_xtream_password,
@@ -704,6 +858,105 @@ mod tests {
         UNSUPPORTED_M3U_URL_SCHEME_MESSAGE, XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_DEV,
         XTREAM_SECRET_SERVICE_PROD,
     };
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    fn test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+    }
+
+    #[test]
+    fn trickling_playlist_body_is_bounded_by_the_overall_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                .expect("headers");
+            for _ in 0..20 {
+                if stream.write_all(b"1\r\nx\r\n").is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let registry = super::PlaylistOperationRegistry::default();
+        let client = super::build_http_client().expect("client");
+        let url = reqwest::Url::parse(&format!("http://{address}/list.m3u")).expect("url");
+        let started = Instant::now();
+
+        let result = test_runtime().block_on(super::run_playlist_operation(
+            &registry,
+            "deadline-operation",
+            Duration::from_millis(75),
+            |_: tokio_util::sync::CancellationToken| async move {
+                super::fetch_text_with_limit(&client, url, 1024, "download failed").await
+            },
+        ));
+
+        assert_eq!(result.unwrap_err(), super::PLAYLIST_TIMEOUT_MESSAGE);
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert_eq!(registry.len(), 0);
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn cancellation_interrupts_waiting_and_registry_is_cleaned() {
+        let registry = super::PlaylistOperationRegistry::default();
+        let canceller = registry.clone();
+        let started = Instant::now();
+
+        let result = test_runtime().block_on(async {
+            let cancel_task = async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                assert!(canceller.cancel("cancel-operation").expect("cancel"));
+            };
+            let operation = super::run_playlist_operation(
+                &registry,
+                "cancel-operation",
+                Duration::from_secs(2),
+                |_: tokio_util::sync::CancellationToken| async {
+                    std::future::pending::<Result<(), String>>().await
+                },
+            );
+            let (result, ()) = tokio::join!(operation, cancel_task);
+            result
+        });
+
+        assert_eq!(result.unwrap_err(), super::PLAYLIST_CANCELLED_MESSAGE);
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn operation_ids_are_validated_and_bounded_without_registry_leaks() {
+        let too_long = "a".repeat(129);
+        for invalid in ["", "contains space", "contains/slash", too_long.as_str()] {
+            assert_eq!(
+                super::validate_playlist_operation_id(invalid).unwrap_err(),
+                super::INVALID_PLAYLIST_OPERATION_ID_MESSAGE,
+            );
+        }
+        for valid in ["550e8400-e29b-41d4-a716-446655440000", "opaque_ID-42"] {
+            super::validate_playlist_operation_id(valid).expect("valid opaque id");
+        }
+
+        let registry = super::PlaylistOperationRegistry::default();
+        assert!(!registry
+            .cancel("unknown-operation")
+            .expect("valid unknown id"));
+        assert_eq!(registry.len(), 0);
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

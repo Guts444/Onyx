@@ -6,6 +6,69 @@ import {
   finishSourceBusy,
 } from "./operations.ts";
 
+function operationRequest(sourceId = "source-a") {
+  return {
+    origin: "saved" as const,
+    sourceId,
+    expectedFingerprint: `config-${sourceId}`,
+  };
+}
+
+test("supersession aborts and remotely cancels the old operation without cancelling the new one", () => {
+  const cancelled: string[] = [];
+  const ids = ["operation-old", "operation-new"];
+  const operations = createSourceOperationCoordinator({
+    createOperationId: () => ids.shift()!,
+    cancelRemote: (operationId) => { cancelled.push(operationId); },
+  });
+  const oldOperation = operations.start(operationRequest("source-a"));
+  const newOperation = operations.start(operationRequest("source-b"));
+
+  assert.equal(oldOperation.signal.aborted, true);
+  assert.equal(newOperation.signal.aborted, false);
+  assert.deepStrictEqual(cancelled, ["operation-old"]);
+  assert.equal(oldOperation.isCurrent(), false);
+  assert.equal(newOperation.isCurrent(), true);
+});
+
+test("source edit and delete cancellation aborts the matching request and prevents its commit", () => {
+  for (const mutation of ["edit", "delete"] as const) {
+    const cancelled: string[] = [];
+    const operations = createSourceOperationCoordinator({
+      createOperationId: () => `operation-${mutation}`,
+      cancelRemote: (operationId) => { cancelled.push(operationId); },
+    });
+    const token = operations.start(operationRequest());
+
+    operations.invalidateSource("source-a");
+
+    assert.equal(token.signal.aborted, true);
+    assert.deepStrictEqual(cancelled, [`operation-${mutation}`]);
+    assert.equal(operations.canCommit(token, {
+      sourceId: "source-a",
+      fingerprint: "config-source-a",
+      exists: true,
+      ready: true,
+    }), false);
+  }
+});
+
+test("component teardown cancels the current operation exactly once", () => {
+  const cancelled: string[] = [];
+  const operations = createSourceOperationCoordinator({
+    createOperationId: () => "operation-teardown",
+    cancelRemote: (operationId) => { cancelled.push(operationId); },
+  });
+  const token = operations.start(operationRequest());
+
+  operations.cancelCurrent();
+  operations.cancelCurrent();
+
+  assert.equal(token.signal.aborted, true);
+  assert.equal(token.isCurrent(), false);
+  assert.deepStrictEqual(cancelled, ["operation-teardown"]);
+});
+
 test("the latest source operation is the only current operation", () => {
   const operations = createSourceOperationCoordinator();
   const operationA = operations.start({
