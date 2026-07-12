@@ -111,6 +111,7 @@ import {
   type SourceBusyState,
   type SourceOperationToken,
 } from "./features/sources/operations";
+import { createSourceMutationCoordinator } from "./features/sources/mutations";
 import {
   createM3uUrlSource,
   createXtreamSource,
@@ -392,6 +393,7 @@ function App() {
   const sourceOperationsRef = useRef(createSourceOperationCoordinator({
     cancelRemote: cancelPlaylistOperation,
   }));
+  const sourceMutationsRef = useRef(createSourceMutationCoordinator<SavedPlaylistSource>());
   const sourceRevisionsRef = useRef(createSourceRevisionTracker());
   const persistenceNoticeShownRef = useRef(false);
   useEffect(() => () => {
@@ -519,7 +521,9 @@ function App() {
 
   useEffect(() => {
     if (playlistSnapshotPersistenceFailed || playlistSelectionPersistenceFailed) {
-      setMessage("Playlist changes could not be saved. They may be lost when the app closes.");
+      setMessage((currentMessage) =>
+        currentMessage ?? "Playlist changes could not be saved. They may be lost when the app closes.",
+      );
     }
   }, [playlistSelectionPersistenceFailed, playlistSnapshotPersistenceFailed]);
 
@@ -1283,6 +1287,7 @@ function App() {
 
   function handleAddM3uProfile() {
     const newSource = createM3uUrlSource();
+    sourceMutationsRef.current.begin(newSource.id, newSource);
     setSavedSources((currentSources) => ({
       ...currentSources,
       [newSource.id]: newSource,
@@ -1291,6 +1296,7 @@ function App() {
 
   function handleAddXtreamProfile() {
     const newSource = createXtreamSource();
+    sourceMutationsRef.current.begin(newSource.id, newSource);
     setSavedSources((currentSources) => ({
       ...currentSources,
       [newSource.id]: newSource,
@@ -1298,9 +1304,12 @@ function App() {
   }
 
   function handleToggleSourceEnabled(sourceId: string) {
+    const source = savedSourcesRef.current[sourceId];
+    if (!source) return;
+    const mutation = sourceMutationsRef.current.begin(sourceId, source);
     sourceOperationsRef.current.invalidateSource(sourceId);
     sourceRevisionsRef.current.bump(sourceId);
-    startupSourceRefreshResultRef.current = savedSourcesRef.current[sourceId]?.enabled
+    startupSourceRefreshResultRef.current = source.enabled
       ? "failed"
       : "pending";
     setStartupRestoreToken((currentToken) =>
@@ -1308,12 +1317,12 @@ function App() {
     );
     setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
     setSavedSources((currentSources) => {
-      const source = currentSources[sourceId];
-      if (!source) return currentSources;
+      const currentSource = currentSources[sourceId];
+      if (!sourceMutationsRef.current.canCommit(mutation, currentSource)) return currentSources;
       return {
         ...currentSources,
-        [sourceId]: updateSourceProfile(source, {
-          enabled: !source.enabled,
+        [sourceId]: updateSourceProfile(currentSource, {
+          enabled: !currentSource.enabled,
         }),
       };
     });
@@ -1322,9 +1331,13 @@ function App() {
   async function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
     const source = savedSourcesRef.current[sourceId];
     if (!source) return;
+    const mutation = sourceMutationsRef.current.begin(sourceId, source);
     sourceOperationsRef.current.invalidateSource(sourceId);
 
     const commitUpdate = () => {
+      if (!sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
+        return;
+      }
       sourceRevisionsRef.current.bump(sourceId);
       startupSourceRefreshResultRef.current = "pending";
       setStartupRestoreToken((currentToken) =>
@@ -1333,7 +1346,7 @@ function App() {
       setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
       setSavedSources((currentSources) => {
         const currentSource = currentSources[sourceId];
-        if (!currentSource) return currentSources;
+        if (!sourceMutationsRef.current.canCommit(mutation, currentSource)) return currentSources;
         return {
           ...currentSources,
           [sourceId]: updateSourceProfile(currentSource, patch),
@@ -1357,6 +1370,33 @@ function App() {
       try {
         await deleteSourceSecretBeforeCommit(source, commitUpdate);
       } catch (error) {
+        if (sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : "The saved source credential could not be removed. Existing saved data was kept.",
+          );
+        }
+      }
+      return;
+    }
+
+    commitUpdate();
+  }
+
+  async function handleRemoveSource(sourceId: string) {
+    const source = savedSourcesRef.current[sourceId];
+
+    if (!source) {
+      return;
+    }
+
+    const mutation = sourceMutationsRef.current.begin(sourceId, source);
+    sourceOperationsRef.current.invalidateSource(sourceId);
+    try {
+      await deleteSourceSecretBeforeCommit(source, () => undefined);
+    } catch (error) {
+      if (sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
         setMessage(
           error instanceof Error
             ? error.message
@@ -1366,34 +1406,9 @@ function App() {
       return;
     }
 
-    commitUpdate();
-  }
-
-  async function handleRemoveSource(sourceId: string) {
-    const source = savedSources[sourceId];
-
-    if (!source) {
+    if (!sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
       return;
     }
-
-    sourceOperationsRef.current.invalidateSource(sourceId);
-    try {
-      await deleteSourceSecretBeforeCommit(source, () => undefined);
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "The saved source credential could not be removed. Existing saved data was kept.",
-      );
-      return;
-    }
-
-    sourceRevisionsRef.current.bump(sourceId);
-    startupSourceRefreshResultRef.current = "failed";
-    setStartupRestoreToken((currentToken) =>
-      currentToken?.sourceId === sourceId ? null : currentToken,
-    );
-    setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
 
     const cleanupEntry = sourceLibraryIndex[sourceId];
     const trackedChannelIds = new Set(cleanupEntry?.channelIds ?? []);
@@ -1409,7 +1424,21 @@ function App() {
       await stopPlayback();
     }
 
+    if (!sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
+      return;
+    }
+
+    sourceRevisionsRef.current.bump(sourceId);
+    startupSourceRefreshResultRef.current = "failed";
+    setStartupRestoreToken((currentToken) =>
+      currentToken?.sourceId === sourceId ? null : currentToken,
+    );
+    setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
+
     setSavedSources((currentSources) => {
+      if (!sourceMutationsRef.current.canCommit(mutation, currentSources[sourceId])) {
+        return currentSources;
+      }
       const nextSources = { ...currentSources };
       delete nextSources[sourceId];
       return nextSources;
