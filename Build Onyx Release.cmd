@@ -1,7 +1,7 @@
 @echo off
 setlocal
 title Onyx Release Build
-set "VERSION=0.5.7"
+set "VERSION=0.5.8"
 
 cd /d "%~dp0"
 

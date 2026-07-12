@@ -38,20 +38,22 @@ Onyx is built around large IPTV libraries. Recent startup and browsing work focu
 
 ## Privacy And Storage
 
-Onyx has no cloud backend, analytics, telemetry, or account sync.
+Onyx has no cloud backend, analytics, telemetry, or account sync. Playlist, guide, playback, and settings data stay on the local machine except for direct requests to the source and guide URLs supplied by the user.
 
-Local app state is stored by Tauri in the app local data directory. This includes saved source metadata, guide settings, favorites, recents, hidden groups, playback session data, volume, and cached playlist snapshots.
+Local app state is stored by Tauri in the app local data directory. This includes credential-free source metadata, guide settings, favorites, recents, hidden groups, playback session data, volume, and credential-free playlist snapshots.
 
-Xtream passwords are stored separately in the operating system credential store through the Rust `keyring` integration. Saved source JSON is scrubbed so Xtream passwords are not written into the app-state JSON files.
+Xtream passwords, remote M3U URLs, and EPG URLs are stored separately in Windows Credential Manager through the Rust `keyring` integration. Persisted state and cache identities do not use those URLs. At startup, Onyx hydrates the secrets into memory and migrates compatible legacy source, channel, cache, and EPG-mapping references to URL-free identifiers before safely rewriting them.
 
-EPG cache data is also stored locally by the Tauri backend.
+App-state and EPG-cache writes are size-bounded, serialized, and atomically replaced with validated recovery backups. If a primary is corrupt, Onyx can recover a safe backup; invalid or credential-bearing legacy artifacts are quarantined or securely discarded according to their contents. A failed migration or credential-store operation keeps existing saved data rather than committing a partial change.
 
 ## Security Notes
 
 - Playlist metadata is treated as untrusted text and rendered without HTML injection.
 - Stream URLs are normalized and restricted to supported protocols or local file paths.
 - Remote playlist and XMLTV guide imports are fetched in Rust to avoid browser CORS limitations and to enforce size limits.
-- Xtream passwords are stored in the OS credential store rather than browser storage or app-state JSON.
+- Xtream passwords and remote M3U/EPG URLs are stored in Windows Credential Manager rather than browser storage, app-state JSON, or EPG cache JSON.
+- Persisted state uses URL-free source/cache identifiers and rejects credential-bearing playlist state at the backend boundary.
+- Production uses a restrictive CSP and a minimum Tauri IPC capability set; development has a separate identity, data directory, credential namespace, and explicit localhost-only CSP additions.
 - No shell execution is driven by playlist data.
 
 ## Screenshots
@@ -75,7 +77,7 @@ The supported Windows x86-64 build is intentionally reproducible. Required versi
 - Rust `1.95.x` with `x86_64-pc-windows-msvc`, `rustfmt`, and `clippy` (`rust-toolchain.toml` pins `1.95.0`)
 - the normal [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/)
 
-Install JavaScript dependencies from the authoritative npm lockfile:
+The npm manifest and `package-lock.json` are authoritative for JavaScript dependencies; use npm only and install the exact lockfile graph:
 
 ```bash
 npm ci
@@ -88,7 +90,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-toolchain.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-native-deps.ps1
 ```
 
-The required `src-tauri/lib/libmpv-wrapper.dll` and `libmpv-2.dll` are described in `src-tauri/lib/SOURCES.md`. That file contains fixed release URLs, archive hashes, extracted DLL hashes, and the replacement procedure. Do not use a `latest` release URL or `tauri-plugin-libmpv-api setup-lib` for release inputs.
+The required `src-tauri/lib/libmpv-wrapper.dll` and `libmpv-2.dll` are described in `src-tauri/lib/SOURCES.md`. That file contains fixed release URLs, archive hashes, extracted DLL hashes, and the fetch/replacement procedure. Fetch only those pinned archives, verify each archive hash before extraction, verify the extracted DLL hash against both `SOURCES.md` and `src-tauri/lib/SHA256SUMS`, then run `scripts/verify-native-deps.ps1`. Do not use a `latest` release URL or `tauri-plugin-libmpv-api setup-lib` for release inputs.
 
 Start isolated development mode:
 

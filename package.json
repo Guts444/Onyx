@@ -1,7 +1,7 @@
 {
   "name": "onyx",
   "private": true,
-  "version": "0.5.7",
+  "version": "0.5.8",
   "type": "module",
   "packageManager": "npm@11.16.0",
   "engines": {

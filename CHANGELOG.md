@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.8 - 2026-07-12
+
+- **Credential-safe sources and guides**: Xtream passwords, remote M3U URLs, and EPG URLs are held in Windows Credential Manager instead of app-state or cache JSON; existing records are securely hydrated and rewritten during migration.
+- **URL-free identity and migration**: Persisted playlist/EPG state uses stable source and cache identifiers rather than credential-bearing URLs, with compatibility migrations for saved channels, favorites, recents, selections, and manual EPG mappings.
+- **Crash-safe local state**: App state and EPG caches use bounded, serialized atomic writes, validated backups, corruption recovery, and safe quarantine/deletion rules for invalid or credential-bearing legacy data.
+- **EPG integrity**: Download, decode, cache, and parser bounds were tightened; stale refresh races are rejected; malformed programmes are skipped with bounded, credential-free diagnostics rather than invalidating an otherwise usable guide.
+- **Hardened release inputs**: Dependencies, production CSP, and Tauri capabilities were tightened; pinned Node/npm/Rust toolchains, isolated development identity/state/credentials, and fixed native DLL provenance plus checksum verification are documented and enforced by release prerequisites.
+
+Release packaging, installer smoke testing, and final release review remain pending; this entry records the v0.5.8 code and metadata state only.
+
 ## v0.5.7
 
 - **Fullscreen Escape polish**: When leaving startup fullscreen playback, favorite channels now reopen the Favorites view instead of their normal channel group.
