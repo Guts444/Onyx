@@ -133,6 +133,10 @@ export interface EpgDirectoryResponse {
   channelCount: number;
   programmeCount: number;
   channels: EpgDirectoryChannel[];
+  skippedProgrammeCount: number;
+  warnings: string[];
+  recovered: boolean;
+  corrupt: boolean;
 }
 
 export interface EpgProgrammeSummary {
