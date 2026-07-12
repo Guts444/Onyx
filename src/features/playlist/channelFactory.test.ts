@@ -6,6 +6,12 @@ import {
   createLocalM3uSourceIdentity,
   normalizeStreamReference,
 } from "./channelFactory.ts";
+import { sanitizePlaylistSnapshot } from "./snapshot.ts";
+import {
+  createXtreamStreamDescriptor,
+  buildCredentialFreeXtreamChannel,
+  materializeChannelForPlayback,
+} from "./materialize.ts";
 
 const REMOTE_SOURCE = {
   sourceId: "source_remote_primary",
@@ -274,4 +280,100 @@ test("createLegacyChannelId preserves the previous deterministic ID mapping", ()
     createLegacyChannelId("News", "Live", "https://example.com/live.m3u8"),
     "channel_q9ejz7",
   );
+});
+
+test("saved remote playlist snapshots serialize without stream credentials", () => {
+  const channel = buildChannel(
+    {
+      name: "Private News",
+      stream: "https://viewer:super-secret@provider.example/live/viewer/super-secret/42.ts?token=secret-token",
+      originalStream: "https://provider.example/watch.m3u8?username=viewer&password=super-secret",
+    },
+    REMOTE_SOURCE,
+  );
+
+  const sanitized = sanitizePlaylistSnapshot({
+    sourceId: REMOTE_SOURCE.sourceId,
+    playlist: {
+      name: "Remote library",
+      channels: [channel],
+      groups: ["Ungrouped"],
+      importedAt: "2026-07-12T00:00:00.000Z",
+      disabledChannelCount: 0,
+      skippedEntryCount: 0,
+    },
+    selectedChannelId: channel.id,
+    savedAt: "2026-07-12T00:00:01.000Z",
+  });
+  const serialized = JSON.stringify(sanitized);
+
+  assert.equal(serialized.includes("super-secret"), false);
+  assert.equal(serialized.includes("secret-token"), false);
+  assert.equal(serialized.includes("viewer"), false);
+  assert.equal(sanitized.playlist.channels[0].stream, null);
+  assert.equal(sanitized.playlist.channels[0].originalStream, null);
+  assert.equal(sanitized.playlist.channels[0].isPlayable, false);
+  assert.match(sanitized.playlist.channels[0].playabilityError ?? "", /refresh/i);
+});
+
+test("Xtream descriptors materialize a playable URL only from runtime source secrets", () => {
+  const descriptor = createXtreamStreamDescriptor(
+    "https://provider.example/live/old-user/old-password/42.ts",
+  );
+  assert.deepStrictEqual(descriptor, {
+    kind: "xtream",
+    streamType: "live",
+    streamId: "42",
+    container: "ts",
+  });
+
+  const channel = {
+    ...buildChannel(
+      { name: "News", stream: "https://provider.example/live/old-user/old-password/42.ts" },
+      REMOTE_SOURCE,
+    ),
+    stream: null,
+    originalStream: null,
+    streamDescriptor: descriptor,
+  };
+  const materialized = materializeChannelForPlayback(channel, {
+    id: REMOTE_SOURCE.sourceId,
+    kind: "xtream",
+    domain: "https://provider.example/",
+    username: "runtime-user",
+    password: "runtime-password",
+  });
+
+  assert.equal(
+    materialized.stream,
+    "https://provider.example/live/runtime-user/runtime-password/42.ts",
+  );
+  assert.equal(channel.stream, null);
+});
+
+test("Xtream imports retain only a non-secret stream descriptor", () => {
+  const channel = buildCredentialFreeXtreamChannel(
+    {
+      name: "News",
+      group: "Live",
+      stream: "https://provider.example/live/plain-user/plain-password/42.ts",
+      logo: null,
+      tvgId: "news.example",
+      tvgName: "News",
+    },
+    REMOTE_SOURCE.sourceId,
+  );
+  const serialized = JSON.stringify(channel);
+
+  assert.equal(channel.stream, null);
+  assert.equal(channel.originalStream, null);
+  assert.equal(channel.isPlayable, true);
+  assert.deepStrictEqual(channel.streamDescriptor, {
+    kind: "xtream",
+    streamType: "live",
+    streamId: "42",
+    container: "ts",
+  });
+  assert.equal(serialized.includes("plain-user"), false);
+  assert.equal(serialized.includes("plain-password"), false);
 });

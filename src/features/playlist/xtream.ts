@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PlaylistImport } from "../../domain/iptv";
-import { buildChannel, sanitizeLabel } from "./channelFactory";
+import { sanitizeLabel } from "./channelFactory";
+import { buildCredentialFreeXtreamChannel } from "./materialize";
 
 interface XtreamChannelPayload {
   name: string;
@@ -29,7 +30,7 @@ export async function importXtreamPlaylist(
   });
 
   const channels = response.channels.map((channel) =>
-    buildChannel(
+    buildCredentialFreeXtreamChannel(
       {
         name: channel.name,
         group: channel.group,
@@ -38,7 +39,7 @@ export async function importXtreamPlaylist(
         tvgId: channel.tvgId,
         tvgName: channel.tvgName,
       },
-      { sourceId, trust: "remote" },
+      sourceId,
     ),
   );
 

@@ -12,6 +12,7 @@ import {
 } from "tauri-plugin-libmpv-api";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { Channel } from "../../domain/iptv";
+import { redactCredentials } from "../playlist/redaction";
 
 export const DEFAULT_PLAYER_VOLUME = 72;
 const OBSERVED_PROPERTIES = [
@@ -44,7 +45,7 @@ export interface MpvPlayerState {
 type PlayerLayoutMode = "windowed" | "fullscreen";
 
 function sanitizeLogMessage(message: string) {
-  return message
+  return redactCredentials(message)
     .replace(/[\u0000-\u001F\u007F]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -95,14 +96,16 @@ function getMarginRatio(surface: HTMLElement) {
 }
 
 function describeInitError(error: unknown) {
-  const message = error instanceof Error ? error.message : "Unknown initialization error.";
+  const message = redactCredentials(
+    error instanceof Error ? error.message : "Unknown initialization error.",
+  );
 
   return `libmpv could not start. Review the mpv dependency setup, then place libmpv-wrapper.dll and libmpv-2.dll in src-tauri/lib/. Original error: ${message}`;
 }
 
 function describeCommandError(error: unknown) {
   if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message.trim();
+    return redactCredentials(error.message.trim());
   }
 
   return "The player command failed.";
@@ -443,6 +446,21 @@ export function useMpvPlayer(
         idleActive: true,
         error: currentState.initError ?? "The native player is still starting.",
         status: "Player not ready",
+        videoWidth: null,
+        videoHeight: null,
+        videoFps: null,
+      }));
+      return false;
+    }
+
+    if (channel.stream === null) {
+      setState((currentState) => ({
+        ...currentState,
+        idleActive: true,
+        loading: false,
+        buffering: false,
+        error: "Refresh or unlock this source before playback.",
+        status: "Channel unavailable",
         videoWidth: null,
         videoHeight: null,
         videoFps: null,

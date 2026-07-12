@@ -270,6 +270,7 @@ export function buildChannel(seed: ChannelSeed, context: StreamOriginContext): C
 
   return {
     id: createChannelId(context.sourceId, normalizedStream.stream),
+    legacyIds: [createLegacyChannelId(name, group, normalizedStream.stream)],
     name,
     group,
     stream: normalizedStream.stream,
