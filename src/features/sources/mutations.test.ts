@@ -128,3 +128,18 @@ test("explicit invalidation rejects a pending mutation before asynchronous delet
 
   assert.equal(mutations.canCommit(pending, original), false);
 });
+
+test("a stale removal cannot enter its dependent cleanup phase", () => {
+  const mutations = createSourceMutationCoordinator<SourceState>();
+  const original = source("source-a", "credential");
+  const removal = mutations.begin(original.id, original);
+  mutations.begin(original.id, original);
+  let cleanupRuns = 0;
+
+  const committed = mutations.commit(removal, original, () => {
+    cleanupRuns += 1;
+  });
+
+  assert.equal(committed, false);
+  assert.equal(cleanupRuns, 0);
+});

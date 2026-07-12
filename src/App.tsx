@@ -1422,7 +1422,17 @@ function App() {
       await stopPlayback();
     }
 
-    if (!sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
+    const removed = sourceMutationsRef.current.commit(
+      mutation,
+      savedSourcesRef.current[sourceId],
+      () => {
+        const nextSources = { ...savedSourcesRef.current };
+        delete nextSources[sourceId];
+        savedSourcesRef.current = nextSources;
+        setSavedSources(nextSources);
+      },
+    );
+    if (!removed) {
       return;
     }
 
@@ -1433,14 +1443,6 @@ function App() {
     );
     setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
 
-    setSavedSources((currentSources) => {
-      if (!sourceMutationsRef.current.canCommit(mutation, currentSources[sourceId])) {
-        return currentSources;
-      }
-      const nextSources = { ...currentSources };
-      delete nextSources[sourceId];
-      return nextSources;
-    });
     setSourceLibraryIndex((currentIndex) => {
       const nextIndex = { ...currentIndex };
       delete nextIndex[sourceId];
