@@ -1,5 +1,10 @@
 import type { PlaylistImport } from "../../domain/iptv";
-import { buildChannel, sanitizeLabel, sanitizeOptionalLabel } from "./channelFactory";
+import {
+  buildChannel,
+  sanitizeLabel,
+  sanitizeOptionalLabel,
+  type StreamOriginContext,
+} from "./channelFactory";
 
 interface PendingChannelMeta {
   name: string;
@@ -61,7 +66,11 @@ function parseExtinfLine(line: string, fallbackIndex: number, fallbackGroup: str
   } satisfies PendingChannelMeta;
 }
 
-export function parseM3u(playlistText: string, fileName: string): PlaylistImport {
+export function parseM3u(
+  playlistText: string,
+  fileName: string,
+  origin: StreamOriginContext,
+): PlaylistImport {
   const normalizedText = playlistText.replace(/^\uFEFF/, "");
   const lines = normalizedText.split(/\r?\n/);
   const channels = [];
@@ -105,15 +114,18 @@ export function parseM3u(playlistText: string, fileName: string): PlaylistImport
       continue;
     }
 
-    const channel = buildChannel({
-      name: pendingChannel?.name ?? `Channel ${channels.length + 1}`,
-      group: pendingChannel?.group ?? fallbackGroup ?? "Ungrouped",
-      stream: line,
-      originalStream: line,
-      logo: pendingChannel?.logo,
-      tvgId: pendingChannel?.tvgId,
-      tvgName: pendingChannel?.tvgName,
-    });
+    const channel = buildChannel(
+      {
+        name: pendingChannel?.name ?? `Channel ${channels.length + 1}`,
+        group: pendingChannel?.group ?? fallbackGroup ?? "Ungrouped",
+        stream: line,
+        originalStream: line,
+        logo: pendingChannel?.logo,
+        tvgId: pendingChannel?.tvgId,
+        tvgName: pendingChannel?.tvgName,
+      },
+      origin,
+    );
 
     if (!channel.isPlayable) {
       disabledChannelCount += 1;

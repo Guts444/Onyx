@@ -41,6 +41,7 @@ import {
 } from "./features/epg/matching";
 import { DEFAULT_PLAYER_VOLUME, useMpvPlayer } from "./features/player/mpv";
 import { parseM3u } from "./features/playlist/m3u";
+import { createLocalM3uSourceIdentity } from "./features/playlist/channelFactory";
 import { downloadPlaylistFromUrl } from "./features/playlist/remote";
 import { importXtreamPlaylist } from "./features/playlist/xtream";
 import {
@@ -724,9 +725,17 @@ function App() {
 
     if (source.kind === "m3u_url") {
       const { fileName, playlistText } = await downloadPlaylistFromUrl(source.url);
-      importedPlaylist = parseM3u(playlistText, fileName);
+      importedPlaylist = parseM3u(playlistText, fileName, {
+        sourceId: source.id,
+        trust: "remote",
+      });
     } else {
-      importedPlaylist = await importXtreamPlaylist(source.domain, source.username, source.password);
+      importedPlaylist = await importXtreamPlaylist(
+        source.domain,
+        source.username,
+        source.password,
+        source.id,
+      );
     }
 
     await applyImportedPlaylist(importedPlaylist, {
@@ -816,7 +825,10 @@ function App() {
 
     try {
       const playlistText = await file.text();
-      const importedPlaylist = parseM3u(playlistText, file.name);
+      const importedPlaylist = parseM3u(playlistText, file.name, {
+        sourceId: createLocalM3uSourceIdentity(file.name),
+        trust: "trusted-local",
+      });
       await applyImportedPlaylist(importedPlaylist, {
         sourceId: null,
       });

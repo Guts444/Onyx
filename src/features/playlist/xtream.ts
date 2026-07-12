@@ -20,6 +20,7 @@ export async function importXtreamPlaylist(
   domain: string,
   username: string,
   password: string,
+  sourceId: string,
 ): Promise<PlaylistImport> {
   const response = await invoke<XtreamImportResponse>("fetch_xtream_live_channels", {
     domain,
@@ -28,14 +29,17 @@ export async function importXtreamPlaylist(
   });
 
   const channels = response.channels.map((channel) =>
-    buildChannel({
-      name: channel.name,
-      group: channel.group,
-      stream: channel.stream,
-      logo: channel.logo,
-      tvgId: channel.tvgId,
-      tvgName: channel.tvgName,
-    }),
+    buildChannel(
+      {
+        name: channel.name,
+        group: channel.group,
+        stream: channel.stream,
+        logo: channel.logo,
+        tvgId: channel.tvgId,
+        tvgName: channel.tvgName,
+      },
+      { sourceId, trust: "remote" },
+    ),
   );
 
   if (channels.length === 0) {
