@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import importlib.util
-import io
+import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("scan-repository-secrets.py")
@@ -32,7 +31,7 @@ class SecretScannerTests(unittest.TestCase):
         self.assertEqual(self.scan("fixture.txt", token), [("fixture.txt", "github-token", 1)])
 
     def test_assignment_containing_example_is_detected(self):
-        value = "correct-horse-example-battery-staple"
+        value = "correct-horse-" + "example-battery-staple"
         self.assertEqual(
             self.scan("settings.txt", f'password = "{value}"'),
             [("settings.txt", "secret-assignment", 1)],
@@ -45,7 +44,7 @@ class SecretScannerTests(unittest.TestCase):
         )
 
     def test_reserved_host_credential_url_is_allowed_only_in_test_file(self):
-        fixture = "https://fixture-user:fixture-password@service.invalid/feed"
+        fixture = "https://" + "fixture-user:fixture-password@service.invalid/feed"
         self.assertEqual(self.scan("client.test.ts", fixture), [])
         self.assertEqual(
             self.scan("production.ts", fixture),
@@ -67,14 +66,28 @@ class SecretScannerTests(unittest.TestCase):
             [("client.test.ts", "credential-url", 1)],
         )
 
-    def test_report_does_not_reveal_secret_value(self):
+    def test_subprocess_report_does_not_reveal_secret_value(self):
         sensitive_value = "correct-horse-" + "example-battery-staple"
-        findings = self.scan("settings.txt", f'password = "{sensitive_value}"')
-        output = io.StringIO()
-        with redirect_stderr(output):
-            scanner.report_findings(findings)
-        self.assertNotIn(sensitive_value, output.getvalue())
-        self.assertIn("value suppressed", output.getvalue())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "settings.txt"
+            fixture.write_text(f'password = "{sensitive_value}"', encoding="utf-8")
+            subprocess.run(
+                ["git", "init", "-q"], cwd=root, check=True, capture_output=True, text=True
+            )
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--no-tracked", str(fixture)],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("potential secret (secret-assignment)", output)
+        self.assertNotIn(sensitive_value, output)
+        self.assertIn("value suppressed", output)
 
 
 if __name__ == "__main__":
