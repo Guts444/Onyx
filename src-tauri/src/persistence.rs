@@ -57,6 +57,7 @@ struct LoadedState {
     bytes: Vec<u8>,
     parsed: Result<ParsedState, String>,
     unsafe_bytes: bool,
+    oversized: bool,
 }
 
 pub struct Store {
@@ -177,7 +178,9 @@ impl Store {
         // credential-bearing legacy backup bytes are no longer a valid LKG.
         if backup.exists() {
             let loaded = self.load_file(key, &backup)?;
-            if loaded.unsafe_bytes {
+            if loaded.oversized {
+                let _ = remove_if_exists(&backup);
+            } else if loaded.unsafe_bytes {
                 secure_delete_best_effort(&backup)?;
             }
         }
@@ -206,7 +209,7 @@ impl Store {
         match loaded.parsed {
             Ok(parsed) => Ok(outcome_from_parsed(parsed, false, false, false)),
             Err(_) => {
-                let quarantined = dispose_invalid(&primary, loaded.unsafe_bytes)?;
+                let quarantined = dispose_invalid(&primary, loaded.unsafe_bytes, loaded.oversized)?;
                 self.read_backup(key, &backup, true, quarantined)
             }
         }
@@ -235,20 +238,31 @@ impl Store {
                 Ok(outcome_from_parsed(parsed, true, corrupt, quarantined))
             }
             Err(_) => {
-                let backup_quarantined = dispose_invalid(backup, loaded.unsafe_bytes)?;
+                let backup_quarantined =
+                    dispose_invalid(backup, loaded.unsafe_bytes, loaded.oversized)?;
                 Ok(missing_outcome(true, quarantined || backup_quarantined))
             }
         }
     }
 
     fn load_file(&self, key: &str, path: &Path) -> Result<LoadedState, String> {
-        let bytes = read_bounded(path)?;
+        let Some(bytes) = read_bounded(path)? else {
+            return Ok(LoadedState {
+                bytes: Vec::new(),
+                parsed: Err("The app state is too large to read safely.".to_string()),
+                // Oversized state is unreadable and must never be retained as a
+                // backup or copied to quarantine.
+                unsafe_bytes: true,
+                oversized: true,
+            });
+        };
         let unsafe_bytes = contains_unsafe_credentials(key, &bytes);
         let parsed = parse_state(key, &bytes);
         Ok(LoadedState {
             bytes,
             parsed,
             unsafe_bytes,
+            oversized: false,
         })
     }
 
@@ -333,23 +347,23 @@ fn missing_outcome(corrupt: bool, quarantined: bool) -> ReadOutcome {
     }
 }
 
-fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+fn read_bounded(path: &Path) -> Result<Option<Vec<u8>>, String> {
     let file = File::open(path).map_err(|error| format!("Could not open app state: {error}"))?;
     let length = file
         .metadata()
         .map_err(|error| format!("Could not inspect app state: {error}"))?
         .len();
     if length > MAX_STATE_BYTES as u64 {
-        return Err("The app state is too large to read safely.".to_string());
+        return Ok(None);
     }
     let mut bytes = Vec::with_capacity(length as usize);
     file.take((MAX_STATE_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Could not read app state: {error}"))?;
     if bytes.len() > MAX_STATE_BYTES {
-        return Err("The app state is too large to read safely.".to_string());
+        return Ok(None);
     }
-    Ok(bytes)
+    Ok(Some(bytes))
 }
 
 fn contains_unsafe_credentials(_key: &str, bytes: &[u8]) -> bool {
@@ -475,19 +489,36 @@ fn string_contains_credentials(text: &str) -> bool {
         return true;
     }
 
-    if let Ok(url) = reqwest::Url::parse(text) {
-        if !url.username().is_empty() || url.password().is_some() {
-            return true;
-        }
-        if url
-            .query_pairs()
-            .any(|(name, value)| !value.is_empty() && is_sensitive_name(&name))
-        {
-            return true;
-        }
-    }
+    embedded_urls_contain_credentials(text) || contains_xtream_path(&lower)
+}
 
-    contains_xtream_path(&lower)
+fn embedded_urls_contain_credentials(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.char_indices().any(|(start, _)| {
+        let remainder = &lower[start..];
+        if !remainder.starts_with("http://") && !remainder.starts_with("https://") {
+            return false;
+        }
+
+        let end = text[start..]
+            .char_indices()
+            .find_map(|(offset, character)| {
+                (character.is_whitespace()
+                    || matches!(character, '"' | '\'' | '<' | '>' | '[' | ']' | '{' | '}'))
+                .then_some(start + offset)
+            })
+            .unwrap_or(text.len());
+        let candidate = text[start..end].trim_end_matches([')', ',', ';', '.', '!']);
+
+        reqwest::Url::parse(candidate).is_ok_and(|url| {
+            !url.username().is_empty()
+                || url.password().is_some()
+                || url
+                    .query_pairs()
+                    .any(|(name, value)| !value.is_empty() && is_sensitive_name(&name))
+                || contains_xtream_path(&url.path().to_ascii_lowercase())
+        })
+    })
 }
 
 fn contains_xtream_path(text: &str) -> bool {
@@ -558,8 +589,14 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
-fn dispose_invalid(path: &Path, unsafe_bytes: bool) -> Result<bool, String> {
-    if unsafe_bytes {
+fn dispose_invalid(path: &Path, unsafe_bytes: bool, oversized: bool) -> Result<bool, String> {
+    if oversized {
+        // Never copy or overwrite an attacker-controlled amount of data. A
+        // failed deletion is intentionally non-fatal so backup recovery can
+        // still proceed.
+        let _ = remove_if_exists(path);
+        Ok(false)
+    } else if unsafe_bytes {
         secure_delete_best_effort(path)?;
         Ok(false)
     } else {
@@ -776,6 +813,83 @@ mod tests {
         assert_eq!(fs::read(store.backup_path("large")).unwrap(), backup_before);
     }
 
+    fn create_oversized_file(path: &Path) {
+        let file = File::create(path).unwrap();
+        file.set_len(MAX_STATE_BYTES as u64 + 1).unwrap();
+    }
+
+    #[test]
+    fn oversized_primary_recovers_valid_backup_without_copying_oversized_bytes() {
+        let directory = TestDirectory::new("oversized-primary-backup");
+        let store = Store::new(directory.0.clone());
+        store.write("settings", &json!({"generation": 1})).unwrap();
+        store.write("settings", &json!({"generation": 2})).unwrap();
+        create_oversized_file(&store.path("settings"));
+
+        let loaded = store.read("settings").unwrap();
+
+        assert_eq!(loaded.value, Some(json!({"generation": 1})));
+        assert!(loaded.recovered);
+        assert!(loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(fs::metadata(store.path("settings")).unwrap().len() <= MAX_STATE_BYTES as u64);
+        assert!(fs::read_dir(&directory.0).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".corrupt-")));
+    }
+
+    #[test]
+    fn oversized_primary_without_backup_is_removed_and_reported_missing() {
+        let directory = TestDirectory::new("oversized-primary-missing");
+        let store = Store::new(directory.0.clone());
+        create_oversized_file(&store.path("settings"));
+
+        let loaded = store.read("settings").unwrap();
+
+        assert!(!loaded.exists);
+        assert!(loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(!store.path("settings").exists());
+    }
+
+    #[test]
+    fn safe_write_atomically_replaces_oversized_primary() {
+        let directory = TestDirectory::new("oversized-primary-write");
+        let store = Store::new(directory.0.clone());
+        store.write("settings", &json!({"generation": 1})).unwrap();
+        store.write("settings", &json!({"generation": 2})).unwrap();
+        let backup_before = fs::read(store.backup_path("settings")).unwrap();
+        create_oversized_file(&store.path("settings"));
+
+        store.write("settings", &json!({"safe": true})).unwrap();
+
+        assert_eq!(
+            store.read("settings").unwrap().value,
+            Some(json!({"safe": true}))
+        );
+        assert_eq!(
+            fs::read(store.backup_path("settings")).unwrap(),
+            backup_before
+        );
+    }
+
+    #[test]
+    fn oversized_backup_is_removed_and_ignored_during_default_recovery() {
+        let directory = TestDirectory::new("oversized-backup");
+        let store = Store::new(directory.0.clone());
+        create_oversized_file(&store.backup_path("settings"));
+
+        let loaded = store.read("settings").unwrap();
+
+        assert!(!loaded.exists);
+        assert!(loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(!store.backup_path("settings").exists());
+        assert!(!store.path("settings").exists());
+    }
+
     #[test]
     fn missing_primary_recovers_valid_backup() {
         let directory = TestDirectory::new("missing-primary");
@@ -931,6 +1045,40 @@ mod tests {
             assert!(
                 !string_contains_credentials(url),
                 "false positive for {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn credential_urls_embedded_in_larger_json_strings_are_detected_across_all_keys() {
+        let unsafe_messages = [
+            "Request failed for https://tv/get.php?username=u&password=secret (timeout)",
+            "retry [https://tv/list?access%54oken=secret], later",
+            "stream=https://tv/live/alice/s3cret/123.ts, unavailable",
+            "upstream http://alice:s3cret@tv.example/list.m3u; failed",
+            "response from https://tv/list?token=secret-token.",
+        ];
+        for message in unsafe_messages {
+            let bytes = serde_json::to_vec(&json!({"ordinaryLogMessage": message})).unwrap();
+            assert!(
+                contains_unsafe_credentials("settings", &bytes),
+                "missed embedded URL in {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_url_query_names_remain_exact_after_percent_decoding() {
+        for message in [
+            "Request failed for https://tv/list?compass=north (timeout)",
+            "Request failed for https://tv/list?bypass=yes, retrying",
+            "Request failed for https://tv/list?notpassword=harmless.",
+            "Request failed for https://tv/list?not%70assword=harmless!",
+        ] {
+            let bytes = serde_json::to_vec(&json!({"message": message})).unwrap();
+            assert!(
+                !contains_unsafe_credentials("playlist:snapshot", &bytes),
+                "false positive for embedded URL in {message:?}"
             );
         }
     }
