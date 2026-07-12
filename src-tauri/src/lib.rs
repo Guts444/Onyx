@@ -1,6 +1,7 @@
 mod epg;
+mod persistence;
 
-use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use reqwest::{Client, Url};
 use serde::Serialize;
@@ -13,13 +14,6 @@ const CONNECT_TIMEOUT_SECS: u64 = 15;
 const READ_TIMEOUT_SECS: u64 = 45;
 const APP_STATE_DIRECTORY: &str = "state";
 const XTREAM_SECRET_SERVICE: &str = "Onyx Xtream";
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AppStatePayload {
-    exists: bool,
-    value: Option<Value>,
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,21 +43,6 @@ fn build_http_client() -> Result<Client, String> {
         .map_err(|error| format!("Could not initialize the network client: {error}"))
 }
 
-fn validate_app_state_key(key: &str) -> Result<(), String> {
-    if key.is_empty() || key.len() > 160 {
-        return Err("The app state key is not valid.".to_string());
-    }
-
-    if key
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
-    {
-        return Ok(());
-    }
-
-    Err("The app state key contains unsupported characters.".to_string())
-}
-
 fn validate_source_id(source_id: &str) -> Result<(), String> {
     if source_id.is_empty() || source_id.len() > 160 {
         return Err("The source id is not valid.".to_string());
@@ -88,64 +67,20 @@ fn get_xtream_secret_entry(source_id: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(XTREAM_SECRET_SERVICE, source_id).map_err(map_secret_error)
 }
 
-fn encode_app_state_file_name(key: &str) -> String {
-    key.as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
-}
-
-fn get_app_state_path<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathBuf, String> {
-    validate_app_state_key(key)?;
+fn get_app_state_directory<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     app.path()
-        .resolve(
-            format!(
-                "{APP_STATE_DIRECTORY}/{}.json",
-                encode_app_state_file_name(key)
-            ),
-            BaseDirectory::AppLocalData,
-        )
+        .resolve(APP_STATE_DIRECTORY, BaseDirectory::AppLocalData)
         .map_err(|error| format!("Could not resolve the app state path: {error}"))
 }
 
 #[tauri::command]
-fn load_app_state(app: AppHandle, key: String) -> Result<AppStatePayload, String> {
-    let state_path = get_app_state_path(&app, &key)?;
-
-    if !state_path.exists() {
-        return Ok(AppStatePayload {
-            exists: false,
-            value: None,
-        });
-    }
-
-    let bytes =
-        fs::read(state_path).map_err(|error| format!("Could not read the app state: {error}"))?;
-    let value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("Could not parse the app state: {error}"))?;
-
-    Ok(AppStatePayload {
-        exists: true,
-        value: Some(value),
-    })
+fn load_app_state(app: AppHandle, key: String) -> Result<persistence::ReadOutcome, String> {
+    persistence::Store::new(get_app_state_directory(&app)?).read(&key)
 }
 
 #[tauri::command]
 fn save_app_state(app: AppHandle, key: String, value: Value) -> Result<(), String> {
-    let state_path = get_app_state_path(&app, &key)?;
-
-    if let Some(parent_directory) = state_path.parent() {
-        fs::create_dir_all(parent_directory)
-            .map_err(|error| format!("Could not create the app state directory: {error}"))?;
-    }
-
-    let serialized = serde_json::to_vec(&value)
-        .map_err(|error| format!("Could not serialize the app state: {error}"))?;
-
-    fs::write(state_path, serialized)
-        .map_err(|error| format!("Could not write the app state: {error}"))?;
-
-    Ok(())
+    persistence::Store::new(get_app_state_directory(&app)?).write(&key, &value)
 }
 
 #[tauri::command]
