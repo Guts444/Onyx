@@ -45,6 +45,7 @@ pub struct ReadOutcome {
     pub corrupt: bool,
     pub quarantined: bool,
     pub unsafe_legacy_playlist: bool,
+    pub requires_safe_rewrite: bool,
 }
 
 struct ParsedState {
@@ -184,6 +185,7 @@ impl Store {
                 secure_delete_best_effort(&backup)?;
             }
         }
+        self.cleanup_epg_artifacts(key);
         Ok(())
     }
 
@@ -199,6 +201,7 @@ impl Store {
     }
 
     fn read_locked(&self, key: &str) -> Result<ReadOutcome, String> {
+        self.cleanup_epg_artifacts(key);
         let primary = self.path(key);
         let backup = self.backup_path(key);
         if !primary.exists() {
@@ -209,7 +212,11 @@ impl Store {
         match loaded.parsed {
             Ok(parsed) => Ok(outcome_from_parsed(parsed, false, false, false)),
             Err(_) => {
-                let quarantined = dispose_invalid(&primary, loaded.unsafe_bytes, loaded.oversized)?;
+                let quarantined = dispose_invalid(
+                    &primary,
+                    loaded.unsafe_bytes || is_epg_state_key(key),
+                    loaded.oversized,
+                )?;
                 self.read_backup(key, &backup, true, quarantined)
             }
         }
@@ -227,6 +234,12 @@ impl Store {
         }
 
         let loaded = self.load_file(key, backup)?;
+        if is_epg_state_key(key)
+            && (loaded.unsafe_bytes || loaded.oversized || loaded.parsed.is_err())
+        {
+            let _ = secure_delete_best_effort(backup);
+            return Ok(missing_outcome(true, quarantined));
+        }
         match loaded.parsed {
             Ok(parsed) if parsed.unsafe_legacy_playlist => {
                 // Return credential-bearing legacy data only in memory so the
@@ -271,6 +284,41 @@ impl Store {
             .map_err(|error| format!("Could not create the app state directory: {error}"))?;
         restrict_directory_permissions(&self.directory)
     }
+
+    fn cleanup_epg_artifacts(&self, key: &str) {
+        if !is_epg_state_key(key) {
+            return;
+        }
+        let Some(base_name) = self
+            .path(key)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(&self.directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(suffix) = name.strip_prefix(&base_name) else {
+                continue;
+            };
+            let owned_temporary = suffix.starts_with(".tmp-") || suffix.starts_with(".bak.tmp-");
+            if owned_temporary || suffix.contains(".corrupt-") {
+                let _ = secure_delete_best_effort(&entry.path());
+            }
+        }
+
+        let backup = self.backup_path(key);
+        if backup.exists()
+            && self.load_file(key, &backup).is_ok_and(|loaded| {
+                loaded.unsafe_bytes || loaded.oversized || loaded.parsed.is_err()
+            })
+        {
+            let _ = secure_delete_best_effort(&backup);
+        }
+    }
 }
 
 fn parse_state(key: &str, bytes: &[u8]) -> Result<ParsedState, String> {
@@ -286,7 +334,8 @@ fn parse_state(key: &str, bytes: &[u8]) -> Result<ParsedState, String> {
                 envelope.schema_version
             ));
         }
-        let unsafe_legacy_playlist = value_contains_credentials(&envelope.value);
+        let unsafe_legacy_playlist = value_contains_credentials(&envelope.value)
+            || value_contains_unsafe_epg_state(key, &envelope.value);
         return Ok(ParsedState {
             value: envelope.value,
             schema_version: envelope.schema_version,
@@ -324,6 +373,7 @@ fn outcome_from_parsed(
     corrupt: bool,
     quarantined: bool,
 ) -> ReadOutcome {
+    let requires_safe_rewrite = parsed.unsafe_legacy_playlist;
     ReadOutcome {
         exists: true,
         value: Some(parsed.value),
@@ -332,6 +382,7 @@ fn outcome_from_parsed(
         corrupt,
         quarantined,
         unsafe_legacy_playlist: parsed.unsafe_legacy_playlist,
+        requires_safe_rewrite,
     }
 }
 
@@ -344,7 +395,15 @@ fn missing_outcome(corrupt: bool, quarantined: bool) -> ReadOutcome {
         corrupt,
         quarantined,
         unsafe_legacy_playlist: false,
+        requires_safe_rewrite: false,
     }
+}
+
+fn is_epg_state_key(key: &str) -> bool {
+    matches!(
+        key,
+        "iptv-player:epg-sources" | "iptv-player:epg-manual-matches"
+    )
 }
 
 fn read_bounded(path: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -366,9 +425,9 @@ fn read_bounded(path: &Path) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(bytes))
 }
 
-fn contains_unsafe_credentials(_key: &str, bytes: &[u8]) -> bool {
+fn contains_unsafe_credentials(key: &str, bytes: &[u8]) -> bool {
     if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
-        return value_contains_credentials(&value);
+        return value_contains_credentials(&value) || value_contains_unsafe_epg_state(key, &value);
     }
 
     // Malformed legacy files cannot be traversed structurally. Keep the raw
@@ -459,6 +518,42 @@ fn is_sensitive_name(name: &str) -> bool {
             | "api_key"
             | "apikey"
     )
+}
+
+fn value_contains_unsafe_epg_state(key: &str, value: &Value) -> bool {
+    match key {
+        "iptv-player:epg-sources" => value_contains_nonempty_url_field(value),
+        "iptv-player:epg-manual-matches" => value_contains_epg_url_scope(value),
+        _ => false,
+    }
+}
+
+fn value_contains_nonempty_url_field(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            (key.eq_ignore_ascii_case("url") && sensitive_value_is_nonempty(value))
+                || value_contains_nonempty_url_field(value)
+        }),
+        Value::Array(values) => values.iter().any(value_contains_nonempty_url_field),
+        _ => false,
+    }
+}
+
+fn value_contains_epg_url_scope(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object
+            .iter()
+            .any(|(key, value)| is_url_or_xmltv_scope(key) || value_contains_epg_url_scope(value)),
+        Value::Array(values) => values.iter().any(value_contains_epg_url_scope),
+        Value::String(text) => is_url_or_xmltv_scope(text),
+        _ => false,
+    }
+}
+
+fn is_url_or_xmltv_scope(text: &str) -> bool {
+    let candidate = text.trim().split('\u{1}').next().unwrap_or_default().trim();
+    reqwest::Url::parse(candidate)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https" | "xmltv"))
 }
 
 fn value_contains_credentials(value: &Value) -> bool {
@@ -1096,6 +1191,212 @@ mod tests {
             "settings",
             br#"{broken "url":"https://example.test/list?pass=secret""#,
         ));
+    }
+
+    #[test]
+    fn epg_source_urls_are_unsafe_regardless_of_url_shape() {
+        let key = "iptv-player:epg-sources";
+        for url in [
+            "https://guide.example.test/ordinary.xml",
+            "https://cdn.example.test/signed/opaque/guide.xml?sigv2=harmless",
+            "https://example.test/feed?totallyUnknownName=benign",
+        ] {
+            let bytes = serde_json::to_vec(&json!([{"id": "epg-1", "url": url}])).unwrap();
+            assert!(contains_unsafe_credentials(key, &bytes), "missed {url}");
+        }
+
+        let safe = serde_json::to_vec(&json!([{"id": "epg-1", "url": ""}])).unwrap();
+        assert!(!contains_unsafe_credentials(key, &safe));
+    }
+
+    #[test]
+    fn epg_manual_matches_reject_url_scopes_but_allow_source_id_scopes() {
+        let key = "iptv-player:epg-manual-matches";
+        let legacy = serde_json::to_vec(&json!({
+            "https://guide.example.test/ordinary.xml\u{1}playlist-a": {"channel-a": "xmltv-a"}
+        }))
+        .unwrap();
+        let url_property = serde_json::to_vec(&json!({
+            "matches": {"https://cdn.example.test/signed/opaque.xml?sigv2=benign": "xmltv-b"}
+        }))
+        .unwrap();
+        let url_value = serde_json::to_vec(&json!({
+            "legacyScope": "https://guide.example.test/value-scoped.xml"
+        }))
+        .unwrap();
+        let xmltv_property = serde_json::to_vec(&json!({
+            "xmltv://legacy-guide\u{1}playlist-a": {"channel-a": "xmltv-a"}
+        }))
+        .unwrap();
+        let migrated = serde_json::to_vec(&json!({
+            "source-id-123\u{1}playlist-a": {"channel-a": "xmltv-a"}
+        }))
+        .unwrap();
+
+        assert!(contains_unsafe_credentials(key, &legacy));
+        assert!(contains_unsafe_credentials(key, &url_property));
+        assert!(contains_unsafe_credentials(key, &url_value));
+        assert!(contains_unsafe_credentials(key, &xmltv_property));
+        assert!(!contains_unsafe_credentials(key, &migrated));
+    }
+
+    #[test]
+    fn malformed_epg_url_primary_is_deleted_instead_of_quarantined() {
+        let directory = TestDirectory::new("malformed-epg-url");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-sources";
+        let sentinel = "malformed-epg-url-sentinel";
+        fs::write(
+            store.path(key),
+            format!(r#"[{{"url":"https://guide.example.test/{sentinel}.xml"#),
+        )
+        .unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert!(!loaded.exists);
+        assert!(loaded.corrupt);
+        assert!(!loaded.quarantined);
+        assert!(!store.path(key).exists());
+        for entry in fs::read_dir(&directory.0).unwrap() {
+            let bytes = fs::read(entry.unwrap().path()).unwrap();
+            assert!(!String::from_utf8_lossy(&bytes).contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn unsafe_epg_primary_is_read_for_migration_and_artifact_copies_are_removed() {
+        let directory = TestDirectory::new("unsafe-epg-artifacts");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-sources";
+        let legacy = json!([{
+            "id": "epg-1",
+            "url": "https://guide.example.test/ordinary.xml?opaque=primary-sentinel"
+        }]);
+        fs::write(store.path(key), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        fs::write(
+            store.backup_path(key),
+            br#"[{"url":"https://guide.example.test/backup-sentinel.xml"}]"#,
+        )
+        .unwrap();
+        let primary_name = store
+            .path(key)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let stale_tmp = directory
+            .0
+            .join(format!("{primary_name}.tmp-999999999-1-1"));
+        let corrupt = directory
+            .0
+            .join(format!("{primary_name}.corrupt-historical"));
+        fs::write(&stale_tmp, b"tmp-sentinel").unwrap();
+        fs::write(&corrupt, b"corrupt-sentinel").unwrap();
+        let unrelated = directory.0.join("unrelated.json.tmp-still-active");
+        fs::write(&unrelated, b"unrelated-sentinel").unwrap();
+
+        let loaded = store.read(key).unwrap();
+
+        assert_eq!(loaded.value, Some(legacy));
+        assert!(loaded.unsafe_legacy_playlist);
+        assert!(loaded.requires_safe_rewrite);
+        assert!(store.path(key).exists());
+        assert!(!store.backup_path(key).exists());
+        assert!(!stale_tmp.exists());
+        assert!(!corrupt.exists());
+        assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn epg_safe_rewrite_removes_unsafe_primary_without_duplicating_it() {
+        let directory = TestDirectory::new("unsafe-epg-rewrite");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-manual-matches";
+        let sentinel = "legacy-url-sentinel";
+        fs::write(
+            store.path(key),
+            serde_json::to_vec(&json!({
+                format!("https://guide.example.test/{sentinel}.xml\u{1}playlist-a"): {
+                    "channel-a": "xmltv-a"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.read(key).unwrap();
+        assert!(loaded.requires_safe_rewrite);
+        store
+            .write(
+                key,
+                &json!({"source-id-123\u{1}playlist-a": {"channel-a": "xmltv-a"}}),
+            )
+            .unwrap();
+
+        let rewritten = store.read(key).unwrap();
+        assert!(!rewritten.requires_safe_rewrite);
+        for entry in fs::read_dir(&directory.0).unwrap() {
+            let bytes = fs::read(entry.unwrap().path()).unwrap();
+            assert!(!String::from_utf8_lossy(&bytes).contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn successful_epg_rewrite_preserves_safe_backup_then_removes_unsafe_remnants() {
+        let directory = TestDirectory::new("epg-safe-backup-remnants");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-sources";
+        let safe_backup_value = json!([{"id": "safe-source", "url": ""}]);
+        let safe_backup = serde_json::to_vec(&StateEnvelope {
+            format: ENVELOPE_MAGIC.to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+            value: safe_backup_value,
+        })
+        .unwrap();
+        fs::write(store.backup_path(key), &safe_backup).unwrap();
+        fs::write(
+            store.path(key),
+            br#"[{"id":"legacy","url":"https://guide.example.test/primary-remnant.xml"}]"#,
+        )
+        .unwrap();
+        let primary_name = store
+            .path(key)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let tmp = directory.0.join(format!("{primary_name}.tmp-stale"));
+        let corrupt = directory.0.join(format!("{primary_name}.bak.corrupt-old"));
+        fs::write(&tmp, b"tmp-remnant-sentinel").unwrap();
+        fs::write(&corrupt, b"corrupt-remnant-sentinel").unwrap();
+
+        store
+            .write(key, &json!([{"id": "migrated", "url": ""}]))
+            .unwrap();
+
+        assert_eq!(fs::read(store.backup_path(key)).unwrap(), safe_backup);
+        assert!(!tmp.exists());
+        assert!(!corrupt.exists());
+    }
+
+    #[test]
+    fn failed_epg_safe_write_keeps_unsafe_primary_for_retry_without_backup() {
+        let directory = TestDirectory::new("unsafe-epg-failed-rewrite");
+        let store = Store::new(directory.0.clone());
+        let key = "iptv-player:epg-sources";
+        let legacy = json!([{"id": "epg-1", "url": "https://guide.example.test/feed.xml"}]);
+        let original = serde_json::to_vec(&legacy).unwrap();
+        fs::write(store.path(key), &original).unwrap();
+
+        let error = store
+            .write(key, &json!("x".repeat(MAX_STATE_BYTES)))
+            .unwrap_err();
+
+        assert!(error.contains("too large"));
+        assert_eq!(fs::read(store.path(key)).unwrap(), original);
+        assert!(!store.backup_path(key).exists());
+        assert!(store.read(key).unwrap().requires_safe_rewrite);
     }
 
     #[test]
