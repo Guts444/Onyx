@@ -27,6 +27,7 @@ const GZIP_MAGIC_BYTES: [u8; 2] = [0x1f, 0x8b];
 const MAX_EPG_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_WARNING_SAMPLES: usize = 5;
 const TOTAL_REFRESH_TIMEOUT_SECS: u64 = 90;
+const EPG_CACHE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Default)]
 pub struct EpgState {
@@ -104,9 +105,9 @@ impl GenerationRegistry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EpgCache {
-    source_url: String,
+    source_id: String,
     fetched_at: String,
     channel_count: usize,
     programme_count: usize,
@@ -123,7 +124,7 @@ struct EpgCache {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredEpgChannel {
     id: String,
     display_names: Vec<String>,
@@ -135,13 +136,13 @@ struct StoredEpgChannel {
 pub struct EpgDirectoryChannel {
     id: String,
     unique_id: String,
-    source_url: String,
+    source_id: String,
     display_names: Vec<String>,
     icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EpgProgramme {
     start_ms: i64,
     stop_ms: Option<i64>,
@@ -154,7 +155,7 @@ struct EpgProgramme {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpgDirectoryResponse {
-    source_url: String,
+    source_id: String,
     fetched_at: String,
     channel_count: usize,
     programme_count: usize,
@@ -192,14 +193,16 @@ pub struct EpgProgrammeWindow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EpgCacheStore {
+    version: u32,
     caches: HashMap<String, EpgCache>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EpgCacheStoreRef<'a> {
+    version: u32,
     caches: &'a HashMap<String, EpgCache>,
 }
 
@@ -230,7 +233,7 @@ enum TextTarget {
 impl EpgCache {
     fn directory_response(&self) -> EpgDirectoryResponse {
         EpgDirectoryResponse {
-            source_url: self.source_url.clone(),
+            source_id: self.source_id.clone(),
             fetched_at: self.fetched_at.clone(),
             channel_count: self.channel_count,
             programme_count: self.programme_count,
@@ -239,8 +242,8 @@ impl EpgCache {
                 .iter()
                 .map(|channel| EpgDirectoryChannel {
                     id: channel.id.clone(),
-                    unique_id: create_epg_channel_key(&self.source_url, &channel.id),
-                    source_url: self.source_url.clone(),
+                    unique_id: create_epg_channel_key(&self.source_id, &channel.id),
+                    source_id: self.source_id.clone(),
                     display_names: channel.display_names.clone(),
                     icon: channel.icon.clone(),
                 })
@@ -253,43 +256,32 @@ impl EpgCache {
     }
 }
 
-fn create_epg_channel_key(source_url: &str, channel_id: &str) -> String {
-    format!("{}\u{1}{}", source_url.trim(), channel_id.trim())
+fn create_epg_channel_key(source_id: &str, channel_id: &str) -> String {
+    format!("{source_id}\u{1}{channel_id}")
 }
 
 fn split_epg_channel_key(raw_key: &str) -> Option<(String, String)> {
-    let (source_url, channel_id) = raw_key.split_once('\u{1}')?;
-    let trimmed_source_url = source_url.trim();
-    let trimmed_channel_id = channel_id.trim();
-
-    if trimmed_source_url.is_empty() || trimmed_channel_id.is_empty() {
+    if raw_key.matches('\u{1}').count() != 1 {
         return None;
     }
-
-    Some((
-        trimmed_source_url.to_string(),
-        trimmed_channel_id.to_string(),
-    ))
+    let (source_id, channel_id) = raw_key.split_once('\u{1}')?;
+    let source_id = validate_epg_source_id(source_id).ok()?;
+    if channel_id.is_empty() || channel_id.trim() != channel_id {
+        return None;
+    }
+    Some((source_id, channel_id.to_string()))
 }
 
-fn normalize_epg_cache_map(caches: HashMap<String, EpgCache>) -> HashMap<String, EpgCache> {
-    let mut normalized_caches = HashMap::new();
-
-    for (_, cache) in caches {
-        let normalized_source_url = normalize_epg_url_input(&cache.source_url)
-            .map(|url| url.to_string())
-            .unwrap_or_else(|_| cache.source_url.clone());
-
-        normalized_caches.insert(
-            normalized_source_url.clone(),
-            EpgCache {
-                source_url: normalized_source_url,
-                ..cache
-            },
-        );
+fn validate_epg_source_id(source_id: &str) -> Result<String, String> {
+    if source_id.is_empty()
+        || source_id.len() > 160
+        || !source_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.'))
+    {
+        return Err("The EPG source id is not valid.".to_string());
     }
-
-    normalized_caches
+    Ok(source_id.to_string())
 }
 
 fn build_http_client() -> Result<Client, String> {
@@ -401,11 +393,7 @@ fn decode_gzip_with_limit(compressed: &[u8], byte_limit: usize) -> Result<Vec<u8
     Ok(decoded)
 }
 
-fn decode_epg_bytes(
-    compressed_body: Vec<u8>,
-    _source_url: &Url,
-    _content_type: Option<&str>,
-) -> Result<Vec<u8>, String> {
+fn decode_epg_bytes(compressed_body: Vec<u8>) -> Result<Vec<u8>, String> {
     if compressed_body.starts_with(&GZIP_MAGIC_BYTES) {
         return decode_gzip_with_limit(&compressed_body, MAX_EPG_XML_BYTES);
     }
@@ -604,7 +592,8 @@ fn parse_programme_start(
     }))
 }
 
-fn parse_xmltv_document(source_url: String, xml_bytes: Vec<u8>) -> Result<EpgCache, String> {
+fn parse_xmltv_document(source_id: String, xml_bytes: Vec<u8>) -> Result<EpgCache, String> {
+    let source_id = validate_epg_source_id(&source_id)?;
     let mut reader = Reader::from_reader(Cursor::new(xml_bytes));
     reader.config_mut().trim_text(true);
 
@@ -840,7 +829,7 @@ fn parse_xmltv_document(source_url: String, xml_bytes: Vec<u8>) -> Result<EpgCac
     let fetched_at = Utc::now().to_rfc3339();
 
     Ok(EpgCache {
-        source_url,
+        source_id,
         fetched_at,
         channel_count: channels.len(),
         programme_count,
@@ -881,19 +870,131 @@ impl EpgDiskStore {
     }
 
     fn parse(bytes: &[u8]) -> Result<HashMap<String, EpgCache>, String> {
-        if let Ok(cache_store) = serde_json::from_slice::<EpgCacheStore>(bytes) {
-            return Ok(normalize_epg_cache_map(cache_store.caches));
+        let cache_store = serde_json::from_slice::<EpgCacheStore>(bytes)
+            .map_err(|_| "Could not parse the saved EPG cache.".to_string())?;
+        if cache_store.version != EPG_CACHE_SCHEMA_VERSION {
+            return Err("The saved EPG cache schema is not supported.".to_string());
         }
-        if let Ok(caches) = serde_json::from_slice::<HashMap<String, EpgCache>>(bytes) {
-            return Ok(normalize_epg_cache_map(caches));
+        for (source_id, cache) in &cache_store.caches {
+            let validated = validate_epg_source_id(source_id)?;
+            if validated != *source_id || cache.source_id != *source_id {
+                return Err("The saved EPG cache source id is not valid.".to_string());
+            }
         }
-        if let Ok(cache) = serde_json::from_slice::<EpgCache>(bytes) {
-            return Ok(normalize_epg_cache_map(HashMap::from([(
-                cache.source_url.clone(),
-                cache,
-            )])));
+        Ok(cache_store.caches)
+    }
+
+    fn value_contains_legacy_url_field(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(object) => object.iter().any(|(key, child)| {
+                matches!(key.as_str(), "sourceUrl" | "source_url")
+                    || Self::value_contains_legacy_url_field(child)
+            }),
+            serde_json::Value::Array(values) => {
+                values.iter().any(Self::value_contains_legacy_url_field)
+            }
+            _ => false,
         }
-        Err("Could not parse the saved EPG cache.".to_string())
+    }
+
+    fn is_unsafe_legacy_artifact(bytes: &[u8]) -> bool {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
+            let is_v2 = value
+                .as_object()
+                .and_then(|object| object.get("version"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(EPG_CACHE_SCHEMA_VERSION as u64);
+            return !is_v2 || Self::value_contains_legacy_url_field(&value);
+        }
+
+        [
+            b"sourceUrl".as_slice(),
+            b"source_url",
+            b"http://",
+            b"https://",
+        ]
+        .iter()
+        .any(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
+    }
+
+    fn is_related_artifact_name(name: &str) -> bool {
+        name == "cache.json"
+            || name == "cache.json.bak"
+            || name.starts_with("cache.json.tmp-")
+            || name.starts_with("cache.json.corrupt-")
+            || name.starts_with("cache.json.bak.tmp-")
+            || name.starts_with("cache.json.bak.corrupt-")
+    }
+
+    fn securely_delete_all_related(&self) {
+        let Some(parent) = self.path.parent() else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(parent) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if Self::is_related_artifact_name(&name.to_string_lossy()) {
+                Self::securely_delete(&entry.path());
+            }
+        }
+    }
+
+    fn securely_delete_unsafe_stale_artifacts(&self) {
+        let Some(parent) = self.path.parent() else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(parent) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let stale = name.starts_with("cache.json.tmp-")
+                || name.starts_with("cache.json.corrupt-")
+                || name.starts_with("cache.json.bak.tmp-")
+                || name.starts_with("cache.json.bak.corrupt-");
+            if !stale {
+                continue;
+            }
+            match self.read_file(&entry.path()) {
+                Ok(Some(bytes)) if Self::is_unsafe_legacy_artifact(&bytes) => {
+                    Self::securely_delete(&entry.path());
+                }
+                Ok(None) if entry.path().exists() => Self::securely_delete(&entry.path()),
+                _ => {}
+            }
+        }
+    }
+
+    fn securely_delete_unsafe_backup(&self) {
+        let backup = self.backup_path();
+        match self.read_file(&backup) {
+            Ok(Some(bytes)) if Self::is_unsafe_legacy_artifact(&bytes) => {
+                Self::securely_delete(&backup);
+            }
+            Ok(None) if backup.exists() => Self::securely_delete(&backup),
+            _ => {}
+        }
+    }
+
+    fn securely_delete(path: &Path) {
+        if let Ok(mut file) = OpenOptions::new().write(true).open(path) {
+            if let Ok(length) = file.metadata().map(|metadata| metadata.len()) {
+                let zeros = [0_u8; 8192];
+                let mut remaining = length;
+                while remaining > 0 {
+                    let count = remaining.min(zeros.len() as u64) as usize;
+                    if file.write_all(&zeros[..count]).is_err() {
+                        break;
+                    }
+                    remaining -= count as u64;
+                }
+                let _ = file.sync_all();
+            }
+        }
+        let _ = fs::remove_file(path);
     }
 
     fn read_file(&self, path: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -937,8 +1038,17 @@ impl EpgDiskStore {
     where
         F: FnOnce(&Path, &[u8]) -> Result<(), String>,
     {
+        self.securely_delete_unsafe_stale_artifacts();
+        self.securely_delete_unsafe_backup();
         let primary_existed = self.path.exists();
         let primary = self.read_file(&self.path)?;
+        if primary
+            .as_deref()
+            .is_some_and(Self::is_unsafe_legacy_artifact)
+        {
+            self.securely_delete_all_related();
+            return Ok(EpgDiskRead::default());
+        }
         if let Some(bytes) = primary.as_ref() {
             if let Ok(caches) = Self::parse(bytes) {
                 return Ok(EpgDiskRead {
@@ -948,12 +1058,20 @@ impl EpgDiskStore {
             }
             Self::discard_invalid(&self.path);
         } else if self.path.exists() {
-            let _ = fs::remove_file(&self.path);
+            Self::securely_delete(&self.path);
         }
 
         let backup_path = self.backup_path();
         let backup_existed = backup_path.exists();
         let backup = self.read_file(&backup_path)?;
+        if backup
+            .as_deref()
+            .is_some_and(Self::is_unsafe_legacy_artifact)
+        {
+            Self::securely_delete(&self.path);
+            Self::securely_delete(&backup_path);
+            return Ok(EpgDiskRead::default());
+        }
         if let Some(bytes) = backup.as_ref() {
             if let Ok(mut caches) = Self::parse(bytes) {
                 let repair_failed = repair(&self.path, bytes).is_err();
@@ -985,7 +1103,7 @@ impl EpgDiskStore {
             }
             Self::discard_invalid(&backup_path);
         } else if backup_path.exists() {
-            let _ = fs::remove_file(&backup_path);
+            Self::securely_delete(&backup_path);
         }
 
         let corrupt = primary_existed || backup_existed;
@@ -1000,8 +1118,17 @@ impl EpgDiskStore {
     }
 
     fn write(&self, caches: &HashMap<String, EpgCache>) -> Result<(), String> {
-        let serialized = serde_json::to_vec(&EpgCacheStoreRef { caches })
-            .map_err(|error| format!("Could not serialize the EPG cache store: {error}"))?;
+        for (source_id, cache) in caches {
+            let validated = validate_epg_source_id(source_id)?;
+            if validated != *source_id || cache.source_id != *source_id {
+                return Err("The EPG cache source id is not valid.".to_string());
+            }
+        }
+        let serialized = serde_json::to_vec(&EpgCacheStoreRef {
+            version: EPG_CACHE_SCHEMA_VERSION,
+            caches,
+        })
+        .map_err(|error| format!("Could not serialize the EPG cache store: {error}"))?;
         if serialized.len() > MAX_EPG_CACHE_BYTES {
             return Err("The EPG cache is too large to save safely.".to_string());
         }
@@ -1119,7 +1246,7 @@ enum EpgRefreshCommit {
 fn commit_epg_refresh_if_current<F>(
     path: &Path,
     state: &EpgState,
-    source_url: &str,
+    source_id: &str,
     generation: u64,
     cache: EpgCache,
     may_commit: F,
@@ -1135,7 +1262,7 @@ where
         .generations
         .lock()
         .map_err(|_| "Could not coordinate the EPG refresh.".to_string())?;
-    if !generations.accept_refresh(source_url, generation) {
+    if !generations.accept_refresh(source_id, generation) {
         return Ok(EpgRefreshCommit::Superseded);
     }
     if !may_commit() {
@@ -1150,9 +1277,9 @@ where
         .as_mut()
         .ok_or_else(|| "Could not initialize the in-memory EPG cache store.".to_string())?;
     let mut snapshot = caches.clone();
-    snapshot.insert(source_url.to_string(), cache.clone());
+    snapshot.insert(source_id.to_string(), cache.clone());
     EpgDiskStore::new(path.to_path_buf()).write(&snapshot)?;
-    caches.insert(source_url.to_string(), cache);
+    caches.insert(source_id.to_string(), cache);
     Ok(EpgRefreshCommit::Committed)
 }
 
@@ -1248,21 +1375,23 @@ fn get_programmes_for_window(
 pub async fn refresh_epg_cache(
     app: AppHandle,
     state: State<'_, EpgState>,
+    source_id: String,
     url: String,
 ) -> Result<EpgDirectoryResponse, String> {
+    let source_id = validate_epg_source_id(&source_id)?;
     let normalized_url = normalize_epg_url_input(&url)?;
-    let normalized_url_text = normalized_url.to_string();
+
     ensure_epg_caches_loaded(&app, &state)?;
     let generation = state
         .generations
         .lock()
         .map_err(|_| "Could not coordinate the EPG refresh.".to_string())?
-        .begin_refresh(&normalized_url_text);
+        .begin_refresh(&source_id);
     let client = build_http_client()?;
-    let source_for_work = normalized_url.clone();
+    let source_id_for_work = source_id.clone();
     let deadline = Instant::now() + Duration::from_secs(TOTAL_REFRESH_TIMEOUT_SECS);
     let work = async move {
-        let (body, content_type) = fetch_bytes_with_limit(
+        let (body, _content_type) = fetch_bytes_with_limit(
             &client,
             normalized_url,
             MAX_EPG_DOWNLOAD_BYTES,
@@ -1270,8 +1399,8 @@ pub async fn refresh_epg_cache(
         )
         .await?;
         tauri::async_runtime::spawn_blocking(move || {
-            let xml = decode_epg_bytes(body, &source_for_work, content_type.as_deref())?;
-            parse_xmltv_document(source_for_work.to_string(), xml)
+            let xml = decode_epg_bytes(body)?;
+            parse_xmltv_document(source_id_for_work, xml)
         })
         .await
         .map_err(|error| format!("Could not process the EPG file: {error}"))?
@@ -1282,7 +1411,7 @@ pub async fn refresh_epg_cache(
     let response = cache.directory_response();
     let path = get_epg_cache_path(&app)?;
     let app_for_write = app.clone();
-    let source_for_write = normalized_url_text.clone();
+    let source_for_write = source_id.clone();
 
     // The deadline applies only to cancellable network and pure parsing work. The
     // commit closure rechecks both deadline and generation while holding the disk
@@ -1331,7 +1460,7 @@ pub fn load_epg_cache_directories(
         .values()
         .map(EpgCache::directory_response)
         .collect::<Vec<_>>();
-    directories.sort_by(|left, right| left.source_url.cmp(&right.source_url));
+    directories.sort_by(|left, right| left.source_id.cmp(&right.source_id));
     Ok(directories)
 }
 
@@ -1349,9 +1478,9 @@ pub fn get_epg_cache_diagnostics(
 pub fn delete_epg_cache(
     app: AppHandle,
     state: State<'_, EpgState>,
-    url: String,
+    source_id: String,
 ) -> Result<bool, String> {
-    let normalized_url = normalize_epg_url_input(&url)?.to_string();
+    let source_id = validate_epg_source_id(&source_id)?;
     ensure_epg_caches_loaded(&app, &state)?;
 
     let did_remove = {
@@ -1359,7 +1488,7 @@ pub fn delete_epg_cache(
             .generations
             .lock()
             .map_err(|_| "Could not coordinate the EPG deletion.".to_string())?;
-        generations.delete(&normalized_url);
+        generations.delete(&source_id);
         let mut cache_guard = state
             .caches
             .lock()
@@ -1367,7 +1496,7 @@ pub fn delete_epg_cache(
         let caches = cache_guard
             .as_mut()
             .ok_or_else(|| "Could not initialize the in-memory EPG cache store.".to_string())?;
-        caches.remove(&normalized_url).is_some()
+        caches.remove(&source_id).is_some()
     };
 
     if did_remove {
@@ -1400,17 +1529,16 @@ pub fn get_epg_programme_snapshots(
     let mut snapshots = Vec::new();
 
     for epg_channel_key in epg_channel_keys {
-        let Some((source_url, channel_id)) = split_epg_channel_key(&epg_channel_key) else {
+        let Some((source_id, channel_id)) = split_epg_channel_key(&epg_channel_key) else {
             continue;
         };
-        let normalized_url = normalize_epg_url_input(&source_url)?.to_string();
-        let unique_channel_key = create_epg_channel_key(&normalized_url, &channel_id);
+        let unique_channel_key = create_epg_channel_key(&source_id, &channel_id);
 
         if !seen_channel_keys.insert(unique_channel_key.clone()) {
             continue;
         }
 
-        let Some(cache) = caches.get(&normalized_url) else {
+        let Some(cache) = caches.get(&source_id) else {
             continue;
         };
 
@@ -1456,17 +1584,16 @@ pub fn get_epg_programme_windows(
     let mut windows = Vec::new();
 
     for epg_channel_key in epg_channel_keys {
-        let Some((source_url, channel_id)) = split_epg_channel_key(&epg_channel_key) else {
+        let Some((source_id, channel_id)) = split_epg_channel_key(&epg_channel_key) else {
             continue;
         };
-        let normalized_url = normalize_epg_url_input(&source_url)?.to_string();
-        let unique_channel_key = create_epg_channel_key(&normalized_url, &channel_id);
+        let unique_channel_key = create_epg_channel_key(&source_id, &channel_id);
 
         if !seen_channel_keys.insert(unique_channel_key.clone()) {
             continue;
         }
 
-        let Some(cache) = caches.get(&normalized_url) else {
+        let Some(cache) = caches.get(&source_id) else {
             continue;
         };
 
@@ -1508,6 +1635,184 @@ mod tests {
 
     fn xml(programmes: &str) -> Vec<u8> {
         format!(r#"<?xml version="1.0"?><tv><channel id="one"><display-name>One</display-name></channel>{programmes}</tv>"#).into_bytes()
+    }
+
+    #[test]
+    fn channel_identity_uses_source_id_not_credential_url() {
+        let key = create_epg_channel_key("epg:primary", "channel-one");
+        assert_eq!(key, "epg:primary\u{1}channel-one");
+        assert_eq!(
+            split_epg_channel_key(&key),
+            Some(("epg:primary".to_string(), "channel-one".to_string()))
+        );
+    }
+
+    #[test]
+    fn persisted_cache_contains_source_id_and_zero_url_bytes() {
+        let directory = TestDirectory::new("credential-free");
+        let path = directory.0.join("cache.json");
+        let source_id = "epg:private";
+        let credential_url =
+            "https://user:password@secret.example/private/guide.xml?token=sentinel";
+        let cache = parse_xmltv_document(
+            source_id.to_string(),
+            xml(r#"<programme channel="one" start="20260101000000 +0000"><title>A</title></programme>"#),
+        )
+        .unwrap();
+        EpgDiskStore::new(path.clone())
+            .write(&HashMap::from([(source_id.to_string(), cache)]))
+            .unwrap();
+
+        let text = String::from_utf8(fs::read(path).unwrap()).unwrap();
+        assert!(text.contains(source_id));
+        for secret in [
+            credential_url,
+            "secret.example",
+            "/private/guide.xml",
+            "token=sentinel",
+            "user:password",
+        ] {
+            assert!(!text.contains(secret), "persisted URL secret: {secret}");
+        }
+        assert!(!text.contains("sourceUrl"));
+    }
+
+    #[test]
+    fn runtime_url_rotation_cannot_change_persisted_identity_or_bytes() {
+        let source_id = "epg:rotation";
+        let xml = xml(
+            r#"<programme channel="one" start="20260101000000 +0000"><title>A</title></programme>"#,
+        );
+        let first = parse_xmltv_document(source_id.into(), xml.clone()).unwrap();
+        let mut second = parse_xmltv_document(source_id.into(), xml).unwrap();
+        second.fetched_at.clone_from(&first.fetched_at);
+        let first_store = HashMap::from([(source_id.to_string(), first)]);
+        let second_store = HashMap::from([(source_id.to_string(), second)]);
+        let first_bytes = serde_json::to_vec(&EpgCacheStoreRef {
+            version: EPG_CACHE_SCHEMA_VERSION,
+            caches: &first_store,
+        })
+        .unwrap();
+        let second_bytes = serde_json::to_vec(&EpgCacheStoreRef {
+            version: EPG_CACHE_SCHEMA_VERSION,
+            caches: &second_store,
+        })
+        .unwrap();
+
+        assert_eq!(first_bytes, second_bytes);
+        assert_eq!(
+            create_epg_channel_key(source_id, "one"),
+            "epg:rotation\u{1}one"
+        );
+        for sentinel in [
+            b"https://old.example/private?token=old".as_slice(),
+            b"https://new.example/private?token=new".as_slice(),
+        ] {
+            assert!(!first_bytes
+                .windows(sentinel.len())
+                .any(|window| window == sentinel));
+        }
+    }
+
+    #[test]
+    fn directory_ipc_contains_source_id_and_never_contains_runtime_url() {
+        let sentinel = "https://user:password@secret.example/guide.xml?token=ipc-sentinel";
+        let cache = sample_store("epg:ipc").remove("epg:ipc").unwrap();
+
+        let serialized = serde_json::to_string(&cache.directory_response()).unwrap();
+
+        assert!(serialized.contains("\"sourceId\":\"epg:ipc\""));
+        assert!(!serialized.contains("sourceUrl"));
+        assert!(!serialized.contains(sentinel));
+        assert!(!serialized.contains("ipc-sentinel"));
+    }
+
+    #[test]
+    fn unsafe_legacy_url_cache_is_securely_deleted_without_backup_or_diagnostics() {
+        let directory = TestDirectory::new("unsafe-legacy");
+        let path = directory.0.join("cache.json");
+        let backup = path.with_extension("json.bak");
+        let legacy = br#"{"caches":{"https://user:pass@legacy.example/guide?token=sentinel":{"sourceUrl":"https://user:pass@legacy.example/guide?token=sentinel"}}}"#;
+        fs::write(&path, legacy).unwrap();
+        fs::write(&backup, legacy).unwrap();
+
+        let outcome = EpgDiskStore::new(path.clone()).read().unwrap();
+        assert!(outcome.caches.is_empty());
+        assert!(!outcome.recovered);
+        assert!(!outcome.corrupt);
+        assert!(outcome.warnings.is_empty());
+        assert!(!path.exists());
+        assert!(!backup.exists());
+        assert!(fs::read_dir(&directory.0).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("corrupt")));
+    }
+
+    #[test]
+    fn every_legacy_cache_artifact_class_is_securely_deleted_without_quarantine() {
+        let directory = TestDirectory::new("all-legacy-artifacts");
+        let path = directory.0.join("cache.json");
+        let store = EpgDiskStore::new(path.clone());
+        let legacy = br#"{"version":1,"caches":{"https://legacy.example/guide?token=artifact-sentinel":{}}}"#;
+        for name in [
+            "cache.json",
+            "cache.json.bak",
+            "cache.json.tmp-old",
+            "cache.json.corrupt-old",
+            "cache.json.bak.tmp-old",
+            "cache.json.bak.corrupt-old",
+        ] {
+            fs::write(directory.0.join(name), legacy).unwrap();
+        }
+
+        let outcome = store.read().unwrap();
+
+        assert!(outcome.caches.is_empty());
+        assert!(!outcome.recovered);
+        assert!(!outcome.corrupt);
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn corrupt_v2_cache_is_quarantined_as_safe_diagnostic_artifact() {
+        let directory = TestDirectory::new("corrupt-v2-quarantine");
+        let path = directory.0.join("cache.json");
+        fs::write(&path, br#"{"version":2,"caches":"not-an-object"}"#).unwrap();
+
+        let outcome = EpgDiskStore::new(path.clone()).read().unwrap();
+
+        assert!(outcome.caches.is_empty());
+        assert!(outcome.corrupt);
+        assert!(fs::read_dir(&directory.0).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("cache.json.corrupt-")));
+    }
+
+    #[test]
+    fn source_ids_are_canonical_and_split_keys_reject_ambiguous_or_padded_ids() {
+        for invalid in [" epg:one", "epg:one ", "epg/one", "epg\u{1}one"] {
+            assert!(validate_epg_source_id(invalid).is_err());
+        }
+        assert!(split_epg_channel_key(" epg:one\u{1}channel").is_none());
+        assert!(split_epg_channel_key("epg:one \u{1}channel").is_none());
+        assert!(split_epg_channel_key("epg:one\u{1}channel\u{1}other").is_none());
+    }
+
+    #[test]
+    fn source_id_generations_are_independent_of_runtime_url() {
+        let mut generations = GenerationRegistry::default();
+        let first = generations.begin_refresh("epg:first");
+        let second = generations.begin_refresh("epg:second");
+        assert!(generations.accept_refresh("epg:first", first));
+        assert!(generations.accept_refresh("epg:second", second));
+        generations.delete("epg:first");
+        assert!(!generations.accept_refresh("epg:first", first));
+        assert!(generations.accept_refresh("epg:second", second));
     }
 
     #[test]
@@ -1567,20 +1872,13 @@ mod tests {
         let plain = xml(
             r#"<programme channel="one" start="20260101000000 +0000"><title>A</title></programme>"#,
         );
-        let hinted_url = Url::parse("https://example.test/guide.xml.gz").unwrap();
-        assert_eq!(
-            decode_epg_bytes(plain.clone(), &hinted_url, Some("application/gzip")).unwrap(),
-            plain
-        );
+        assert_eq!(decode_epg_bytes(plain.clone()).unwrap(), plain);
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(&plain).unwrap();
         let compressed = encoder.finish().unwrap();
-        let decoded = decode_epg_bytes(compressed, &hinted_url, None).unwrap();
+        let decoded = decode_epg_bytes(compressed).unwrap();
         assert_eq!(decoded, plain);
-        assert_eq!(
-            decode_epg_bytes(decoded.clone(), &hinted_url, Some("application/gzip")).unwrap(),
-            decoded
-        );
+        assert_eq!(decode_epg_bytes(decoded.clone()).unwrap(), decoded);
     }
 
     #[test]
@@ -1607,11 +1905,7 @@ mod tests {
             );
         }
         programmes.push_str(r#"<programme channel="one" start="20260101020000 +0000"><title>After</title></programme>"#);
-        let cache = parse_xmltv_document(
-            "https://example.test/secret?token=nope".into(),
-            xml(&programmes),
-        )
-        .unwrap();
+        let cache = parse_xmltv_document("epg:warning-test".into(), xml(&programmes)).unwrap();
         let retained = &cache.programmes_by_channel["one"];
         assert_eq!(
             retained
@@ -1638,16 +1932,12 @@ mod tests {
         let directory = TestDirectory::new("recovery");
         let path = directory.0.join("cache.json");
         let store = EpgDiskStore::new(path.clone());
-        store
-            .write(&sample_store("https://one.test/guide"))
-            .unwrap();
-        store
-            .write(&sample_store("https://two.test/guide"))
-            .unwrap();
+        store.write(&sample_store("epg:one")).unwrap();
+        store.write(&sample_store("epg:two")).unwrap();
         fs::write(&path, b"broken").unwrap();
         let recovered = store.read().unwrap();
         assert!(recovered.recovered && recovered.corrupt);
-        assert!(recovered.caches.contains_key("https://one.test/guide"));
+        assert!(recovered.caches.contains_key("epg:one"));
         fs::write(&path, b"broken again").unwrap();
         fs::write(store.backup_path(), b"also broken").unwrap();
         let empty = store.read().unwrap();
@@ -1675,12 +1965,8 @@ mod tests {
         let directory = TestDirectory::new("repair-failure");
         let path = directory.0.join("cache.json");
         let store = EpgDiskStore::new(path.clone());
-        store
-            .write(&sample_store("https://one.test/guide"))
-            .unwrap();
-        store
-            .write(&sample_store("https://two.test/guide"))
-            .unwrap();
+        store.write(&sample_store("epg:one")).unwrap();
+        store.write(&sample_store("epg:two")).unwrap();
         fs::write(&path, b"broken").unwrap();
 
         let recovered = store
@@ -1688,7 +1974,7 @@ mod tests {
             .expect("a failed best-effort repair must not discard a valid backup");
 
         assert!(recovered.recovered && recovered.corrupt);
-        assert!(recovered.caches.contains_key("https://one.test/guide"));
+        assert!(recovered.caches.contains_key("epg:one"));
         assert!(recovered.warnings.len() <= MAX_WARNING_SAMPLES);
         assert!(recovered
             .warnings
@@ -1723,7 +2009,7 @@ mod tests {
         let directory = TestDirectory::new("expired-before-commit");
         let path = directory.0.join("cache.json");
         let state = EpgState::default();
-        let source = "https://one.test/guide";
+        let source = "epg:one";
         let generation = state.generations.lock().unwrap().begin_refresh(source);
         *state.caches.lock().unwrap() = Some(HashMap::new());
         let cache = sample_store(source).remove(source).unwrap();
@@ -1757,7 +2043,7 @@ mod tests {
         let directory = TestDirectory::new("latest-persistence");
         let path = directory.0.join("cache.json");
         let state = EpgState::default();
-        let source = "https://one.test/guide";
+        let source = "epg:one";
         let stale_generation = state.generations.lock().unwrap().begin_refresh(source);
         state.generations.lock().unwrap().begin_refresh(source);
         *state.caches.lock().unwrap() = Some(HashMap::new());

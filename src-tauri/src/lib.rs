@@ -17,6 +17,8 @@ const XTREAM_SECRET_SERVICE_PROD: &str = "Onyx Xtream";
 const XTREAM_SECRET_SERVICE_DEV: &str = "Onyx Dev Xtream";
 const M3U_URL_SECRET_SERVICE_PROD: &str = "Onyx M3U URL";
 const M3U_URL_SECRET_SERVICE_DEV: &str = "Onyx Dev M3U URL";
+const EPG_URL_SECRET_SERVICE_PROD: &str = "Onyx EPG URL";
+const EPG_URL_SECRET_SERVICE_DEV: &str = "Onyx Dev EPG URL";
 const XTREAM_SECRET_SERVICE: &str = if cfg!(debug_assertions) {
     XTREAM_SECRET_SERVICE_DEV
 } else {
@@ -26,6 +28,11 @@ const M3U_URL_SECRET_SERVICE: &str = if cfg!(debug_assertions) {
     M3U_URL_SECRET_SERVICE_DEV
 } else {
     M3U_URL_SECRET_SERVICE_PROD
+};
+const EPG_URL_SECRET_SERVICE: &str = if cfg!(debug_assertions) {
+    EPG_URL_SECRET_SERVICE_DEV
+} else {
+    EPG_URL_SECRET_SERVICE_PROD
 };
 const INVALID_M3U_URL_MESSAGE: &str = "The playlist URL is not valid.";
 const UNSUPPORTED_M3U_URL_SCHEME_MESSAGE: &str = "Only http and https playlist URLs are supported.";
@@ -86,6 +93,31 @@ fn get_xtream_secret_entry(source_id: &str) -> Result<keyring::Entry, String> {
 fn get_m3u_url_secret_entry(source_id: &str) -> Result<keyring::Entry, String> {
     validate_source_id(source_id)?;
     keyring::Entry::new(M3U_URL_SECRET_SERVICE, source_id).map_err(map_secret_error)
+}
+
+fn get_epg_url_secret_entry(source_id: &str) -> Result<keyring::Entry, String> {
+    validate_source_id(source_id)?;
+    keyring::Entry::new(EPG_URL_SECRET_SERVICE, source_id)
+        .map_err(|_| "Could not access the OS credential store.".to_string())
+}
+
+fn validate_epg_url_for_storage(url: &str) -> Result<String, String> {
+    const INVALID: &str = "The EPG URL is not valid.";
+    const UNSUPPORTED: &str = "Only http and https EPG URLs are supported.";
+    let trimmed = url.trim();
+    let normalized = trimmed
+        .strip_prefix("XMLTV:")
+        .or_else(|| trimmed.strip_prefix("xmltv:"))
+        .unwrap_or(trimmed)
+        .trim();
+    if normalized.is_empty() {
+        return Err(INVALID.to_string());
+    }
+    let parsed = Url::parse(normalized).map_err(|_| INVALID.to_string())?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(normalized.to_string()),
+        _ => Err(UNSUPPORTED.to_string()),
+    }
 }
 
 fn validate_m3u_url_for_storage(url: &str) -> Result<String, String> {
@@ -175,6 +207,33 @@ fn delete_m3u_url(source_id: String) -> Result<(), String> {
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(map_secret_error(error)),
+    }
+}
+
+#[tauri::command]
+fn load_epg_url(source_id: String) -> Result<Option<String>, String> {
+    let entry = get_epg_url_secret_entry(&source_id)?;
+    match entry.get_password() {
+        Ok(url) => Ok(Some(url)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("Could not access the OS credential store.".to_string()),
+    }
+}
+
+#[tauri::command]
+fn save_epg_url(source_id: String, url: String) -> Result<(), String> {
+    let url = validate_epg_url_for_storage(&url)?;
+    get_epg_url_secret_entry(&source_id)?
+        .set_password(&url)
+        .map_err(|_| "Could not access the OS credential store.".to_string())
+}
+
+#[tauri::command]
+fn delete_epg_url(source_id: String) -> Result<(), String> {
+    let entry = get_epg_url_secret_entry(&source_id)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err("Could not access the OS credential store.".to_string()),
     }
 }
 
@@ -621,6 +680,9 @@ pub fn run() {
             load_m3u_url,
             save_m3u_url,
             delete_m3u_url,
+            load_epg_url,
+            save_epg_url,
+            delete_epg_url,
             epg::refresh_epg_cache,
             epg::load_epg_cache_directories,
             epg::delete_epg_cache,
@@ -635,24 +697,63 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_xtream_stream, validate_m3u_url_for_storage, XtreamChannelPayload,
-        INVALID_M3U_URL_MESSAGE, M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_DEV,
-        M3U_URL_SECRET_SERVICE_PROD, UNSUPPORTED_M3U_URL_SCHEME_MESSAGE, XTREAM_SECRET_SERVICE,
-        XTREAM_SECRET_SERVICE_DEV, XTREAM_SECRET_SERVICE_PROD,
+        choose_xtream_stream, validate_epg_url_for_storage, validate_m3u_url_for_storage,
+        XtreamChannelPayload, EPG_URL_SECRET_SERVICE, EPG_URL_SECRET_SERVICE_DEV,
+        EPG_URL_SECRET_SERVICE_PROD, INVALID_M3U_URL_MESSAGE, M3U_URL_SECRET_SERVICE,
+        M3U_URL_SECRET_SERVICE_DEV, M3U_URL_SECRET_SERVICE_PROD,
+        UNSUPPORTED_M3U_URL_SCHEME_MESSAGE, XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_DEV,
+        XTREAM_SECRET_SERVICE_PROD,
     };
 
     #[test]
     fn secret_services_are_isolated_between_build_profiles_and_credential_types() {
-        assert_ne!(M3U_URL_SECRET_SERVICE, XTREAM_SECRET_SERVICE);
+        let production = [
+            M3U_URL_SECRET_SERVICE_PROD,
+            XTREAM_SECRET_SERVICE_PROD,
+            EPG_URL_SECRET_SERVICE_PROD,
+        ];
+        let development = [
+            M3U_URL_SECRET_SERVICE_DEV,
+            XTREAM_SECRET_SERVICE_DEV,
+            EPG_URL_SECRET_SERVICE_DEV,
+        ];
+        for services in [production, development] {
+            assert_ne!(services[0], services[1]);
+            assert_ne!(services[0], services[2]);
+            assert_ne!(services[1], services[2]);
+        }
         assert_ne!(M3U_URL_SECRET_SERVICE_DEV, M3U_URL_SECRET_SERVICE_PROD);
         assert_ne!(XTREAM_SECRET_SERVICE_DEV, XTREAM_SECRET_SERVICE_PROD);
+        assert_ne!(EPG_URL_SECRET_SERVICE_DEV, EPG_URL_SECRET_SERVICE_PROD);
 
         if cfg!(debug_assertions) {
             assert_eq!(M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_DEV);
             assert_eq!(XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_DEV);
+            assert_eq!(EPG_URL_SECRET_SERVICE, EPG_URL_SECRET_SERVICE_DEV);
         } else {
             assert_eq!(M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_PROD);
             assert_eq!(XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_PROD);
+            assert_eq!(EPG_URL_SECRET_SERVICE, EPG_URL_SECRET_SERVICE_PROD);
+        }
+    }
+
+    #[test]
+    fn epg_url_storage_accepts_xmltv_http_urls_and_never_leaks_rejected_input() {
+        assert_eq!(
+            validate_epg_url_for_storage(" XMLTV: https://example.invalid/guide.xml?token=safe ")
+                .unwrap(),
+            "https://example.invalid/guide.xml?token=safe"
+        );
+        assert!(validate_epg_url_for_storage("http://example.invalid/guide.xml").is_ok());
+        let sentinel = "private-token-must-not-appear";
+        for invalid in [
+            format!("file:///tmp/{sentinel}"),
+            format!("not-a-url-{sentinel}"),
+            "   ".to_string(),
+        ] {
+            let error = validate_epg_url_for_storage(&invalid).unwrap_err();
+            assert!(!error.contains(sentinel));
+            assert!(!error.contains(&invalid));
         }
     }
 
