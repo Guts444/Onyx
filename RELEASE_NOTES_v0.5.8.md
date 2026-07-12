@@ -36,6 +36,10 @@ Onyx v0.5.8 hardens credential handling, local-state integrity, EPG processing, 
 - Native DLL sources use fixed release URLs and recorded archive/extracted-file hashes in `src-tauri/lib/SOURCES.md` and `src-tauri/lib/SHA256SUMS`.
 - The release helper checks the pinned toolchain and native DLL bytes before starting Tauri packaging.
 
+## Cargo audit disposition
+
+The 2026-07-12 pinned-lockfile audit reports **0 vulnerabilities** and **17 warnings**: 16 unmaintained and 1 unsound, with no yanked-package warnings. Windows-target dependency tracing excludes 12 GTK/glib-chain warnings from the `x86_64-pc-windows-msvc` graph; five unmaintained UNIC crates remain transitively reachable through `urlpattern -> tauri-utils` and are accepted for this candidate as a documented maintenance risk, not as application code or as a claim of safety. See [the complete advisory-by-advisory disposition](docs/security/cargo-audit-v0.5.8.md).
+
 ## Release verification checklist
 
 The following status is intentionally explicit and must be updated from real gate output before publication:
@@ -43,7 +47,8 @@ The following status is intentionally explicit and must be updated from real gat
 - [x] `npm run check`, `npm test` (137 tests), and `npm run build` passed in the metadata working tree on 2026-07-12
 - [x] `cargo metadata --locked` and locked Windows-target Rust tests (65 tests) passed in the metadata working tree on 2026-07-12
 - [ ] Clean `npm ci` install repeated for the final release commit
-- [ ] Formatting, clippy, npm audit, and cargo audit reviewed
+- [ ] Formatting, clippy, and npm audit reviewed
+- [x] Cargo audit warnings reviewed and dispositioned in [`docs/security/cargo-audit-v0.5.8.md`](docs/security/cargo-audit-v0.5.8.md) on 2026-07-12
 - [ ] Pinned toolchain and native dependency provenance checks completed
 - [ ] MSI and NSIS packaging completed
 - [ ] Packaged installer/application smoke tests completed with isolated state
