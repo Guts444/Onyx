@@ -5,10 +5,25 @@ set "VERSION=0.5.7"
 
 cd /d "%~dp0"
 
-where npm >nul 2>nul
+where powershell >nul 2>nul
 if errorlevel 1 (
-  echo npm was not found in PATH.
-  echo Install Node.js, reopen this window, and try again.
+  echo PowerShell was not found in PATH.
+  pause
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\check-toolchain.ps1"
+if errorlevel 1 (
+  echo.
+  echo Release prerequisites are not satisfied.
+  pause
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\verify-native-deps.ps1"
+if errorlevel 1 (
+  echo.
+  echo Native dependency verification failed. Packaging was not started.
   pause
   exit /b 1
 )

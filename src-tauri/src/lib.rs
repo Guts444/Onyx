@@ -13,8 +13,20 @@ const MAX_XTREAM_BYTES: usize = 32 * 1024 * 1024;
 const CONNECT_TIMEOUT_SECS: u64 = 15;
 const READ_TIMEOUT_SECS: u64 = 45;
 const APP_STATE_DIRECTORY: &str = "state";
-const XTREAM_SECRET_SERVICE: &str = "Onyx Xtream";
-const M3U_URL_SECRET_SERVICE: &str = "Onyx M3U URL";
+const XTREAM_SECRET_SERVICE_PROD: &str = "Onyx Xtream";
+const XTREAM_SECRET_SERVICE_DEV: &str = "Onyx Dev Xtream";
+const M3U_URL_SECRET_SERVICE_PROD: &str = "Onyx M3U URL";
+const M3U_URL_SECRET_SERVICE_DEV: &str = "Onyx Dev M3U URL";
+const XTREAM_SECRET_SERVICE: &str = if cfg!(debug_assertions) {
+    XTREAM_SECRET_SERVICE_DEV
+} else {
+    XTREAM_SECRET_SERVICE_PROD
+};
+const M3U_URL_SECRET_SERVICE: &str = if cfg!(debug_assertions) {
+    M3U_URL_SECRET_SERVICE_DEV
+} else {
+    M3U_URL_SECRET_SERVICE_PROD
+};
 const INVALID_M3U_URL_MESSAGE: &str = "The playlist URL is not valid.";
 const UNSUPPORTED_M3U_URL_SCHEME_MESSAGE: &str = "Only http and https playlist URLs are supported.";
 
@@ -624,13 +636,24 @@ pub fn run() {
 mod tests {
     use super::{
         choose_xtream_stream, validate_m3u_url_for_storage, XtreamChannelPayload,
-        INVALID_M3U_URL_MESSAGE, M3U_URL_SECRET_SERVICE, UNSUPPORTED_M3U_URL_SCHEME_MESSAGE,
-        XTREAM_SECRET_SERVICE,
+        INVALID_M3U_URL_MESSAGE, M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_DEV,
+        M3U_URL_SECRET_SERVICE_PROD, UNSUPPORTED_M3U_URL_SCHEME_MESSAGE, XTREAM_SECRET_SERVICE,
+        XTREAM_SECRET_SERVICE_DEV, XTREAM_SECRET_SERVICE_PROD,
     };
 
     #[test]
-    fn m3u_url_secret_service_is_distinct_from_xtream_credentials() {
+    fn secret_services_are_isolated_between_build_profiles_and_credential_types() {
         assert_ne!(M3U_URL_SECRET_SERVICE, XTREAM_SECRET_SERVICE);
+        assert_ne!(M3U_URL_SECRET_SERVICE_DEV, M3U_URL_SECRET_SERVICE_PROD);
+        assert_ne!(XTREAM_SECRET_SERVICE_DEV, XTREAM_SECRET_SERVICE_PROD);
+
+        if cfg!(debug_assertions) {
+            assert_eq!(M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_DEV);
+            assert_eq!(XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_DEV);
+        } else {
+            assert_eq!(M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_PROD);
+            assert_eq!(XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_PROD);
+        }
     }
 
     #[test]

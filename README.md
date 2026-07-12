@@ -68,63 +68,59 @@ EPG cache data is also stored locally by the Tauri backend.
 
 ## Build From Source
 
-You need:
+The supported Windows x86-64 build is intentionally reproducible. Required versions are:
 
-- Node.js
-- Rust
-- Tauri prerequisites
-- local `libmpv` binaries in `src-tauri/lib/`
+- Node.js `24.18.x` (`.nvmrc` pins `24.18.0`)
+- npm `11.16.x` (`package.json` pins `npm@11.16.0`)
+- Rust `1.95.x` with `x86_64-pc-windows-msvc`, `rustfmt`, and `clippy` (`rust-toolchain.toml` pins `1.95.0`)
+- the normal [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/)
 
-Install dependencies:
-
-```bash
-npm install
-```
-
-Set up the local `libmpv` files expected by Tauri:
+Install JavaScript dependencies from the authoritative npm lockfile:
 
 ```bash
-npx tauri-plugin-libmpv-api setup-lib
+npm ci
 ```
 
-Or place these files in `src-tauri/lib/` yourself:
+Do not generate or commit a pnpm lockfile. Before building, run the pinned prerequisite and native-binary checks:
 
-```text
-libmpv-wrapper.dll
-libmpv-2.dll
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-toolchain.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-native-deps.ps1
 ```
 
-Start development mode:
+The required `src-tauri/lib/libmpv-wrapper.dll` and `libmpv-2.dll` are described in `src-tauri/lib/SOURCES.md`. That file contains fixed release URLs, archive hashes, extracted DLL hashes, and the replacement procedure. Do not use a `latest` release URL or `tauri-plugin-libmpv-api setup-lib` for release inputs.
+
+Start isolated development mode:
 
 ```bash
-npm run tauri dev
+npm run tauri:dev
 ```
 
-Or double-click:
-
-```text
-Start Onyx Dev.cmd
-```
+Or double-click `Start Onyx Dev.cmd`. Development uses the `com.guts444.onyx.dev` identifier, `Onyx Dev` product/title, a development-only CSP overlay, separate local app data, and separate OS credential-store service names. It cannot read or overwrite production state or credentials.
 
 If you only run `npm run dev`, the app opens in a browser preview and native playback is disabled.
 
-Build a release:
+Validate a release candidate without packaging:
+
+```bash
+npm ci
+npm test
+npm run check
+npm run build
+npm audit
+cargo test --manifest-path src-tauri/Cargo.toml --locked --target x86_64-pc-windows-msvc
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+cargo audit --file src-tauri/Cargo.lock
+```
+
+Only after those checks and native provenance verification pass, build a release with `Build Onyx Release.cmd` or:
 
 ```bash
 npm run tauri build
 ```
 
-Or double-click:
-
-```text
-Build Onyx Release.cmd
-```
-
-Release artifacts are generated in:
-
-```text
-src-tauri/target/release/bundle
-```
+Release artifacts are generated in `src-tauri/target/release/bundle`.
 
 ## Disclaimer
 

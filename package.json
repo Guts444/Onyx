@@ -3,27 +3,38 @@
   "private": true,
   "version": "0.5.7",
   "type": "module",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": "24.18.x",
+    "npm": "11.16.x"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "tauri": "tauri",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/diagnostics.test.ts src/features/epg/matching.test.ts src/features/epg/operations.test.ts src/features/playlist/channelFactory.test.ts src/features/playlist/materialize.test.ts src/features/playlist/migration.test.ts src/features/playlist/redaction.test.ts src/features/playlist/snapshot.test.ts src/features/sources/appIntegration.test.ts src/features/sources/hydration.test.ts src/features/sources/operations.test.ts src/features/sources/profiles.test.ts src/hooks/usePersistentState.test.ts"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2",
+    "@tauri-apps/api": "2.11.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tauri-plugin-libmpv-api": "^0.3.2"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
+    "@babel/core": "7.29.7",
+    "@tauri-apps/cli": "2.11.4",
     "@types/node": "^25.5.2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "esbuild": "0.28.1",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "7.3.6"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }
