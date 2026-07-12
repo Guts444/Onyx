@@ -1,10 +1,74 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import {
+  enqueuePersistentWrite,
+  persistMigratedValue,
   resolvePersistentPayload,
   type AppStatePayload,
   type LoadedPersistentValue,
 } from "./usePersistentState.ts";
+
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+test("persistent writes for the same key run in invocation order", async () => {
+  const first = deferred();
+  const events: string[] = [];
+  const firstWrite = enqueuePersistentWrite("ordered-key", async () => {
+    events.push("first-started");
+    await first.promise;
+    events.push("first-finished");
+  });
+  const secondWrite = enqueuePersistentWrite("ordered-key", async () => {
+    events.push("second-started");
+  });
+
+  await Promise.resolve();
+  assert.deepStrictEqual(events, ["first-started"]);
+  first.resolve();
+  await Promise.all([firstWrite, secondWrite]);
+  assert.deepStrictEqual(events, ["first-started", "first-finished", "second-started"]);
+});
+
+test("a rejected persistent write does not poison the next write for that key", async () => {
+  const first = deferred();
+  const events: string[] = [];
+  const failedWrite = enqueuePersistentWrite("recovering-key", async () => {
+    events.push("failed-started");
+    await first.promise;
+  });
+  const recoveredWrite = enqueuePersistentWrite("recovering-key", async () => {
+    events.push("recovered-started");
+  });
+
+  first.reject(new Error("disk full"));
+  await assert.rejects(failedWrite, /disk full/);
+  await recoveredWrite;
+  assert.deepStrictEqual(events, ["failed-started", "recovered-started"]);
+});
+
+test("legacy localStorage is removed only after the sanitized backend migration succeeds", async () => {
+  const events: string[] = [];
+  await persistMigratedValue(
+    async () => { events.push("saved"); },
+    () => { events.push("removed"); },
+  );
+  assert.deepStrictEqual(events, ["saved", "removed"]);
+
+  const failedEvents: string[] = [];
+  await assert.rejects(() => persistMigratedValue(
+    async () => { failedEvents.push("save-attempted"); throw new Error("disk full"); },
+    () => { failedEvents.push("removed"); },
+  ));
+  assert.deepStrictEqual(failedEvents, ["save-attempted"]);
+});
 
 const legacyValue: LoadedPersistentValue = {
   value: { source: "localStorage" },

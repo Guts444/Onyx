@@ -44,6 +44,30 @@ import { parseM3u } from "./features/playlist/m3u";
 import { createLocalM3uSourceIdentity } from "./features/playlist/channelFactory";
 import { downloadPlaylistFromUrl } from "./features/playlist/remote";
 import { importXtreamPlaylist } from "./features/playlist/xtream";
+import { materializeChannelForPlayback } from "./features/playlist/materialize";
+import { redactCredentials } from "./features/playlist/redaction";
+import {
+  isPlaylistSnapshotPlaybackReady,
+  sanitizePlaylistSnapshot,
+  shouldRefreshPlaylistSnapshot,
+} from "./features/playlist/snapshot";
+import {
+  getSourceOperationCommitState,
+  getSourceOperationFingerprint,
+  migrateImportedChannelReferences,
+} from "./features/sources/appIntegration";
+import {
+  getXtreamCredentialHydrationFingerprint,
+  hydrateXtreamCredentials,
+  type XtreamCredentialHydrationSettlement,
+} from "./features/sources/hydration";
+import {
+  beginSourceBusy,
+  createSourceOperationCoordinator,
+  finishSourceBusy,
+  type SourceBusyState,
+  type SourceOperationToken,
+} from "./features/sources/operations";
 import {
   createM3uUrlSource,
   createXtreamSource,
@@ -186,11 +210,11 @@ function removeMappingsForSourceScope(
 }
 
 function App() {
-  const [favoriteIds, setFavoriteIds, favoriteIdsHydrated] = usePersistentState<string[]>(
+  const [favoriteIds, setFavoriteIds, favoriteIdsHydrated, favoriteIdsMetadata] = usePersistentState<string[]>(
     FAVORITES_STORAGE_KEY,
     [],
   );
-  const [, setRecentIds, recentIdsHydrated] = usePersistentState<string[]>(
+  const [recentIds, setRecentIds, recentIdsHydrated, recentIdsMetadata] = usePersistentState<string[]>(
     RECENTS_STORAGE_KEY,
     [],
   );
@@ -201,7 +225,7 @@ function App() {
   >(COLLAPSED_GROUPS_STORAGE_KEY, {});
   const [collapsedSourceIds, setCollapsedSourceIds, collapsedSourceIdsHydrated] =
     usePersistentState<string[]>(COLLAPSED_SOURCE_CARDS_STORAGE_KEY, []);
-  const [savedSources, setSavedSources, savedSourcesHydrated] =
+  const [savedSources, setSavedSources, savedSourcesHydrated, savedSourcesMetadata] =
     usePersistentState<Record<string, SavedPlaylistSource>>(
       SAVED_SOURCES_STORAGE_KEY,
       {},
@@ -217,7 +241,7 @@ function App() {
     },
     scrubSourceProfileSecrets,
   );
-  const [sourceLibraryIndex, setSourceLibraryIndex, sourceLibraryIndexHydrated] =
+  const [sourceLibraryIndex, setSourceLibraryIndex, sourceLibraryIndexHydrated, sourceLibraryIndexMetadata] =
     usePersistentState<SourceLibraryIndex>(SOURCE_LIBRARY_INDEX_STORAGE_KEY, {});
   const [activeSourceId, setActiveSourceId, activeSourceIdHydrated] = usePersistentState<string | null>(
     ACTIVE_SOURCE_STORAGE_KEY,
@@ -227,9 +251,9 @@ function App() {
     EPG_SOURCES_STORAGE_KEY,
     [],
   );
-  const [savedEpgMappings, setSavedEpgMappings, savedEpgMappingsHydrated] =
+  const [savedEpgMappings, setSavedEpgMappings, savedEpgMappingsHydrated, savedEpgMappingsMetadata] =
     usePersistentState<SavedEpgMappingStore>(EPG_MANUAL_MATCHES_STORAGE_KEY, {});
-  const [playbackSession, setPlaybackSession, playbackSessionHydrated] =
+  const [playbackSession, setPlaybackSession, playbackSessionHydrated, playbackSessionMetadata] =
     usePersistentState<PlaybackSession>(PLAYER_RESUME_STORAGE_KEY, {
       sourceId: null,
       channelId: null,
@@ -242,8 +266,13 @@ function App() {
     PLAYER_VOLUME_STORAGE_KEY,
     DEFAULT_PLAYER_VOLUME,
   );
-  const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated] =
-    usePersistentState<PlaylistSnapshot | null>(PLAYLIST_SNAPSHOT_STORAGE_KEY, null);
+  const [playlistSnapshot, setPlaylistSnapshot, playlistSnapshotHydrated, playlistSnapshotMetadata] =
+    usePersistentState<PlaylistSnapshot | null>(
+      PLAYLIST_SNAPSHOT_STORAGE_KEY,
+      null,
+      undefined,
+      (snapshot) => snapshot ? sanitizePlaylistSnapshot(snapshot) : null,
+    );
   const [playlist, setPlaylist] = useState<PlaylistImport | null>(() => playlistSnapshot?.playlist ?? null);
   const [navigationSection, setNavigationSection] = useState<NavigationSection>("tv");
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
@@ -254,9 +283,9 @@ function App() {
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
     () => playlistSnapshot?.selectedChannelId ?? playlistSnapshot?.playlist.channels[0]?.id ?? null,
   );
-  const [loadingSourceId, setLoadingSourceId] = useState<string | null>(null);
+  const [sourceBusy, setSourceBusy] = useState<SourceBusyState | null>(null);
   const [channelRenderLimit, setChannelRenderLimit] = useState(CHANNEL_RENDER_INITIAL_LIMIT);
-  const [isImportingFile, setIsImportingFile] = useState(false);
+
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRestoringStartupSource, setIsRestoringStartupSource] = useState(false);
@@ -286,6 +315,20 @@ function App() {
   const hydratedPlaylistSnapshotAppliedRef = useRef(false);
   const hydratedVolumeAppliedRef = useRef(false);
   const savedXtreamPasswordsRef = useRef<Record<string, string>>({});
+  const savedSourcesRef = useRef(savedSources);
+  const activeSourceIdRef = useRef(activeSourceId);
+  const sourceOperationsRef = useRef(createSourceOperationCoordinator());
+  const persistenceNoticeShownRef = useRef(false);
+  const startupSourceRefreshResultRef = useRef<"pending" | "succeeded" | "failed">("pending");
+  const importedReferencesRef = useRef({
+    favoriteIds,
+    recentIds,
+    selectedChannelId,
+    playbackSession,
+    sourceLibraryIndex,
+    playlistSnapshot,
+    savedEpgMappings,
+  });
   const startupEpgRefreshAttemptedRef = useRef<Set<string>>(new Set());
   const epgRefreshPromiseRef = useRef<Map<string, Promise<EpgDirectoryResponse | null>>>(
     new Map(),
@@ -305,7 +348,20 @@ function App() {
     playbackSessionHydrated &&
     savedVolumeHydrated &&
     playlistSnapshotHydrated;
-  const { player, playChannel, reloadPlayback, setVolumeLevel, stopPlayback, toggleMute } =
+  savedSourcesRef.current = savedSources;
+  activeSourceIdRef.current = activeSourceId;
+  importedReferencesRef.current = {
+    favoriteIds,
+    recentIds,
+    selectedChannelId,
+    playbackSession,
+    sourceLibraryIndex,
+    playlistSnapshot,
+    savedEpgMappings,
+  };
+  const loadingSourceId = sourceBusy?.origin === "local" ? null : sourceBusy?.sourceId ?? null;
+  const isImportingFile = sourceBusy?.origin === "local";
+  const { player, playChannel, setVolumeLevel, stopPlayback, toggleMute } =
     useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
 
   useEffect(() => {
@@ -319,6 +375,43 @@ function App() {
 
     startupPlaybackSessionRef.current = playbackSession;
   }, [playbackSession, playbackSessionHydrated]);
+
+  useEffect(() => {
+    if (!hasHydratedPersistentState || persistenceNoticeShownRef.current || message !== null) {
+      return;
+    }
+
+    const degradedMetadata = [
+      favoriteIdsMetadata,
+      recentIdsMetadata,
+      savedSourcesMetadata,
+      sourceLibraryIndexMetadata,
+      savedEpgMappingsMetadata,
+      playbackSessionMetadata,
+      playlistSnapshotMetadata,
+    ].filter((metadata) => metadata.degraded);
+    if (degradedMetadata.length === 0) {
+      persistenceNoticeShownRef.current = true;
+      return;
+    }
+
+    persistenceNoticeShownRef.current = true;
+    setMessage(
+      degradedMetadata.some((metadata) => metadata.recovered)
+        ? "Saved app data was recovered with reduced fidelity. Review sources before playback."
+        : "Some saved app data was isolated or upgraded for safety. Review settings if anything is missing.",
+    );
+  }, [
+    favoriteIdsMetadata,
+    hasHydratedPersistentState,
+    message,
+    playbackSessionMetadata,
+    playlistSnapshotMetadata,
+    recentIdsMetadata,
+    savedEpgMappingsMetadata,
+    savedSourcesMetadata,
+    sourceLibraryIndexMetadata,
+  ]);
 
   const xtreamSourceIdsKey = useMemo(
     () =>
@@ -342,67 +435,40 @@ function App() {
       (source): source is SavedPlaylistSource & { kind: "xtream" } => source.kind === "xtream",
     );
 
-    void Promise.all(
-      xtreamSources.map(async (source) => ({
-        sourceId: source.id,
-        password: await loadXtreamPassword(source.id),
-      })),
-    )
-      .then((loadedPasswords) => {
+    const pendingReads = xtreamSources.map((source) => ({
+      sourceId: source.id,
+      expectedFingerprint: getXtreamCredentialHydrationFingerprint(source),
+      password: loadXtreamPassword(source.id),
+    }));
+
+    void Promise.allSettled(pendingReads.map((pending) => pending.password))
+      .then((results) => {
         if (cancelled) {
           return;
         }
 
-        const nextPasswordSnapshot: Record<string, string> = {};
-
-        for (const { sourceId, password } of loadedPasswords) {
-          nextPasswordSnapshot[sourceId] = password ?? "";
-        }
-
-        savedXtreamPasswordsRef.current = nextPasswordSnapshot;
-
-        setSavedSources((currentSources) => {
-          let hasChanges = false;
-          const nextSources = { ...currentSources };
-
-          for (const { sourceId, password } of loadedPasswords) {
-            const source = nextSources[sourceId];
-
-            if (!source || source.kind !== "xtream") {
-              continue;
-            }
-
-            if (password !== null && source.password !== password) {
-              nextSources[sourceId] = {
-                ...source,
-                password,
-              };
-              hasChanges = true;
-              continue;
-            }
-
-            if (password === null && source.password.length === 0) {
-              continue;
-            }
-
-            // Rewrite legacy in-file passwords through the scrubbed serializer.
-            nextSources[sourceId] = {
-              ...source,
-            };
-            hasChanges = true;
+        const settlements: XtreamCredentialHydrationSettlement[] = pendingReads.map(
+          (pending, index) => ({
+            sourceId: pending.sourceId,
+            expectedFingerprint: pending.expectedFingerprint,
+            result: results[index],
+          }),
+        );
+        const hydration = hydrateXtreamCredentials(savedSourcesRef.current, settlements);
+        const passwordSnapshot: Record<string, string> = {};
+        for (const currentSource of Object.values(hydration.sources)) {
+          if (currentSource.kind === "xtream") {
+            passwordSnapshot[currentSource.id] = currentSource.password;
           }
-
-          return hasChanges ? nextSources : currentSources;
-        });
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
         }
 
-        const errorMessage =
-          error instanceof Error ? error.message : "Saved Xtream passwords could not be loaded.";
-        setMessage(errorMessage);
+        savedXtreamPasswordsRef.current = passwordSnapshot;
+        setSavedSources((currentSources) =>
+          hydrateXtreamCredentials(currentSources, settlements).sources,
+        );
+        if (hydration.message) {
+          setMessage((currentMessage) => currentMessage ?? hydration.message);
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -636,8 +702,19 @@ function App() {
     schedulePlayerLayoutSync();
   }, [isFullscreen, sidebarMode]);
 
+  function canCommitSourceOperation(token: SourceOperationToken) {
+    if (token.sourceId === null) {
+      return sourceOperationsRef.current.isCurrent(token);
+    }
+    return sourceOperationsRef.current.canCommit(
+      token,
+      getSourceOperationCommitState(savedSourcesRef.current, token.sourceId),
+    );
+  }
+
   async function applyImportedPlaylist(
     importedPlaylist: PlaylistImport,
+    token: SourceOperationToken,
     options?: {
       sourceId?: string | null;
       preferredChannelId?: string | null;
@@ -645,51 +722,60 @@ function App() {
       keepPlaybackRunning?: boolean;
     },
   ) {
-    const nextSelectedChannelId =
-      options?.preferredChannelId &&
-      importedPlaylist.channels.some((channel) => channel.id === options.preferredChannelId)
-        ? options.preferredChannelId
-        : importedPlaylist.channels[0]?.id ?? null;
-    const nextSourceId = options?.sourceId ?? null;
-
+    if (!canCommitSourceOperation(token)) return false;
     if (!options?.keepPlaybackRunning) {
       await stopPlayback();
     }
+    if (!canCommitSourceOperation(token)) return false;
 
-    setPlaylistSnapshot({
-      sourceId: nextSourceId,
-      playlist: importedPlaylist,
-      selectedChannelId: nextSelectedChannelId,
-      savedAt: new Date().toISOString(),
+    const nextSourceId = options?.sourceId ?? null;
+    const currentReferences = importedReferencesRef.current;
+    const migrated = migrateImportedChannelReferences(importedPlaylist.channels, {
+      ...currentReferences,
+      preferredChannelId: options?.preferredChannelId ?? currentReferences.selectedChannelId,
     });
-    setActiveSourceId(nextSourceId);
+    const nextSelectedChannelId =
+      migrated.preferredChannelId &&
+      importedPlaylist.channels.some((channel) => channel.id === migrated.preferredChannelId)
+        ? migrated.preferredChannelId
+        : importedPlaylist.channels[0]?.id ?? null;
+    const nextPlaylistPreferenceKey = getPlaylistPreferenceKey(importedPlaylist);
+    const nextLibraryIndex = nextSourceId
+      ? {
+          ...migrated.sourceLibraryIndex,
+          [nextSourceId]: mergeSourceLibraryIndexEntry(
+            migrated.sourceLibraryIndex[nextSourceId],
+            importedPlaylist.channels.map((channel) => channel.id),
+            nextPlaylistPreferenceKey,
+          ),
+        }
+      : migrated.sourceLibraryIndex;
+    const nextPlaybackSession = options?.preservePlaybackSession
+      ? migrated.playbackSession
+      : {
+          ...migrated.playbackSession,
+          sourceId: nextSourceId,
+          channelId: nextSelectedChannelId,
+          shouldResume: false,
+          resumeSourceId: null,
+          resumeChannelId: null,
+          resumeInFullscreen: false,
+        };
 
-    if (!options?.preservePlaybackSession) {
-      setPlaybackSession((currentSession) => ({
-        ...currentSession,
-        sourceId: nextSourceId,
-        channelId: nextSelectedChannelId,
-        shouldResume: false,
-        resumeSourceId: null,
-        resumeChannelId: null,
-        resumeInFullscreen: false,
-      }));
-    }
-
-    if (nextSourceId) {
-      const nextPlaylistPreferenceKey = getPlaylistPreferenceKey(importedPlaylist);
-
-      setSourceLibraryIndex((currentIndex) => ({
-        ...currentIndex,
-        [nextSourceId]: mergeSourceLibraryIndexEntry(
-          currentIndex[nextSourceId],
-          importedPlaylist.channels.map((channel) => channel.id),
-          nextPlaylistPreferenceKey,
-        ),
-      }));
-    }
-
+    if (!canCommitSourceOperation(token)) return false;
     startTransition(() => {
+      setFavoriteIds(migrated.favoriteIds);
+      setRecentIds(migrated.recentIds);
+      setPlaybackSession(nextPlaybackSession);
+      setSourceLibraryIndex(nextLibraryIndex);
+      setSavedEpgMappings(migrated.savedEpgMappings);
+      setPlaylistSnapshot({
+        sourceId: nextSourceId,
+        playlist: importedPlaylist,
+        selectedChannelId: nextSelectedChannelId,
+        savedAt: new Date().toISOString(),
+      });
+      setActiveSourceId(nextSourceId);
       setPlaylist(importedPlaylist);
       setSelectedChannelId(nextSelectedChannelId);
       setNavigationSection("tv");
@@ -698,7 +784,17 @@ function App() {
       setSearchQuery("");
       setMessage(null);
       setIsSettingsOpen(false);
+
+      if (nextSourceId) {
+        setSavedSources((currentSources) => {
+          const currentSource = currentSources[nextSourceId];
+          return currentSource
+            ? { ...currentSources, [nextSourceId]: markSourceLoaded(currentSource) }
+            : currentSources;
+        });
+      }
     });
+    return true;
   }
 
   function persistSelectedChannel(channelId: string | null) {
@@ -716,6 +812,7 @@ function App() {
 
   async function importFromSavedSource(
     source: SavedPlaylistSource,
+    token: SourceOperationToken,
     options?: {
       preservePlaybackSession?: boolean;
       keepPlaybackRunning?: boolean;
@@ -738,22 +835,16 @@ function App() {
       );
     }
 
-    await applyImportedPlaylist(importedPlaylist, {
+    if (!canCommitSourceOperation(token)) return false;
+    const currentSnapshot = importedReferencesRef.current.playlistSnapshot;
+    return applyImportedPlaylist(importedPlaylist, token, {
       sourceId: source.id,
       preferredChannelId:
-        playlistSnapshot?.sourceId === source.id
-          ? selectedChannelIdRef.current ?? playlistSnapshot.selectedChannelId
+        currentSnapshot?.sourceId === source.id
+          ? selectedChannelIdRef.current ?? currentSnapshot.selectedChannelId
           : null,
       preservePlaybackSession: options?.preservePlaybackSession,
       keepPlaybackRunning: options?.keepPlaybackRunning,
-    });
-    setSavedSources((currentSources) => {
-      const currentSource = currentSources[source.id];
-      if (!currentSource) return currentSources;
-      return {
-        ...currentSources,
-        [source.id]: markSourceLoaded(currentSource),
-      };
     });
   }
 
@@ -761,83 +852,100 @@ function App() {
     activeSourceId && savedSources[activeSourceId] && isSourceProfileReady(savedSources[activeSourceId])
       ? savedSources[activeSourceId]
       : null;
-  const hasCachedStartupPlaylist =
-    startupSourceToRestore !== null &&
-    playlistSnapshot?.sourceId === startupSourceToRestore.id &&
-    playlistSnapshot.playlist.channels.length > 0;
+  const cachedStartupSnapshot =
+    startupSourceToRestore !== null && playlistSnapshot?.sourceId === startupSourceToRestore.id
+      ? playlistSnapshot
+      : null;
+  const hasCachedStartupPlaylist = (cachedStartupSnapshot?.playlist.channels.length ?? 0) > 0;
+  const cachedStartupPlaylistNeedsRefresh =
+    cachedStartupSnapshot !== null && shouldRefreshPlaylistSnapshot(cachedStartupSnapshot);
+  const cachedStartupPlaylistPlaybackReady =
+    cachedStartupSnapshot !== null && isPlaylistSnapshotPlaybackReady(cachedStartupSnapshot);
   const shouldDelayResumeForStartupRestore =
-    !startupRestoreAttemptedRef.current &&
+    playbackSession.shouldResume &&
+    playbackSession.resumeSourceId === activeSourceId &&
     startupSourceToRestore !== null &&
-    !hasCachedStartupPlaylist;
+    startupSourceRefreshResultRef.current === "pending";
 
   useEffect(() => {
-    if (!hasHydratedPersistentState) {
-      return;
-    }
-
-    if (startupRestoreAttemptedRef.current) {
+    if (!hasHydratedPersistentState || startupRestoreAttemptedRef.current) {
       return;
     }
 
     startupRestoreAttemptedRef.current = true;
-
     if (!startupSourceToRestore) {
+      startupSourceRefreshResultRef.current = "failed";
       return;
     }
 
-    const restoreStartupSource = () =>
-      importFromSavedSource(startupSourceToRestore, {
-        preservePlaybackSession: true,
-        keepPlaybackRunning: hasCachedStartupPlaylist,
-      }).catch((error) => {
-        const errorMessage =
-          error instanceof Error ? error.message : "The saved source could not be refreshed.";
-        setMessage(
-          hasCachedStartupPlaylist
-            ? `Using the cached library. ${errorMessage}`
-            : errorMessage,
-        );
-      });
+    const token = sourceOperationsRef.current.start({
+      origin: "startup",
+      sourceId: startupSourceToRestore.id,
+      expectedFingerprint: getSourceOperationFingerprint(startupSourceToRestore),
+    });
+    setIsRestoringStartupSource(true);
+    setSourceBusy(beginSourceBusy(token));
+
+    const restoreStartupSource = async () => {
+      try {
+        if (!canCommitSourceOperation(token)) return;
+        const applied = await importFromSavedSource(startupSourceToRestore, token, {
+          preservePlaybackSession: true,
+          keepPlaybackRunning: hasCachedStartupPlaylist,
+        });
+        startupSourceRefreshResultRef.current = applied ? "succeeded" : "failed";
+      } catch (error) {
+        startupSourceRefreshResultRef.current = "failed";
+        if (canCommitSourceOperation(token)) {
+          const safeError = redactCredentials(
+            error instanceof Error ? error.message : "The saved source could not be refreshed.",
+          );
+          setMessage(
+            hasCachedStartupPlaylist
+              ? `Using cached library metadata. ${safeError}`
+              : safeError,
+          );
+        }
+      } finally {
+        setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, token));
+        setIsRestoringStartupSource(false);
+      }
+    };
 
     if (hasCachedStartupPlaylist) {
       const timerId = window.setTimeout(() => {
         void restoreStartupSource();
       }, 1500);
-
-      return () => {
-        window.clearTimeout(timerId);
-      };
+      return () => window.clearTimeout(timerId);
     }
 
-    setIsRestoringStartupSource(true);
-
-    void restoreStartupSource().finally(() => {
-      setIsRestoringStartupSource(false);
-    });
-  }, [
-    hasCachedStartupPlaylist,
-    hasHydratedPersistentState,
-    startupSourceToRestore,
-  ]);
+    void restoreStartupSource();
+  }, [hasCachedStartupPlaylist, hasHydratedPersistentState, startupSourceToRestore]);
 
   async function handleImportFile(file: File) {
-    setIsImportingFile(true);
+    const token = sourceOperationsRef.current.start({
+      origin: "local",
+      sourceId: null,
+      expectedFingerprint: `local_${file.name}_${file.size}_${file.lastModified}`,
+    });
+    setSourceBusy(beginSourceBusy(token));
 
     try {
       const playlistText = await file.text();
+      if (!canCommitSourceOperation(token)) return;
       const importedPlaylist = parseM3u(playlistText, file.name, {
         sourceId: createLocalM3uSourceIdentity(file.name, playlistText),
         trust: "trusted-local",
       });
-      await applyImportedPlaylist(importedPlaylist, {
-        sourceId: null,
-      });
+      await applyImportedPlaylist(importedPlaylist, token, { sourceId: null });
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "The playlist could not be imported.";
-      setMessage(errorMessage);
+      if (canCommitSourceOperation(token)) {
+        setMessage(redactCredentials(
+          error instanceof Error ? error.message : "The playlist could not be imported.",
+        ));
+      }
     } finally {
-      setIsImportingFile(false);
+      setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, token));
     }
   }
 
@@ -862,6 +970,26 @@ function App() {
     setSearchQuery("");
   }
 
+  async function playCanonicalChannel(channel: Channel) {
+    try {
+      const currentSourceId = activeSourceIdRef.current;
+      const currentSource = currentSourceId ? savedSourcesRef.current[currentSourceId] : null;
+      if (currentSourceId && !currentSource) {
+        throw new Error("The active saved source is unavailable. Load it again before playback.");
+      }
+      const materializedChannel = materializeChannelForPlayback(
+        channel,
+        currentSource ?? { id: "local", kind: "m3u_url" },
+      );
+      return await playChannel(materializedChannel);
+    } catch (error) {
+      setMessage(redactCredentials(
+        error instanceof Error ? error.message : "The channel could not be prepared for playback.",
+      ));
+      return false;
+    }
+  }
+
   async function handleSelectChannel(channel: Channel) {
     setSelectedChannelId(channel.id);
     persistSelectedChannel(channel.id);
@@ -878,7 +1006,7 @@ function App() {
       return;
     }
 
-    await playChannel(channel);
+    await playCanonicalChannel(channel);
 
     setPlaybackSession((currentSession) => ({
       ...currentSession,
@@ -899,6 +1027,17 @@ function App() {
     }));
 
     await stopPlayback();
+  }
+
+  async function handleReloadPlayback() {
+    const channel = selectedChannelIdRef.current
+      ? importedReferencesRef.current.playlistSnapshot?.playlist.channels.find(
+          (candidate) => candidate.id === selectedChannelIdRef.current,
+        ) ?? null
+      : null;
+    if (channel) {
+      await playCanonicalChannel(channel);
+    }
   }
 
   async function handleToggleFullscreen() {
@@ -961,27 +1100,31 @@ function App() {
   }
 
   async function handleLoadSavedSource(sourceId: string) {
-    const source = savedSources[sourceId];
+    const source = savedSourcesRef.current[sourceId];
 
-    if (!source) {
-      return;
-    }
-
+    if (!source) return;
     if (!isSourceProfileReady(source)) {
       setMessage("Complete the saved source details and enable it before loading.");
       return;
     }
 
-    setLoadingSourceId(sourceId);
+    const token = sourceOperationsRef.current.start({
+      origin: "saved",
+      sourceId,
+      expectedFingerprint: getSourceOperationFingerprint(source),
+    });
+    setSourceBusy(beginSourceBusy(token));
 
     try {
-      await importFromSavedSource(source);
+      await importFromSavedSource(source, token);
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "The saved source could not be loaded.";
-      setMessage(errorMessage);
+      if (canCommitSourceOperation(token)) {
+        setMessage(redactCredentials(
+          error instanceof Error ? error.message : "The saved source could not be loaded.",
+        ));
+      }
     } finally {
-      setLoadingSourceId(null);
+      setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, token));
     }
   }
 
@@ -1002,6 +1145,8 @@ function App() {
   }
 
   function handleToggleSourceEnabled(sourceId: string) {
+    sourceOperationsRef.current.invalidateSource(sourceId);
+    setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
     setSavedSources((currentSources) => {
       const source = currentSources[sourceId];
       if (!source) return currentSources;
@@ -1015,6 +1160,8 @@ function App() {
   }
 
   function handleUpdateSource(sourceId: string, patch: Partial<SavedPlaylistSource>) {
+    sourceOperationsRef.current.invalidateSource(sourceId);
+    setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
     setSavedSources((currentSources) => {
       const source = currentSources[sourceId];
       if (!source) return currentSources;
@@ -1031,6 +1178,9 @@ function App() {
     if (!source) {
       return;
     }
+
+    sourceOperationsRef.current.invalidateSource(sourceId);
+    setSourceBusy((currentBusy) => currentBusy?.sourceId === sourceId ? null : currentBusy);
 
     const cleanupEntry = sourceLibraryIndex[sourceId];
     const trackedChannelIds = new Set(cleanupEntry?.channelIds ?? []);
@@ -1059,7 +1209,6 @@ function App() {
     setCollapsedSourceIds((currentIds) =>
       currentIds.filter((currentId) => currentId !== sourceId),
     );
-    setLoadingSourceId((currentId) => (currentId === sourceId ? null : currentId));
     setFavoriteIds((currentIds) =>
       currentIds.filter((channelId) => !trackedChannelIds.has(channelId)),
     );
@@ -1989,6 +2138,22 @@ function App() {
       return;
     }
 
+    if (resumeSourceId !== null && startupSourceRefreshResultRef.current !== "succeeded") {
+      setPlaybackSession((currentSession) => ({
+        ...currentSession,
+        shouldResume: false,
+        resumeSourceId: null,
+        resumeChannelId: null,
+        resumeInFullscreen: false,
+      }));
+      if (cachedStartupPlaylistNeedsRefresh || !cachedStartupPlaylistPlaybackReady) {
+        setMessage((currentMessage) => currentMessage ??
+          "Cached source metadata is available for browsing, but refresh is required before playback.");
+      }
+      startupPlaybackRestoreCompletedRef.current = true;
+      return;
+    }
+
     const restoreKey = `${activeSourceId ?? "local"}\u0001${playlist.importedAt}\u0001${resumeChannelId}`;
 
     if (startupPlaybackRestoreKeyRef.current === restoreKey) {
@@ -2071,7 +2236,7 @@ function App() {
     persistSelectedChannel(channelToResume.id);
     setRecentIds((currentIds) => pushRecentId(currentIds, channelToResume.id));
 
-    void playChannel(channelToResume).then((didStartPlayback) => {
+    void playCanonicalChannel(channelToResume).then((didStartPlayback) => {
       setPlaybackSession((currentSession) =>
         (currentSession.resumeSourceId ?? null) === activeSourceId &&
         (currentSession.resumeChannelId ?? null) === channelToResume.id
@@ -2121,7 +2286,7 @@ function App() {
             void handleStopPlayback();
           }}
           onReload={() => {
-            void reloadPlayback();
+            void handleReloadPlayback();
           }}
           onToggleMute={() => {
             void toggleMute();
@@ -2190,7 +2355,7 @@ function App() {
                     void handleStopPlayback();
                   }}
                   onReload={() => {
-                    void reloadPlayback();
+                    void handleReloadPlayback();
                   }}
                   onToggleMute={() => {
                     void toggleMute();

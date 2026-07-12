@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 
 const memoryStateStore = new Map<string, unknown>();
+const persistentWriteQueues = new Map<string, Promise<void>>();
 
 export interface PersistentStateMetadata {
   source: "backend" | "legacy-local-storage" | "memory";
@@ -149,6 +150,30 @@ async function savePersistentValue(key: string, value: unknown) {
   await invoke("save_app_state", { key, value });
 }
 
+export function enqueuePersistentWrite(key: string, write: () => Promise<void>) {
+  const previousWrite = persistentWriteQueues.get(key) ?? Promise.resolve();
+  const currentWrite = previousWrite.then(write);
+  const queueTail = currentWrite.then(
+    () => undefined,
+    () => undefined,
+  );
+  persistentWriteQueues.set(key, queueTail);
+  void queueTail.then(() => {
+    if (persistentWriteQueues.get(key) === queueTail) {
+      persistentWriteQueues.delete(key);
+    }
+  });
+  return currentWrite;
+}
+
+export async function persistMigratedValue(
+  save: () => Promise<void>,
+  removeLegacy: () => void,
+) {
+  await save();
+  removeLegacy();
+}
+
 export function usePersistentState<T>(
   key: string,
   initialValue: T,
@@ -160,6 +185,7 @@ export function usePersistentState<T>(
   const serializerRef = useRef(serializer);
   const skipNextSaveRef = useRef(true);
   const migrateNextSaveRef = useRef(false);
+  const removeLegacyNextSaveRef = useRef(false);
   const [value, setValue] = useState<T>(() => initialValue);
   const [isHydrated, setIsHydrated] = useState(false);
   const [metadata, setMetadata] = useState<PersistentStateMetadata>(cleanBackendMetadata);
@@ -178,6 +204,7 @@ export function usePersistentState<T>(
     setMetadata(cleanBackendMetadata);
     skipNextSaveRef.current = true;
     migrateNextSaveRef.current = false;
+    removeLegacyNextSaveRef.current = false;
 
     void loadPersistentValue(key)
       .then((storedValue) => {
@@ -186,6 +213,8 @@ export function usePersistentState<T>(
         }
 
         migrateNextSaveRef.current = storedValue.shouldMigrate;
+        removeLegacyNextSaveRef.current =
+          storedValue.shouldMigrate && storedValue.metadata.source === "legacy-local-storage";
         setMetadata(storedValue.metadata);
         setValue(reviveValue(storedValue.value, initialValueRef.current, reviverRef.current));
       })
@@ -218,12 +247,21 @@ export function usePersistentState<T>(
       }
     }
 
-    migrateNextSaveRef.current = false;
     const serializedValue = serializerRef.current ? serializerRef.current(value) : value;
+    const save = () => enqueuePersistentWrite(key, () => savePersistentValue(key, serializedValue));
+    const persistence = removeLegacyNextSaveRef.current
+      ? persistMigratedValue(save, () => window.localStorage.removeItem(key))
+      : save();
 
-    void savePersistentValue(key, serializedValue).catch(() => {
-      // App state persistence is best-effort so the UI can keep running.
-    });
+    void persistence
+      .then(() => {
+        migrateNextSaveRef.current = false;
+        removeLegacyNextSaveRef.current = false;
+      })
+      .catch(() => {
+        // App state persistence is best-effort so the UI can keep running. A
+        // failed migration deliberately leaves legacy localStorage untouched.
+      });
   }, [isHydrated, key, value]);
 
   return [value, setValue, isHydrated, metadata] as const;
