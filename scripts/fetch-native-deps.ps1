@@ -67,6 +67,23 @@ if (-not (Test-Path -LiteralPath $sourcesPath -PathType Leaf) -or -not (Test-Pat
     throw "Native dependency provenance manifests are missing."
 }
 
+$sources = Get-Content -LiteralPath $sourcesPath -Raw
+$archiveHashes = [Regex]::Matches($sources, '(?m)^- Upstream archive SHA-256: `([0-9a-fA-F]{64})`\r?$')
+if ($archiveHashes.Count -ne 2) { throw "SOURCES.md must contain exactly two upstream archive hashes." }
+$wrapperArchiveHash = $archiveHashes[0].Groups[1].Value
+
+# The second fixed URL belongs to mpv. Parse all fixed URLs to avoid accepting a moving endpoint.
+$urlMatches = [Regex]::Matches($sources, '(?m)^- Fixed release URL: <(https://[^>]+)>\r?$')
+if ($urlMatches.Count -ne 2) { throw "SOURCES.md must contain exactly two fixed HTTPS release URLs." }
+$wrapperUrl = $urlMatches[0].Groups[1].Value
+$mpvUrl = $urlMatches[1].Groups[1].Value
+$mpvArchiveHash = $archiveHashes[1].Groups[1].Value
+foreach ($url in @($wrapperUrl, $mpvUrl)) {
+    if ($url -notmatch '^https://github\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/?#]+$' -or $url -match '/latest/') {
+        throw "Native source is not an immutable GitHub release asset URL: $url"
+    }
+}
+
 $manifest = Get-Manifest
 if (-not $Force) {
     $allValid = $true
@@ -85,23 +102,6 @@ if (-not $Force) {
         Write-Host "Pinned native DLLs are already installed and verified; no download needed."
         & $verifierPath
         exit 0
-    }
-}
-
-$sources = Get-Content -LiteralPath $sourcesPath -Raw
-$archiveHashes = [Regex]::Matches($sources, '(?m)^- Upstream archive SHA-256: `([0-9a-fA-F]{64})`$')
-if ($archiveHashes.Count -ne 2) { throw "SOURCES.md must contain exactly two upstream archive hashes." }
-$wrapperArchiveHash = $archiveHashes[0].Groups[1].Value
-
-# The second fixed URL belongs to mpv. Parse all fixed URLs to avoid accepting a moving endpoint.
-$urlMatches = [Regex]::Matches($sources, '(?m)^- Fixed release URL: <(https://[^>]+)>$')
-if ($urlMatches.Count -ne 2) { throw "SOURCES.md must contain exactly two fixed HTTPS release URLs." }
-$wrapperUrl = $urlMatches[0].Groups[1].Value
-$mpvUrl = $urlMatches[1].Groups[1].Value
-$mpvArchiveHash = $archiveHashes[1].Groups[1].Value
-foreach ($url in @($wrapperUrl, $mpvUrl)) {
-    if ($url -notmatch '^https://github\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/?#]+$' -or $url -match '/latest/') {
-        throw "Native source is not an immutable GitHub release asset URL: $url"
     }
 }
 
