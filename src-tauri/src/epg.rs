@@ -314,8 +314,9 @@ fn normalize_epg_url_input(raw_input: &str) -> Result<Url, String> {
         return Err("Enter an EPG URL first.".to_string());
     }
 
-    let parsed_url =
+    let mut parsed_url =
         Url::parse(normalized_input).map_err(|_| "The EPG URL is not valid.".to_string())?;
+    parsed_url.set_fragment(None);
 
     match parsed_url.scheme() {
         "http" | "https" => Ok(parsed_url),
@@ -1507,6 +1508,56 @@ mod tests {
 
     fn xml(programmes: &str) -> Vec<u8> {
         format!(r#"<?xml version="1.0"?><tv><channel id="one"><display-name>One</display-name></channel>{programmes}</tv>"#).into_bytes()
+    }
+
+    #[test]
+    fn epg_url_fragments_do_not_change_source_identity() {
+        let without_fragment = normalize_epg_url_input("https://example.test/guide.xml").unwrap();
+        let fragment_one = normalize_epg_url_input("https://example.test/guide.xml#one").unwrap();
+        let fragment_two = normalize_epg_url_input("https://example.test/guide.xml#two").unwrap();
+
+        assert_eq!(fragment_one, without_fragment);
+        assert_eq!(fragment_two, without_fragment);
+    }
+
+    #[test]
+    fn epg_url_identity_preserves_case_sensitive_path_and_query() {
+        let baseline = normalize_epg_url_input("https://example.test/Guide.xml?Token=AbC").unwrap();
+        let different_path =
+            normalize_epg_url_input("https://example.test/guide.xml?Token=AbC").unwrap();
+        let different_query_name =
+            normalize_epg_url_input("https://example.test/Guide.xml?token=AbC").unwrap();
+        let different_query_value =
+            normalize_epg_url_input("https://example.test/Guide.xml?Token=abc").unwrap();
+
+        assert_ne!(baseline, different_path);
+        assert_ne!(baseline, different_query_name);
+        assert_ne!(baseline, different_query_value);
+    }
+
+    #[test]
+    fn epg_url_identity_keeps_existing_scheme_host_and_default_port_canonicalization() {
+        let http =
+            normalize_epg_url_input("XMLTV: HTTP://EXAMPLE.TEST:80/Guide.xml?Token=AbC#ignored")
+                .unwrap();
+        let https = normalize_epg_url_input("https://EXAMPLE.TEST:443/Guide.xml?Token=AbC#ignored")
+            .unwrap();
+
+        assert_eq!(http.as_str(), "http://example.test/Guide.xml?Token=AbC");
+        assert_eq!(https.as_str(), "https://example.test/Guide.xml?Token=AbC");
+        assert_ne!(http, https);
+    }
+
+    #[test]
+    fn epg_url_errors_do_not_expose_url_secrets() {
+        let invalid = normalize_epg_url_input("https://user:password@[::1?token=secret")
+            .expect_err("the malformed URL must be rejected");
+        let unsupported =
+            normalize_epg_url_input("ftp://user:password@example.test/guide?token=secret")
+                .expect_err("the unsupported URL scheme must be rejected");
+
+        assert_eq!(invalid, "The EPG URL is not valid.");
+        assert_eq!(unsupported, "Only http and https EPG URLs are supported.");
     }
 
     #[test]
