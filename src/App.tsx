@@ -127,6 +127,7 @@ import {
   loadXtreamPassword,
   SAVED_SOURCES_PERSISTENCE_KEY,
   saveSourceSecretsBeforePersist,
+  saveXtreamPasswordBeforeCommit,
 } from "./features/sources/secrets";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { hashString } from "./utils/hash";
@@ -379,6 +380,9 @@ function App() {
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const playerShellRef = useRef<HTMLDivElement>(null);
   const playerSurfaceRef = useRef<HTMLDivElement>(null);
+  const channelGuideBodyRef = useRef<HTMLDivElement | null>(null);
+  const channelScrollPositionRef = useRef({ key: "", top: 0 });
+  const channelScrollPositionKeyRef = useRef("");
   const startupRestoreStateRef = useRef(createStartupSourceRestoreState());
   const startupPlaybackRestoreKeyRef = useRef<string | null>(null);
   const startupPlaybackRestoreCompletedRef = useRef(false);
@@ -1113,14 +1117,20 @@ function App() {
   }
 
   function showSelectedChannelGroup() {
+    const selectedGroupIsAlreadyVisible =
+      activeGroup === ALL_CHANNELS_GROUP_ID ||
+      (activeGroup === FAVORITES_GROUP_ID && Boolean(selectedChannel && favoriteIdSet.has(selectedChannel.id))) ||
+      (Boolean(selectedChannel?.group) && activeGroup === selectedChannel?.group);
     setNavigationSection("tv");
-    setActiveGroup(
-      selectedChannel && favoriteIdSet.has(selectedChannel.id)
-        ? FAVORITES_GROUP_ID
-        : selectedChannel?.group && enabledGroupSet.has(selectedChannel.group)
-        ? selectedChannel.group
-        : ALL_CHANNELS_GROUP_ID,
-    );
+    if (!selectedGroupIsAlreadyVisible) {
+      setActiveGroup(
+        selectedChannel && favoriteIdSet.has(selectedChannel.id)
+          ? FAVORITES_GROUP_ID
+          : selectedChannel?.group && enabledGroupSet.has(selectedChannel.group)
+          ? selectedChannel.group
+          : ALL_CHANNELS_GROUP_ID,
+      );
+    }
     setSidebarMode("groups");
     setSearchQuery("");
   }
@@ -1161,12 +1171,16 @@ function App() {
       return;
     }
 
-    await playCanonicalChannel(channel);
+    const didStartPlayback = await playCanonicalChannel(channel);
 
     setPlaybackSession((currentSession) => ({
       ...currentSession,
       sourceId: activeSourceId,
       channelId: channel.id,
+      shouldResume: didStartPlayback,
+      resumeSourceId: didStartPlayback ? activeSourceId : null,
+      resumeChannelId: didStartPlayback ? channel.id : null,
+      resumeInFullscreen: false,
     }));
   }
 
@@ -1197,6 +1211,12 @@ function App() {
 
   async function handleToggleFullscreen() {
     try {
+      if (!isFullscreen && channelGuideBodyRef.current) {
+        channelScrollPositionRef.current = {
+          key: channelScrollPositionKeyRef.current,
+          top: channelGuideBodyRef.current.scrollTop,
+        };
+      }
       if (isTauri()) {
         const appWindow = getCurrentWindow();
         const nextFullscreen = !(await appWindow.isFullscreen());
@@ -1373,6 +1393,28 @@ function App() {
             error instanceof Error
               ? error.message
               : "The saved source credential could not be removed. Existing saved data was kept.",
+          );
+        }
+      }
+      return;
+    }
+
+    const replacesXtreamPassword =
+      source.kind === "xtream" &&
+      "password" in patch &&
+      typeof patch.password === "string" &&
+      patch.password.length > 0 &&
+      patch.password !== source.password;
+
+    if (replacesXtreamPassword) {
+      try {
+        await saveXtreamPasswordBeforeCommit(source.id, patch.password as string, commitUpdate);
+      } catch (error) {
+        if (sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : "Saved source changes could not be secured. Existing saved data was kept.",
           );
         }
       }
@@ -2017,6 +2059,10 @@ function App() {
     () => visibleChannels.slice(0, channelRenderLimit),
     [channelRenderLimit, visibleChannels],
   );
+  const channelScrollPositionKey = `${playlist?.importedAt ?? ""}\u0001${navigationSection}\u0001${
+    activeGroup ?? ""
+  }\u0001${normalizedSearchQuery}`;
+  channelScrollPositionKeyRef.current = channelScrollPositionKey;
   const handleLoadMoreVisibleChannels = useCallback(() => {
     setChannelRenderLimit((currentLimit) =>
       Math.min(visibleChannels.length, currentLimit + CHANNEL_RENDER_BATCH_SIZE),
@@ -2624,6 +2670,9 @@ function App() {
               guideWindowStartMs={guideWindowStartMs}
               guideWindowEndMs={guideWindowEndMs}
               searchQuery={searchQuery}
+              scrollPositionKey={channelScrollPositionKey}
+              scrollPositionRef={channelScrollPositionRef}
+              guideBodyRef={channelGuideBodyRef}
               onSelectChannel={(channel) => {
                 void handleSelectChannel(channel);
               }}

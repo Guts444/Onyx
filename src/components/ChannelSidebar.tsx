@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { Channel } from "../domain/iptv";
 
 export type NavigationSection = "search" | "tv";
@@ -90,6 +91,15 @@ export function ChannelSidebar({
   onOpenSettings,
 }: ChannelSidebarProps) {
   const hasPlaylist = playlistName !== null;
+  const activeGroupRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (navigationSection !== "tv" || !activeGroup) return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      activeGroupRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeGroup, navigationSection]);
 
   return (
     <aside className={`panel sidebar ${showRail ? "" : "sidebar--groups-only"}`}>
@@ -210,6 +220,7 @@ export function ChannelSidebar({
             ) : (
               <div className="sidebar__group-list">
                 <button
+                  ref={isAllChannelsActive ? activeGroupRef : undefined}
                   type="button"
                   className={`sidebar__group-card ${
                     isAllChannelsActive ? "sidebar__group-card--active" : ""
@@ -221,6 +232,7 @@ export function ChannelSidebar({
                 </button>
 
                 <button
+                  ref={isFavoritesActive ? activeGroupRef : undefined}
                   type="button"
                   className={`sidebar__group-card ${
                     isFavoritesActive ? "sidebar__group-card--active" : ""
@@ -237,6 +249,7 @@ export function ChannelSidebar({
                   return (
                     <button
                       key={group}
+                      ref={isActive ? activeGroupRef : undefined}
                       type="button"
                       className={`sidebar__group-card ${isActive ? "sidebar__group-card--active" : ""}`}
                       onClick={() => onSelectGroup(group)}

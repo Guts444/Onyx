@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.9 - 2026-07-13
+
+- **Xtream restart repair**: Persist the Xtream username and domain required to rebuild credential-free cached stream descriptors while continuing to keep passwords in Windows Credential Manager.
+- **Fullscreen return position**: Leaving fullscreen keeps the group you were browsing and automatically brings both that group and the selected channel row back into view.
+
 ## v0.5.8 - 2026-07-12
 
 - **Credential-safe sources and guides**: Xtream passwords, remote M3U URLs, and EPG URLs are held in Windows Credential Manager instead of app-state or cache JSON; existing records are securely hydrated and rewritten during migration.

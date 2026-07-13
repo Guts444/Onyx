@@ -166,7 +166,7 @@ test("beforePersist finishes before serialization and backend save", async () =>
   assert.equal(JSON.stringify(persisted).includes(secretUrl), false);
 });
 
-test("beforePersist secures edited M3U and Xtream secrets before scrubbed backend persistence", async () => {
+test("beforePersist secures M3U URLs while Xtream password edits use their transactional path", async () => {
   const m3u = sourceFixture("m3u_url");
   const xtream = sourceFixture("xtream");
   const sources = { [m3u.id]: m3u, [xtream.id]: xtream };
@@ -182,7 +182,7 @@ test("beforePersist secures edited M3U and Xtream secrets before scrubbed backen
 
   assert.deepStrictEqual(events, ["keyring", "scrub", "backend"]);
   assert.equal(await loadM3uUrl(m3u.id), m3u.kind === "m3u_url" ? m3u.url : null);
-  assert.equal(await loadXtreamPassword(xtream.id), xtream.kind === "xtream" ? xtream.password : null);
+  assert.equal(await loadXtreamPassword(xtream.id), null);
   assert.equal(JSON.stringify(persisted).includes("private-token"), false);
   assert.equal(JSON.stringify(persisted).includes("private-password"), false);
 });

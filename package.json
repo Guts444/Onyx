@@ -1,7 +1,7 @@
 {
   "name": "onyx",
   "private": true,
-  "version": "0.5.8",
+  "version": "0.5.9",
   "type": "module",
   "packageManager": "npm@11.16.0",
   "engines": {
@@ -15,7 +15,7 @@
     "check": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
-    "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/diagnostics.test.ts src/features/epg/matching.test.ts src/features/epg/operations.test.ts src/features/epg/secrets.test.ts src/features/playlist/channelFactory.test.ts src/features/playlist/materialize.test.ts src/features/playlist/migration.test.ts src/features/playlist/redaction.test.ts src/features/playlist/snapshot.test.ts src/features/sources/appIntegration.test.ts src/features/sources/hydration.test.ts src/features/sources/mutations.test.ts src/features/sources/operations.test.ts src/features/sources/profiles.test.ts src/hooks/usePersistentState.test.ts"
+    "test": "node --experimental-strip-types --test src/domain/epg.test.ts src/features/epg/diagnostics.test.ts src/features/epg/matching.test.ts src/features/epg/operations.test.ts src/features/epg/secrets.test.ts src/features/playlist/channelFactory.test.ts src/features/playlist/materialize.test.ts src/features/playlist/migration.test.ts src/features/playlist/redaction.test.ts src/features/playlist/snapshot.test.ts src/features/sources/appIntegration.test.ts src/features/sources/hydration.test.ts src/features/sources/mutations.test.ts src/features/sources/operations.test.ts src/features/sources/profiles.test.ts src/features/sources/secrets.test.ts src/hooks/usePersistentState.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

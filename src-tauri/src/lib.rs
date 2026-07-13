@@ -266,8 +266,45 @@ fn load_app_state(app: AppHandle, key: String) -> Result<persistence::ReadOutcom
 }
 
 #[tauri::command]
-fn save_app_state(app: AppHandle, key: String, value: Value) -> Result<(), String> {
+fn save_app_state(app: AppHandle, key: String, mut value: Value) -> Result<(), String> {
+    scrub_saved_source_secrets(&key, &mut value);
     persistence::Store::new(get_app_state_directory(&app)?).write(&key, &value)
+}
+
+fn scrub_saved_source_secrets(key: &str, value: &mut Value) {
+    if key != "iptv-player:saved-sources" {
+        return;
+    }
+    scrub_saved_source_value(value);
+}
+
+fn scrub_saved_source_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            match object.get("kind").and_then(Value::as_str) {
+                Some("xtream") => {
+                    if let Some(password) = object.get_mut("password") {
+                        *password = Value::String(String::new());
+                    }
+                }
+                Some("m3u_url") => {
+                    if let Some(url) = object.get_mut("url") {
+                        *url = Value::String(String::new());
+                    }
+                }
+                _ => {}
+            }
+            for child in object.values_mut() {
+                scrub_saved_source_value(child);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                scrub_saved_source_value(child);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[tauri::command]
@@ -851,10 +888,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_xtream_stream, validate_epg_url_for_storage, validate_m3u_url_for_storage,
-        XtreamChannelPayload, EPG_URL_SECRET_SERVICE, EPG_URL_SECRET_SERVICE_DEV,
-        EPG_URL_SECRET_SERVICE_PROD, INVALID_M3U_URL_MESSAGE, M3U_URL_SECRET_SERVICE,
-        M3U_URL_SECRET_SERVICE_DEV, M3U_URL_SECRET_SERVICE_PROD,
+        choose_xtream_stream, scrub_saved_source_secrets, validate_epg_url_for_storage,
+        validate_m3u_url_for_storage, XtreamChannelPayload, EPG_URL_SECRET_SERVICE,
+        EPG_URL_SECRET_SERVICE_DEV, EPG_URL_SECRET_SERVICE_PROD, INVALID_M3U_URL_MESSAGE,
+        M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_DEV, M3U_URL_SECRET_SERVICE_PROD,
         UNSUPPORTED_M3U_URL_SCHEME_MESSAGE, XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_DEV,
         XTREAM_SECRET_SERVICE_PROD,
     };
@@ -1090,5 +1127,34 @@ mod tests {
 
         let serialized = serde_json::to_value(payload).expect("payload should serialize");
         assert_eq!(serialized["isDirectSource"], true);
+    }
+
+    #[test]
+    fn saved_source_command_boundary_scrubs_recognized_secrets_only() {
+        let mut sources = serde_json::json!({
+            "xtream": {
+                "kind": "xtream",
+                "domain": "provider.example",
+                "username": "viewer",
+                "password": "private-password"
+            },
+            "m3u": {
+                "kind": "m3u_url",
+                "url": "https://provider.example/private.m3u"
+            },
+            "unknown": {
+                "kind": "future-source",
+                "password": "must-still-be-rejected"
+            }
+        });
+        scrub_saved_source_secrets("iptv-player:saved-sources", &mut sources);
+        assert_eq!(sources["xtream"]["username"], "viewer");
+        assert_eq!(sources["xtream"]["password"], "");
+        assert_eq!(sources["m3u"]["url"], "");
+        assert_eq!(sources["unknown"]["password"], "must-still-be-rejected");
+
+        let mut unrelated = serde_json::json!({"kind": "xtream", "password": "keep"});
+        scrub_saved_source_secrets("unrelated-key", &mut unrelated);
+        assert_eq!(unrelated["password"], "keep");
     }
 }
