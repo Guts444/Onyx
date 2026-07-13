@@ -83,6 +83,52 @@ function Invoke-Installer {
     }
 }
 
+function Get-RegistryKeySnapshot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [PSCustomObject]@{ Exists = $false; Values = @() }
+    }
+
+    $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+    $values = @($key.GetValueNames() | ForEach-Object {
+        [PSCustomObject]@{
+            Name = $_
+            Value = $key.GetValue($_, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            Kind = $key.GetValueKind($_)
+        }
+    })
+    return [PSCustomObject]@{ Exists = $true; Values = $values }
+}
+
+function Restore-RegistryKeySnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Snapshot
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+    }
+    if (-not $Snapshot.Exists) { return }
+
+    $null = New-Item -Path $Path -Force -ErrorAction Stop
+    if ($Path -notmatch '^HKCU:\\(.+)$') {
+        throw "Only HKCU registry snapshots are supported."
+    }
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($Matches[1], $true)
+    if ($null -eq $key) {
+        throw "The restored registry key could not be opened for writing."
+    }
+    try {
+        foreach ($entry in $Snapshot.Values) {
+            $key.SetValue($entry.Name, $entry.Value, $entry.Kind)
+        }
+    } finally {
+        $key.Dispose()
+    }
+}
+
 function Remove-ExactProcessTree {
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
 
@@ -250,6 +296,8 @@ $msiExtract = Join-Path $smokeRoot "msi-extracted"
 $nsisInstall = Join-Path $smokeRoot "nsis-installed"
 $failures = [System.Collections.Generic.List[string]]::new()
 $onyxProcess = $null
+$uninstallRegistryPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Onyx"
+$uninstallRegistrySnapshot = Get-RegistryKeySnapshot -Path $uninstallRegistryPath
 
 try {
     [System.IO.Directory]::CreateDirectory($msiExtract) | Out-Null
@@ -366,6 +414,21 @@ try {
         $onyxProcess.Dispose()
     }
 
+    $nsisUninstaller = Join-Path $nsisInstall "uninstall.exe"
+    if (Test-Path -LiteralPath $nsisUninstaller) {
+        try {
+            # NSIS requires _?=install-path to be final. It keeps the
+            # uninstaller in-process so registry cleanup is complete before
+            # the pre-smoke registration is restored below.
+            $uninstallExitCode = Invoke-Installer -FilePath $nsisUninstaller -Arguments @("/S", "_?=$nsisInstall")
+            if ($uninstallExitCode -ne 0) {
+                throw "Silent NSIS cleanup failed with exit code $uninstallExitCode."
+            }
+        } catch {
+            $failures.Add("Failed to uninstall the isolated NSIS package: $($_.Exception.Message)")
+        }
+    }
+
     if (Test-Path -LiteralPath $smokeRoot) {
         try {
             Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction Stop
@@ -375,6 +438,12 @@ try {
         } catch {
             $failures.Add("Failed to clean the isolated smoke-test directory: $($_.Exception.Message)")
         }
+    }
+
+    try {
+        Restore-RegistryKeySnapshot -Path $uninstallRegistryPath -Snapshot $uninstallRegistrySnapshot
+    } catch {
+        $failures.Add("Failed to restore the pre-smoke Onyx uninstall registration: $($_.Exception.Message)")
     }
 }
 
