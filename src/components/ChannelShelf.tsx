@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode, type UIEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+  type UIEvent,
+} from "react";
 import {
   getProgrammeStopMs,
   type EpgProgrammeSummary,
@@ -26,6 +33,9 @@ interface ChannelShelfProps {
   guideWindowStartMs: number;
   guideWindowEndMs: number;
   searchQuery: string;
+  scrollPositionKey: string;
+  scrollPositionRef: MutableRefObject<{ key: string; top: number }>;
+  guideBodyRef: MutableRefObject<HTMLDivElement | null>;
   onSelectChannel: (channel: Channel) => void;
   onToggleFavorite: (channelId: string) => void;
   onOpenEpgMatcher: (channel: Channel) => void;
@@ -175,6 +185,9 @@ export function ChannelShelf({
   guideWindowStartMs,
   guideWindowEndMs,
   searchQuery,
+  scrollPositionKey,
+  scrollPositionRef,
+  guideBodyRef,
   onSelectChannel,
   onToggleFavorite,
   onOpenEpgMatcher,
@@ -231,7 +244,33 @@ export function ChannelShelf({
     };
   }, [contextMenu]);
 
+  useEffect(() => {
+    const restoreScrollPosition = () => {
+      const body = guideBodyRef.current;
+      if (!body) return;
+      body.scrollTop = scrollPositionRef.current.key === scrollPositionKey
+        ? scrollPositionRef.current.top
+        : 0;
+    };
+    let settledFrameId = 0;
+    const frameId = window.requestAnimationFrame(() => {
+      settledFrameId = window.requestAnimationFrame(() => {
+        restoreScrollPosition();
+      });
+    });
+    const settledLayoutTimerId = window.setTimeout(restoreScrollPosition, 250);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.cancelAnimationFrame(settledFrameId);
+      window.clearTimeout(settledLayoutTimerId);
+    };
+  }, [channels, isSidebarVisible, navigationSection, scrollPositionKey, scrollPositionRef]);
+
   function handleListScroll(event: UIEvent<HTMLDivElement>) {
+    scrollPositionRef.current = {
+      key: scrollPositionKey,
+      top: event.currentTarget.scrollTop,
+    };
     if (contextMenu) {
       setContextMenu(null);
     }
@@ -344,7 +383,7 @@ export function ChannelShelf({
             </span>
           </div>
         ) : (
-          <div className="guide-grid__body" onScroll={handleListScroll}>
+          <div ref={guideBodyRef} className="guide-grid__body" onScroll={handleListScroll}>
             {channels.map((channel, index) => {
               const isSelected = selectedChannelId === channel.id;
               const isFavorite = favoriteIdSet.has(channel.id);

@@ -450,7 +450,8 @@ fn read_bounded(path: &Path, max_state_bytes: usize) -> Result<Option<Vec<u8>>, 
 
 fn contains_unsafe_credentials(key: &str, bytes: &[u8]) -> bool {
     if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
-        return value_contains_credentials(&value) || value_contains_unsafe_epg_state(key, &value);
+        return value_contains_credentials_for_key(key, &value)
+            || value_contains_unsafe_epg_state(key, &value);
     }
 
     // Malformed legacy files cannot be traversed structurally. Keep the raw
@@ -478,6 +479,30 @@ fn contains_unsafe_credentials(key: &str, bytes: &[u8]) -> bool {
         || malformed_text_contains_sensitive_assignment(&lower)
         || contains_xtream_path(&lower)
         || contains_url_userinfo(&lower)
+}
+
+fn value_contains_credentials_for_key(key: &str, value: &Value) -> bool {
+    if key == "iptv-player:saved-sources" {
+        return value_contains_saved_source_credentials(value);
+    }
+    value_contains_credentials(value)
+}
+
+fn value_contains_saved_source_credentials(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            // An Xtream username is connection metadata required to rebuild a
+            // stream URL after restart. The password remains in Credential
+            // Manager, and credential-bearing strings/URLs are still rejected.
+            ((!key.eq_ignore_ascii_case("username") && !key.eq_ignore_ascii_case("user"))
+                && is_sensitive_name(key)
+                && sensitive_value_is_nonempty(value))
+                || value_contains_saved_source_credentials(value)
+        }),
+        Value::Array(values) => values.iter().any(value_contains_saved_source_credentials),
+        Value::String(text) => string_contains_credentials(text),
+        _ => false,
+    }
 }
 
 fn malformed_text_contains_sensitive_assignment(text: &str) -> bool {
@@ -1200,6 +1225,67 @@ mod tests {
 
         assert!(error.contains("credentials"));
         assert!(!store.path(key).exists());
+    }
+
+    #[test]
+    fn saved_xtream_username_metadata_is_persistable_but_passwords_are_not() {
+        let safe = serde_json::to_vec(&json!({
+            "source-1": {
+                "id": "source-1",
+                "kind": "xtream",
+                "domain": "provider.example.test",
+                "username": "subscriber-123",
+                "password": ""
+            }
+        }))
+        .unwrap();
+        assert!(!contains_unsafe_credentials(
+            "iptv-player:saved-sources",
+            &safe
+        ));
+
+        let unsafe_password = serde_json::to_vec(&json!({
+            "source-1": {
+                "kind": "xtream",
+                "domain": "provider.example.test",
+                "username": "subscriber-123",
+                "password": "secret"
+            }
+        }))
+        .unwrap();
+        assert!(contains_unsafe_credentials(
+            "iptv-player:saved-sources",
+            &unsafe_password
+        ));
+
+        let production_shape = serde_json::to_vec(&json!({
+            "source_xtream_00000000-0000-4000-8000-000000000000": {
+                "createdAt": "2026-07-13T01:00:00.000Z",
+                "domain": "provider.example.test",
+                "enabled": true,
+                "id": "source_xtream_00000000-0000-4000-8000-000000000000",
+                "kind": "xtream",
+                "lastLoadedAt": "2026-07-13T02:14:40.000Z",
+                "name": "Strong",
+                "password": "",
+                "updatedAt": "2026-07-13T02:14:40.000Z",
+                "username": "subscriber-456"
+            }
+        }))
+        .unwrap();
+        assert!(!contains_unsafe_credentials(
+            "iptv-player:saved-sources",
+            &production_shape
+        ));
+
+        let directory = TestDirectory::new("saved-xtream-username-metadata");
+        let store = Store::new(directory.0.clone());
+        let value: Value = serde_json::from_slice(&production_shape).unwrap();
+        store
+            .write("iptv-player:saved-sources", &value)
+            .expect("safe Xtream metadata should persist through the envelope writer");
+        let stored = store.read("iptv-player:saved-sources").unwrap();
+        assert_eq!(stored.value, Some(value));
     }
 
     #[test]
