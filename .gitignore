@@ -32,3 +32,10 @@ dist-ssr
 
 # Release notes
 RELEASE_NOTES*.md
+
+# Generated or installed runtime payloads
+/onyx.exe
+/uninstall.exe
+/lib/
+__pycache__/
+*.pyc
