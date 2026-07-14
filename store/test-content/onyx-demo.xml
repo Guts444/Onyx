@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv generator-info-name="Onyx certification fixture">
+  <channel id="onyx-demo">
+    <display-name>Onyx Demo Stream</display-name>
+  </channel>
+  <programme start="20200101000000 +0000" stop="20300101000000 +0000" channel="onyx-demo">
+    <title lang="en">Onyx Certification Demo</title>
+    <desc lang="en">Long-running programme entry used only to verify XMLTV loading and channel matching during Microsoft Store certification.</desc>
+  </programme>
+</tv>

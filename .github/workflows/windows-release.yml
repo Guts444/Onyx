@@ -100,6 +100,10 @@ jobs:
         shell: pwsh
         run: npm run tauri -- build --bundles msi,nsis --ci -- --locked
 
+      - name: Build Microsoft Store MSIX
+        shell: pwsh
+        run: ./scripts/build-store-msix.ps1 -SkipBuild
+
       - name: Reverify native inputs and scan bundle metadata
         shell: pwsh
         run: |
@@ -147,4 +151,6 @@ jobs:
           path: |
             src-tauri/target/release/bundle/msi/**/*.msi
             src-tauri/target/release/bundle/nsis/**/*.exe
+            src-tauri/target/release/bundle/store/**/*.msix
+            src-tauri/target/release/bundle/store/SHA256SUMS
             src-tauri/target/release/bundle/SHA256SUMS

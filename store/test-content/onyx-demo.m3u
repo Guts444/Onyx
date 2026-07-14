@@ -1,0 +1,3 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="onyx-demo" tvg-name="Onyx Demo Stream" group-title="Onyx Certification Demo",Onyx Demo Stream
+https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8

@@ -124,6 +124,20 @@ npm run tauri build
 
 Release artifacts are generated in `src-tauri/target/release/bundle`.
 
+## Microsoft Store Package
+
+The Store uses the reserved identity `Guts444.Onyx-IPTV`. Build the x64 MSIX after the normal release prerequisites and native-dependency checks:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-store-msix.ps1
+```
+
+The script performs a locked Tauri release build, maps the app version to a Store-valid four-part package version, assembles the native libmpv payload, and writes the package plus checksum under `src-tauri/target/release/bundle/store`.
+
+Microsoft Store package versions cannot begin with zero and reserve their fourth component. Onyx therefore maps SemVer `major.minor.patch` to Store `(major + 1).minor.patch.0`; for example, Onyx `0.5.9` becomes Store package `1.5.9.0`.
+
+Store listing copy, certification notes, the manifest template, and noncredentialed certification fixtures live under `store/`. The MSIX does not need a CA-trusted signature for Partner Center upload; Microsoft re-signs it after certification.
+
 ## Disclaimer
 
 Onyx is a client application for loading and playing user-supplied playlists, streams, guide URLs, and related credentials. It does not provide channels, playlists, stream URLs, guide data, or service access.
