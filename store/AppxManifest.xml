@@ -2,8 +2,9 @@
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  IgnorableNamespaces="uap uap10 rescap">
 
   <Identity
     Name="Guts444.Onyx-IPTV"
@@ -33,7 +34,8 @@
     <Application
       Id="Onyx"
       Executable="Onyx.exe"
-      EntryPoint="Windows.FullTrustApplication">
+      uap10:RuntimeBehavior="packagedClassicApp"
+      uap10:TrustLevel="mediumIL">
       <uap:VisualElements
         DisplayName="Onyx"
         Description="Local-first Windows IPTV player"
@@ -45,7 +47,5 @@
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
-    <Capability Name="internetClient" />
-    <Capability Name="privateNetworkClientServer" />
   </Capabilities>
 </Package>

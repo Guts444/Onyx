@@ -11,19 +11,11 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
 function Resolve-MakeAppx {
-    $sdkBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
-    $candidates = @(Get-ChildItem -LiteralPath $sdkBin -Directory -ErrorAction Stop |
-        ForEach-Object {
-            $tool = Join-Path $_.FullName "x64\makeappx.exe"
-            if (Test-Path -LiteralPath $tool) {
-                [PSCustomObject]@{ Version = [version]$_.Name; Path = $tool }
-            }
-        } |
-        Sort-Object Version -Descending)
-    if ($candidates.Count -eq 0) {
-        throw "makeappx.exe was not found. Install the Windows 10/11 SDK packaging tools."
+    $tool = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin\10.0.26100.0\x64\makeappx.exe"
+    if (-not (Test-Path -LiteralPath $tool)) {
+        throw "Pinned MakeAppx 10.0.26100.0 was not found. Install the Windows 11 SDK 10.0.26100.0 packaging tools."
     }
-    return $candidates[0].Path
+    return $tool
 }
 
 function Convert-ToStoreVersion {
@@ -47,6 +39,11 @@ function Convert-ToStoreVersion {
 $config = Get-Content -LiteralPath "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
 $storeVersion = Convert-ToStoreVersion -Version ([string]$config.version)
 $makeAppx = Resolve-MakeAppx
+
+& (Join-Path $repoRoot "scripts\verify-native-deps.ps1")
+if (-not $?) {
+    throw "Native dependency verification failed."
+}
 
 if (-not $SkipBuild) {
     & npm run tauri -- build --no-bundle --ci -- --locked
@@ -100,7 +97,7 @@ if (Test-Path -LiteralPath $msixPath) {
     Remove-Item -LiteralPath $msixPath -Force
 }
 
-& $makeAppx pack /d $stagingRoot /p $msixPath /o /v
+& $makeAppx pack /d $stagingRoot /p $msixPath /h SHA256 /o /v
 if ($LASTEXITCODE -ne 0) {
     throw "MakeAppx failed with exit code $LASTEXITCODE."
 }
