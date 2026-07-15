@@ -30,7 +30,8 @@ jobs:
         shell: pwsh
         run: |
           python scripts/test-verify-release-version.py
-          python scripts/verify-release-version.py 0.5.9
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          python scripts/verify-release-version.py $version
 
       # actions/setup-node v6.4.0
       - name: Set up Node.js 24.18.0 with lockfile cache
