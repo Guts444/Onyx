@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $sumFile -PathType Leaf)) {
     throw "Native dependency manifest is missing: $sumFile"
 }
 
-$expectedNames = @("libmpv-2.dll", "libmpv-wrapper.dll")
+$expectedNames = @("libmpv-2.dll", "libmpv-wrapper.dll", "vulkan-1.dll")
 $manifest = @{}
 foreach ($line in Get-Content -LiteralPath $sumFile) {
     if ($line -match '^([0-9a-fA-F]{64})\s+(.+)$') {
@@ -21,7 +21,7 @@ foreach ($line in Get-Content -LiteralPath $sumFile) {
 }
 
 if ($manifest.Count -ne $expectedNames.Count) {
-    throw "SHA256SUMS must contain exactly the two packaged native DLLs."
+    throw "SHA256SUMS must contain exactly the three packaged native DLLs."
 }
 
 foreach ($name in $expectedNames) {

@@ -49,8 +49,13 @@ function Get-Manifest {
             throw "Malformed SHA256SUMS line."
         }
     }
-    if ($manifest.Count -ne 2 -or -not $manifest.ContainsKey("libmpv-2.dll") -or -not $manifest.ContainsKey("libmpv-wrapper.dll")) {
-        throw "SHA256SUMS must pin exactly libmpv-2.dll and libmpv-wrapper.dll."
+    if (
+        $manifest.Count -ne 3 -or
+        -not $manifest.ContainsKey("libmpv-2.dll") -or
+        -not $manifest.ContainsKey("libmpv-wrapper.dll") -or
+        -not $manifest.ContainsKey("vulkan-1.dll")
+    ) {
+        throw "SHA256SUMS must pin exactly libmpv-2.dll, libmpv-wrapper.dll, and vulkan-1.dll."
     }
     return $manifest
 }
@@ -68,20 +73,25 @@ if (-not (Test-Path -LiteralPath $sourcesPath -PathType Leaf) -or -not (Test-Pat
 }
 
 $sources = Get-Content -LiteralPath $sourcesPath -Raw
-$archiveHashes = [Regex]::Matches($sources, '(?m)^- Upstream archive SHA-256: `([0-9a-fA-F]{64})`\r?$')
-if ($archiveHashes.Count -ne 2) { throw "SOURCES.md must contain exactly two upstream archive hashes." }
+$archiveHashes = [Regex]::Matches($sources, '(?m)^- Upstream archive SHA-256: `([0-9a-fA-F]{64})`(?:\x0D)?$')
+if ($archiveHashes.Count -ne 3) { throw "SOURCES.md must contain exactly three upstream archive hashes." }
 $wrapperArchiveHash = $archiveHashes[0].Groups[1].Value
 
 # The second fixed URL belongs to mpv. Parse all fixed URLs to avoid accepting a moving endpoint.
-$urlMatches = [Regex]::Matches($sources, '(?m)^- Fixed release URL: <(https://[^>]+)>\r?$')
-if ($urlMatches.Count -ne 2) { throw "SOURCES.md must contain exactly two fixed HTTPS release URLs." }
+$urlMatches = [Regex]::Matches($sources, '(?m)^- Fixed release URL: <(https://[^>]+)>(?:\x0D)?$')
+if ($urlMatches.Count -ne 3) { throw "SOURCES.md must contain exactly three fixed HTTPS release URLs." }
 $wrapperUrl = $urlMatches[0].Groups[1].Value
 $mpvUrl = $urlMatches[1].Groups[1].Value
+$vulkanUrl = $urlMatches[2].Groups[1].Value
 $mpvArchiveHash = $archiveHashes[1].Groups[1].Value
+$vulkanArchiveHash = $archiveHashes[2].Groups[1].Value
 foreach ($url in @($wrapperUrl, $mpvUrl)) {
     if ($url -notmatch '^https://github\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/?#]+$' -or $url -match '/latest/') {
         throw "Native source is not an immutable GitHub release asset URL: $url"
     }
+}
+if ($vulkanUrl -cne "https://api.nuget.org/v3-flatcontainer/silk.net.vulkan.loader.native/2025.9.12/silk.net.vulkan.loader.native.2025.9.12.nupkg") {
+    throw "Vulkan loader source must be the pinned NuGet package URL."
 }
 
 $manifest = Get-Manifest
@@ -119,14 +129,19 @@ New-Item -ItemType Directory -Path $tempRoot | Out-Null
 try {
     $wrapperArchive = Join-Path $tempRoot "libmpv-wrapper.zip"
     $mpvArchive = Join-Path $tempRoot "mpv.7z"
+    $vulkanArchive = Join-Path $tempRoot "vulkan-loader.zip"
     Invoke-WebRequest -Uri $wrapperUrl -OutFile $wrapperArchive -MaximumRedirection 5 -TimeoutSec 180 -UseBasicParsing
     Invoke-WebRequest -Uri $mpvUrl -OutFile $mpvArchive -MaximumRedirection 5 -TimeoutSec 180 -UseBasicParsing
+    Invoke-WebRequest -Uri $vulkanUrl -OutFile $vulkanArchive -MaximumRedirection 5 -TimeoutSec 180 -UseBasicParsing
     Assert-Sha256 $wrapperArchive $wrapperArchiveHash "libmpv-wrapper archive"
     Assert-Sha256 $mpvArchive $mpvArchiveHash "mpv archive"
+    Assert-Sha256 $vulkanArchive $vulkanArchiveHash "Vulkan loader package"
 
     $wrapperExtract = Join-Path $tempRoot "wrapper"
     $mpvExtract = Join-Path $tempRoot "mpv"
+    $vulkanExtract = Join-Path $tempRoot "vulkan"
     Expand-Archive -LiteralPath $wrapperArchive -DestinationPath $wrapperExtract
+    Expand-Archive -LiteralPath $vulkanArchive -DestinationPath $vulkanExtract
     New-Item -ItemType Directory -Path $mpvExtract | Out-Null
     & $sevenZip.Source x $mpvArchive "-o$mpvExtract" -y | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "7-Zip extraction failed with exit code $LASTEXITCODE." }
@@ -134,6 +149,7 @@ try {
     $candidates = @{
         "libmpv-wrapper.dll" = Find-OneDll $wrapperExtract "libmpv-wrapper.dll"
         "libmpv-2.dll" = Find-OneDll $mpvExtract "libmpv-2.dll"
+        "vulkan-1.dll" = Join-Path $vulkanExtract "runtimes\win-x64\native\vulkan-1.dll"
     }
     foreach ($name in $candidates.Keys) {
         Assert-Sha256 $candidates[$name] $manifest[$name] "extracted $name"
@@ -141,7 +157,7 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $libDir | Out-Null
-    foreach ($name in @("libmpv-2.dll", "libmpv-wrapper.dll")) {
+    foreach ($name in @("libmpv-2.dll", "libmpv-wrapper.dll", "vulkan-1.dll")) {
         $incoming = Join-Path $libDir (".$name.incoming." + [Guid]::NewGuid().ToString("N"))
         Copy-Item -LiteralPath $candidates[$name] -Destination $incoming
         try {

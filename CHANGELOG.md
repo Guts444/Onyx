@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.10 - 2026-07-15
+
+- **Microsoft Store native-player repair**: Make the MSIX native playback payload self-contained on clean Windows systems by placing libmpv beside the executable, bundling the pinned Vulkan loader required by libmpv, and declaring the Microsoft Visual C++ desktop runtime framework dependency.
+- **Store regression gate**: Verify the native DLL layout and runtime declaration before every Store package is created.
+
 ## v0.5.9 - 2026-07-13
 
 - **Xtream restart repair**: Persist the Xtream username and domain required to rebuild credential-free cached stream descriptors while continuing to keep passwords in Windows Credential Manager.

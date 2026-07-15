@@ -63,6 +63,7 @@ foreach ($required in @(
     $exeSource,
     (Join-Path $nativeRoot "libmpv-2.dll"),
     (Join-Path $nativeRoot "libmpv-wrapper.dll"),
+    (Join-Path $nativeRoot "vulkan-1.dll"),
     $manifestTemplate
 )) {
     $item = Get-Item -LiteralPath $required -ErrorAction Stop
@@ -75,13 +76,13 @@ if (Test-Path -LiteralPath $stagingRoot) {
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Path $stagingRoot | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $stagingRoot "lib") | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stagingRoot "Assets") | Out-Null
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 
 Copy-Item -LiteralPath $exeSource -Destination (Join-Path $stagingRoot "Onyx.exe")
-Copy-Item -LiteralPath (Join-Path $nativeRoot "libmpv-2.dll") -Destination (Join-Path $stagingRoot "lib\libmpv-2.dll")
-Copy-Item -LiteralPath (Join-Path $nativeRoot "libmpv-wrapper.dll") -Destination (Join-Path $stagingRoot "lib\libmpv-wrapper.dll")
+foreach ($name in @("libmpv-2.dll", "libmpv-wrapper.dll", "vulkan-1.dll")) {
+    Copy-Item -LiteralPath (Join-Path $nativeRoot $name) -Destination (Join-Path $stagingRoot $name)
+}
 
 foreach ($asset in @("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.png")) {
     Copy-Item -LiteralPath (Join-Path $repoRoot "src-tauri\icons\$asset") -Destination (Join-Path $stagingRoot "Assets\$asset")
@@ -90,6 +91,11 @@ foreach ($asset in @("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.
 $manifest = (Get-Content -LiteralPath $manifestTemplate -Raw).Replace("__PACKAGE_VERSION__", $storeVersion)
 $manifestPath = Join-Path $stagingRoot "AppxManifest.xml"
 [System.IO.File]::WriteAllText($manifestPath, $manifest, [System.Text.UTF8Encoding]::new($false))
+
+& (Join-Path $repoRoot "scripts\test-store-payload.ps1") -StagingRoot $stagingRoot
+if (-not $?) {
+    throw "Store payload regression check failed."
+}
 
 $msixName = "Onyx-IPTV_$($storeVersion)_x64.msix"
 $msixPath = Join-Path $outputRoot $msixName

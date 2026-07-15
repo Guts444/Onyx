@@ -23,7 +23,8 @@ The playlist references Google's public Shaka Player demonstration HLS asset. It
 
 - Target: Windows 10/11 desktop x64.
 - WebView2 is expected to be present as a Windows system component.
-- Native playback uses the bundled `libmpv-2.dll` and `libmpv-wrapper.dll` in the package `lib` directory.
+- Native playback uses `libmpv-2.dll`, `libmpv-wrapper.dll`, and a pinned Apache-2.0 Vulkan loader bundled beside `Onyx.exe`, plus the Store-delivered Microsoft Visual C++ desktop runtime framework.
+- Version 0.5.10 specifically corrects the previous certification failure where the native player could not initialize on a clean test device.
 - The `runFullTrust` restricted capability is required for this packaged Tauri desktop application and native libmpv playback.
 - Network access is used only for URLs and services configured by the user.
 - Remote playlist/guide URLs and Xtream passwords are stored in Windows Credential Manager.

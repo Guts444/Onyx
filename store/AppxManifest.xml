@@ -28,6 +28,10 @@
       Name="Windows.Desktop"
       MinVersion="10.0.19041.0"
       MaxVersionTested="10.0.26100.0" />
+    <PackageDependency
+      Name="Microsoft.VCLibs.140.00.UWPDesktop"
+      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+      MinVersion="14.0.24217.0" />
   </Dependencies>
 
   <Applications>

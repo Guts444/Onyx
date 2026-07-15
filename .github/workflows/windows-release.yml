@@ -102,7 +102,9 @@ jobs:
 
       - name: Build Microsoft Store MSIX
         shell: pwsh
-        run: ./scripts/build-store-msix.ps1 -SkipBuild
+        run: |
+          ./scripts/build-store-msix.ps1 -SkipBuild
+          ./scripts/test-store-payload.ps1
 
       - name: Reverify native inputs and scan bundle metadata
         shell: pwsh

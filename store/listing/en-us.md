@@ -33,7 +33,7 @@ Onyx is a client application only. It does not provide channels, playlists, subs
 
 ## What's new
 
-Initial Microsoft Store release of Onyx-IPTV, including M3U and Xtream sources, XMLTV guides, large-library browsing, native libmpv playback, and privacy-focused local storage.
+Corrects native player startup on clean Windows installations by making the Store package's libmpv, Vulkan loader, and Visual C++ runtime dependencies explicit and self-contained.
 
 ## Category
 

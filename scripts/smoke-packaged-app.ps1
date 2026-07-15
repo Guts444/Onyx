@@ -44,7 +44,7 @@ function Assert-PackagedPayload {
         [Parameter(Mandatory = $true)][string]$PackageKind
     )
 
-    foreach ($name in @("Onyx.exe", "libmpv-2.dll", "libmpv-wrapper.dll")) {
+    foreach ($name in @("Onyx.exe", "libmpv-2.dll", "libmpv-wrapper.dll", "vulkan-1.dll")) {
         $matches = @(Get-ChildItem -LiteralPath $Root -Filter $name -File -Recurse -Force -ErrorAction Stop)
         if ($matches.Count -ne 1) {
             throw "$PackageKind payload must contain exactly one nonempty $name; found $($matches.Count)."
