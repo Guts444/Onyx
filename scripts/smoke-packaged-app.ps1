@@ -371,6 +371,15 @@ try {
     Invoke-UiElement -Element $settingsButton
 
     $settingsDeadline = [DateTime]::UtcNow.AddSeconds($WindowTimeoutSeconds)
+    $sourcesButton = Wait-UiNamedElement `
+        -Root $webViewDocument `
+        -Name "Sources" `
+        -ControlTypes @([System.Windows.Automation.ControlType]::Button) `
+        -Deadline $settingsDeadline `
+        -RequireEnabled `
+        -FailureMessage "An enabled Sources settings tab was not available before the bounded timeout."
+    Invoke-UiElement -Element $sourcesButton
+
     $settingsPanel = Wait-UiNamedElement `
         -Root $webViewDocument `
         -Name "Saved Sources" `
