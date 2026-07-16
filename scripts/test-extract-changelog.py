@@ -31,6 +31,13 @@ class ExtractChangelogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MODULE.extract("## v0.5.11\n\n## v0.5.10\n- Older\n", "0.5.11")
 
+    def test_duplicate_sections_fail_closed(self):
+        with self.assertRaises(ValueError):
+            MODULE.extract(
+                "## v0.5.11\n- First\n\n## v0.5.11\n- Second\n\n## v0.5.10\n- Older\n",
+                "0.5.11",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

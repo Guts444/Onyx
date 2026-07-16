@@ -95,12 +95,13 @@ It refuses to overwrite an existing public release. Never force-move a published
 After the tagged workflow succeeds:
 
 1. Download the `onyx-windows-X.Y.Z` artifact from the workflow run.
-2. Verify its `SHA256SUMS` and select the single `.msix` under the Store output.
-3. In Partner Center, start an update for **Onyx-IPTV**.
-4. Upload the new MSIX and confirm the generated package version is higher than the published version.
-5. Update **What's new in this version** from the same changelog section.
-6. Preserve the existing pricing, markets, category, privacy URL, support URL, listing screenshots, and certification notes unless the release actually changes them.
-7. Submit the update for certification.
-8. After publication, install/update through Microsoft Store and smoke-test first launch, source import, playback, persistence after relaunch, and uninstall.
+2. Verify the public standalone installers against the root `SHA256SUMS`.
+3. Verify the Partner Center package against `store/SHA256SUMS`, then select the single `.msix` under the Store output.
+4. In Partner Center, start an update for **Onyx-IPTV**.
+5. Upload the new MSIX and confirm the generated package version is higher than the published version.
+6. Update **What's new in this version** from the same changelog section.
+7. Preserve the existing pricing, markets, category, privacy URL, support URL, listing screenshots, and certification notes unless the release actually changes them.
+8. Submit the update for certification.
+9. After publication, install/update through Microsoft Store and smoke-test first launch, source import, playback, persistence after relaunch, and uninstall.
 
 Partner Center submission remains deliberately manual: Microsoft certification is a publication boundary, and no Store credentials or publisher tokens are stored in GitHub Actions.

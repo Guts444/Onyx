@@ -167,19 +167,49 @@ jobs:
           $tag = '${{ github.ref_name }}'
           $msi = @(Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi -File -Recurse)
           $nsis = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe -File -Recurse)
+          $checksum = Resolve-Path src-tauri/target/release/bundle/SHA256SUMS
           if ($msi.Count -ne 1 -or $nsis.Count -ne 1) {
             throw "Release publication requires exactly one MSI and one NSIS installer."
           }
           if (gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null) {
             throw "GitHub release '$tag' already exists; refusing to overwrite a public release."
           }
+
+          # Create the release as a draft first so a failed asset upload cannot
+          # leave a public/latest release with missing installers.
           gh release create $tag `
             --repo $env:GITHUB_REPOSITORY `
             --verify-tag `
+            --draft `
             --title "Onyx $tag" `
-            --notes-file release-notes.md `
-            --latest `
-            $msi[0].FullName `
-            $nsis[0].FullName `
-            src-tauri/target/release/bundle/SHA256SUMS
+            --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          try {
+            gh release upload $tag `
+              --repo $env:GITHUB_REPOSITORY `
+              --clobber `
+              $msi[0].FullName `
+              $nsis[0].FullName `
+              $checksum
+            if ($LASTEXITCODE -ne 0) { throw "Asset upload failed with exit code $LASTEXITCODE." }
+
+            $assets = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets | map(.name) | sort | .[]'
+            if ($LASTEXITCODE -ne 0) { throw "Could not verify uploaded release assets." }
+            $expected = @($msi[0].Name, $nsis[0].Name, 'SHA256SUMS') | Sort-Object
+            $actual = @($assets -split "`n" | Where-Object { $_ })
+            if (($actual -join '|') -ne ($expected -join '|')) {
+              throw "Release assets incomplete. Expected [$($expected -join ', ')] but found [$($actual -join ', ')]."
+            }
+
+            gh release edit $tag `
+              --repo $env:GITHUB_REPOSITORY `
+              --draft=false `
+              --latest
+            if ($LASTEXITCODE -ne 0) { throw "Publishing draft release failed with exit code $LASTEXITCODE." }
+          }
+          catch {
+            Write-Host "::error::Release publication failed; deleting incomplete draft release '$tag'."
+            gh release delete $tag --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag=false 2>$null | Out-Null
+            throw
+          }

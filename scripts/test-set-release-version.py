@@ -17,7 +17,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SetReleaseVersionTests(unittest.TestCase):
-    def make_repo(self) -> Path:
+    def make_repo(self, *, cargo_lock: str | None = None) -> Path:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -34,8 +34,11 @@ class SetReleaseVersionTests(unittest.TestCase):
             encoding="utf-8",
         )
         (root / "src-tauri" / "Cargo.lock").write_text(
-            '[[package]]\nname = "dependency"\nversion = "0.5.10"\n\n'
-            '[[package]]\nname = "onyx"\nversion = "0.5.10"\n',
+            cargo_lock
+            or (
+                '[[package]]\nname = "dependency"\nversion = "0.5.10"\n\n'
+                '[[package]]\nname = "onyx"\nversion = "0.5.10"\n'
+            ),
             encoding="utf-8",
         )
         (root / "scripts" / "verify-release-version.py").write_text(
@@ -45,7 +48,9 @@ class SetReleaseVersionTests(unittest.TestCase):
             "p=json.loads((r/'package.json').read_text())['version']\n"
             "t=json.loads((r/'src-tauri/tauri.conf.json').read_text())['version']\n"
             "c=tomllib.loads((r/'src-tauri/Cargo.toml').read_text())['package']['version']\n"
-            "raise SystemExit(0 if p == t == c == v else 1)\n",
+            "lock=tomllib.loads((r/'src-tauri/Cargo.lock').read_text())\n"
+            "matches=[pkg for pkg in lock.get('package', []) if pkg.get('name') == 'onyx']\n"
+            "raise SystemExit(0 if p == t == c == v and len(matches) == 1 and matches[0].get('version') == v else 1)\n",
             encoding="utf-8",
         )
         return root
@@ -65,6 +70,36 @@ class SetReleaseVersionTests(unittest.TestCase):
     def test_prerelease_version_is_rejected_for_store_compatibility(self):
         with self.assertRaises(ValueError):
             MODULE.synchronize(self.make_repo(), "0.5.11-beta.1")
+
+    def test_store_major_overflow_is_rejected(self):
+        with self.assertRaises(ValueError):
+            MODULE.synchronize(self.make_repo(), "65535.0.0")
+
+    def test_store_component_overflow_is_rejected(self):
+        with self.assertRaises(ValueError):
+            MODULE.synchronize(self.make_repo(), "0.65536.0")
+
+    def test_failed_verification_rolls_back_partial_writes(self):
+        root = self.make_repo(
+            cargo_lock='[[package]]\nname = "dependency"\nversion = "0.5.10"\n'
+        )
+        before = {
+            path: path.read_text(encoding="utf-8")
+            for path in (
+                root / "package.json",
+                root / "package-lock.json",
+                root / "src-tauri" / "tauri.conf.json",
+                root / "src-tauri" / "Cargo.toml",
+                root / "src-tauri" / "Cargo.lock",
+            )
+        }
+        with self.assertRaises(ValueError):
+            MODULE.synchronize(root, "0.5.11")
+        after = {
+            path: path.read_text(encoding="utf-8")
+            for path in before
+        }
+        self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

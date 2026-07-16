@@ -11,9 +11,12 @@ from pathlib import Path
 
 def extract(changelog: str, version: str) -> str:
     heading = re.compile(rf"^## v{re.escape(version)}(?:\s+-[^\r\n]*)?\s*$", re.MULTILINE)
-    match = heading.search(changelog)
-    if match is None:
+    matches = list(heading.finditer(changelog))
+    if not matches:
         raise ValueError(f"CHANGELOG.md has no v{version} section")
+    if len(matches) != 1:
+        raise ValueError(f"CHANGELOG.md has {len(matches)} v{version} sections; expected exactly one")
+    match = matches[0]
     next_heading = re.search(r"^## \S.*$", changelog[match.end() :], re.MULTILINE)
     end = match.end() + next_heading.start() if next_heading else len(changelog)
     notes = changelog[match.end() : end].strip()
