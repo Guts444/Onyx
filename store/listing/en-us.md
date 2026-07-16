@@ -18,6 +18,10 @@ Your source data stays under your control. Onyx has no advertising, analytics, t
 
 Onyx is a client application only. It does not provide channels, playlists, subscriptions, credentials, guide data, or media content. You are responsible for using sources and services that you are authorized to access.
 
+Getting started: Open Settings > Sources, then import a local M3U file or add an M3U URL or Xtream profile. Select a group and left-click a channel to play it. Right-click a channel to manage Favorites or assign an EPG listing. Double-click the video surface for fullscreen, and press Esc to move back through the interface.
+
+User guide: https://github.com/Guts444/Onyx/blob/main/docs/user-guide.md
+
 ## Features
 
 - Local M3U and M3U8 playlist files

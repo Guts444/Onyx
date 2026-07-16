@@ -18,6 +18,18 @@ Release builds include the native playback dependencies. You do not need Node.js
 
 Onyx uses the system Microsoft Edge WebView2 runtime. Windows 11 and current Windows 10 installs normally include it already, so the installer does not download or run the WebView2 bootstrapper.
 
+## Getting Started
+
+New to Onyx? Read the complete **[User Guide](docs/user-guide.md)**.
+
+1. Open **Settings > Sources**.
+2. Import a local `.m3u` / `.m3u8` file, or add an M3U URL or Xtream profile and select **Load Now**.
+3. Select a group, then left-click a channel to play it.
+4. Right-click a channel to manage Favorites or assign an EPG listing.
+5. Double-click the video surface for fullscreen. Press **Esc** to move back through fullscreen, the guide, groups, and main navigation.
+
+For guide data, add an XMLTV URL under **Settings > EPG**, apply it, and select **Update Now** before manually matching channels.
+
 ## What Onyx Does
 
 - Loads local `.m3u` / `.m3u8` files, remote M3U URLs, and Xtream live TV accounts.
