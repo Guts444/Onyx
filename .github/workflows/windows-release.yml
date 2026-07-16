@@ -196,9 +196,10 @@ jobs:
 
             $assets = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets | map(.name) | sort | .[]'
             if ($LASTEXITCODE -ne 0) { throw "Could not verify uploaded release assets." }
-            $expected = @($msi[0].Name, $nsis[0].Name, 'SHA256SUMS') | Sort-Object
+            $expected = @($msi[0].Name, $nsis[0].Name, 'SHA256SUMS')
             $actual = @($assets -split "`n" | Where-Object { $_ })
-            if (($actual -join '|') -ne ($expected -join '|')) {
+            $assetDifference = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
+            if ($assetDifference.Count -ne 0) {
               throw "Release assets incomplete. Expected [$($expected -join ', ')] but found [$($actual -join ', ')]."
             }
 
