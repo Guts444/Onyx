@@ -2,8 +2,10 @@
 
 ## v0.5.10 - 2026-07-15
 
+- **Microsoft Store publication**: Onyx-IPTV is now publicly available through Microsoft Store with automatic Store-managed installation and updates.
 - **Microsoft Store native-player repair**: Make the MSIX native playback payload self-contained on clean Windows systems by placing libmpv beside the executable, bundling the pinned Vulkan loader required by libmpv, and declaring the Microsoft Visual C++ desktop runtime framework dependency.
 - **Store regression gate**: Verify the native DLL layout and runtime declaration before every Store package is created.
+- **Repeatable release flow**: Synchronize all version metadata with one command, build MSI/NSIS/Store formats through one helper, and publish verified tagged installers from CI using curated changelog notes.
 
 ## v0.5.9 - 2026-07-13
 

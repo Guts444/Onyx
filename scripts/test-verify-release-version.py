@@ -19,14 +19,18 @@ class ReleaseVersionTests(unittest.TestCase):
         root = Path(temporary.name)
         (root / "src-tauri").mkdir()
         (root / "package.json").write_text(f'{{"version":"{version}"}}', encoding="utf-8")
+        (root / "package-lock.json").write_text(
+            f'{{"version":"{version}","packages":{{"":{{"version":"{version}"}}}}}}',
+            encoding="utf-8",
+        )
         (root / "src-tauri" / "Cargo.toml").write_text(
             f'[package]\nname = "onyx"\nversion = "{version}"\n', encoding="utf-8"
         )
+        (root / "src-tauri" / "Cargo.lock").write_text(
+            f'[[package]]\nname = "onyx"\nversion = "{version}"\n', encoding="utf-8"
+        )
         (root / "src-tauri" / "tauri.conf.json").write_text(
             f'{{"version":"{version}"}}', encoding="utf-8"
-        )
-        (root / "Build Onyx Release.cmd").write_text(
-            f'@echo off\nset "VERSION={version}"\n', encoding="utf-8"
         )
         return root
 
@@ -54,22 +58,14 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("invalid release version", result.stderr.lower())
 
-    def test_duplicate_build_script_versions_fail(self):
+    def test_root_lockfile_mismatch_fails(self):
         root = self.make_repo()
-        (root / "Build Onyx Release.cmd").write_text(
-            '@echo off\nset "VERSION=0.5.8"\nset "VERSION=0.5.8"\n', encoding="utf-8"
+        (root / "src-tauri" / "Cargo.lock").write_text(
+            '[[package]]\nname = "onyx"\nversion = "0.5.7"\n', encoding="utf-8"
         )
         result = self.run_script("0.5.8", root)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Build Onyx Release.cmd", result.stderr)
-
-    def test_missing_build_script_version_fails(self):
-        root = self.make_repo()
-        (root / "Build Onyx Release.cmd").write_text("@echo off\n", encoding="utf-8")
-        result = self.run_script("0.5.8", root)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Build Onyx Release.cmd", result.stderr)
-
+        self.assertIn("Cargo.lock", result.stderr)
 
 if __name__ == "__main__":
     unittest.main()

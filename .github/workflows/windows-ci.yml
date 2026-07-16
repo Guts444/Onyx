@@ -30,6 +30,8 @@ jobs:
         shell: pwsh
         run: |
           python scripts/test-verify-release-version.py
+          python scripts/test-set-release-version.py
+          python scripts/test-extract-changelog.py
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           python scripts/verify-release-version.py $version
 

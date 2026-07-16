@@ -15,11 +15,6 @@ VERSION_PATTERN = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 )
-BUILD_VERSION_PATTERN = re.compile(
-    r'^\s*set\s+"VERSION=([^"\r\n]+)"\s*$', re.IGNORECASE | re.MULTILINE
-)
-
-
 def canonicalize(requested: str) -> str:
     version = requested[1:] if requested.startswith("v") else requested
     if VERSION_PATTERN.fullmatch(version) is None:
@@ -29,24 +24,32 @@ def canonicalize(requested: str) -> str:
 
 def load_versions(root: Path) -> dict[str, str]:
     package_path = root / "package.json"
+    package_lock_path = root / "package-lock.json"
     cargo_path = root / "src-tauri" / "Cargo.toml"
+    cargo_lock_path = root / "src-tauri" / "Cargo.lock"
     tauri_path = root / "src-tauri" / "tauri.conf.json"
-    build_path = root / "Build Onyx Release.cmd"
-
     package = json.loads(package_path.read_text(encoding="utf-8"))
+    package_lock = json.loads(package_lock_path.read_text(encoding="utf-8"))
     with cargo_path.open("rb") as handle:
         cargo = tomllib.load(handle)
+    with cargo_lock_path.open("rb") as handle:
+        cargo_lock = tomllib.load(handle)
     tauri = json.loads(tauri_path.read_text(encoding="utf-8"))
-    build_text = build_path.read_text(encoding="utf-8")
-    build_matches = BUILD_VERSION_PATTERN.findall(build_text)
-    if len(build_matches) != 1:
-        raise ValueError("Build Onyx Release.cmd does not contain exactly one VERSION assignment")
-
+    root_lock_package = package_lock.get("packages", {}).get("", {})
+    cargo_lock_matches = [
+        entry for entry in cargo_lock.get("package", []) if entry.get("name") == "onyx"
+    ]
+    if len(cargo_lock_matches) != 1:
+        raise ValueError(
+            f"src-tauri/Cargo.lock must contain exactly one Onyx package, found {len(cargo_lock_matches)}"
+        )
     return {
         "package.json": str(package.get("version", "")),
+        "package-lock.json": str(package_lock.get("version", "")),
+        "package-lock.json root package": str(root_lock_package.get("version", "")),
         "src-tauri/Cargo.toml": str(cargo.get("package", {}).get("version", "")),
+        "src-tauri/Cargo.lock": str(cargo_lock_matches[0].get("version", "")),
         "src-tauri/tauri.conf.json": str(tauri.get("version", "")),
-        "Build Onyx Release.cmd": build_matches[0],
     }
 
 

@@ -8,7 +8,11 @@ Windows is the primary supported platform.
 
 ## Download
 
-Download the latest Windows installer from [GitHub Releases](https://github.com/Guts444/Onyx/releases).
+[![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9NB7K3TRRKXT)
+
+Install the supported Store release from the [Microsoft Store](https://apps.microsoft.com/detail/9NB7K3TRRKXT). The Store handles installation and future updates automatically.
+
+Standalone MSI and NSIS installers remain available from [GitHub Releases](https://github.com/Guts444/Onyx/releases).
 
 Release builds include the native playback dependencies. You do not need Node.js, Rust, or the mpv DLLs unless you are building Onyx from source.
 
@@ -116,13 +120,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --locked --target x86_64-pc-wi
 cargo audit --file src-tauri/Cargo.lock
 ```
 
-Only after those checks and native provenance verification pass, build a release with `Build Onyx Release.cmd` or:
+Only after those checks and native provenance verification pass, build all Windows release formats with `Build Onyx Release.cmd` or:
 
-```bash
-npm run tauri build
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1
 ```
 
-Release artifacts are generated in `src-tauri/target/release/bundle`.
+The unified release command verifies synchronized metadata and immutable native inputs, then produces MSI, NSIS, and Store MSIX artifacts with checksums under `src-tauri/target/release/bundle`.
 
 ## Microsoft Store Package
 
@@ -137,6 +141,8 @@ The script performs a locked Tauri release build, maps the app version to a Stor
 Microsoft Store package versions cannot begin with zero and reserve their fourth component. Onyx therefore maps SemVer `major.minor.patch` to Store `(major + 1).minor.patch.0`; for example, Onyx `0.5.9` becomes Store package `1.5.9.0`.
 
 Store listing copy, certification notes, the manifest template, and noncredentialed certification fixtures live under `store/`. The MSIX does not need a CA-trusted signature for Partner Center upload; Microsoft re-signs it after certification.
+
+The complete version-bump, tagged GitHub release, and Partner Center update routine is documented in [`docs/releasing.md`](docs/releasing.md).
 
 ## Disclaimer
 

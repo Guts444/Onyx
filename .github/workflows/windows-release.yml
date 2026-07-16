@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: windows-release-${{ github.ref }}
@@ -39,6 +39,8 @@ jobs:
         shell: pwsh
         run: |
           python scripts/test-verify-release-version.py
+          python scripts/test-set-release-version.py
+          python scripts/test-extract-changelog.py
           $canonical = python scripts/verify-release-version.py "$env:RELEASE_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "version=$canonical" >> $env:GITHUB_OUTPUT
@@ -96,15 +98,9 @@ jobs:
           git diff --check
           if (git rev-parse --verify HEAD^ 2>$null) { git diff --check HEAD^ HEAD }
 
-      - name: Build MSI and NSIS bundles
+      - name: Build MSI, NSIS, and Microsoft Store packages
         shell: pwsh
-        run: npm run tauri -- build --bundles msi,nsis --ci -- --locked
-
-      - name: Build Microsoft Store MSIX
-        shell: pwsh
-        run: |
-          ./scripts/build-store-msix.ps1 -SkipBuild
-          ./scripts/test-store-payload.ps1
+        run: ./scripts/build-release.ps1
 
       - name: Reverify native inputs and scan bundle metadata
         shell: pwsh
@@ -156,3 +152,34 @@ jobs:
             src-tauri/target/release/bundle/store/**/*.msix
             src-tauri/target/release/bundle/store/SHA256SUMS
             src-tauri/target/release/bundle/SHA256SUMS
+
+      - name: Extract curated release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: python scripts/extract-changelog.py '${{ steps.release-version.outputs.version }}' --output release-notes.md
+
+      - name: Publish verified GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $msi = @(Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi -File -Recurse)
+          $nsis = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe -File -Recurse)
+          if ($msi.Count -ne 1 -or $nsis.Count -ne 1) {
+            throw "Release publication requires exactly one MSI and one NSIS installer."
+          }
+          if (gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null) {
+            throw "GitHub release '$tag' already exists; refusing to overwrite a public release."
+          }
+          gh release create $tag `
+            --repo $env:GITHUB_REPOSITORY `
+            --verify-tag `
+            --title "Onyx $tag" `
+            --notes-file release-notes.md `
+            --latest `
+            $msi[0].FullName `
+            $nsis[0].FullName `
+            src-tauri/target/release/bundle/SHA256SUMS
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
