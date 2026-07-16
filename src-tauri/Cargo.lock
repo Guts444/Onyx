@@ -2097,12 +2097,13 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "onyx"
-version = "0.5.10"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "flate2",
  "fs2",
  "keyring",
+ "percent-encoding",
  "quick-xml",
  "reqwest 0.12.28",
  "serde",

@@ -24,23 +24,27 @@ New to Onyx? Read the complete **[User Guide](docs/user-guide.md)**.
 
 1. Open **Settings > Sources**.
 2. Import a local `.m3u` / `.m3u8` file, or add an M3U URL or Xtream profile and select **Load Now**.
-3. Select a group, then left-click a channel to play it.
+3. Open **Live TV**, optionally search above the group list, select a group, then left-click a channel in the TV guide.
+   For Xtream providers, open **Movies** or **TV Shows**, search above the vertical group list, then browse details, seasons, and episodes.
 4. Right-click a channel to manage Favorites or assign an EPG listing.
-5. Double-click the video surface for fullscreen. Press **Esc** to move back through fullscreen, the guide, groups, and main navigation.
+5. Double-click the video surface for fullscreen. Press **Esc** to leave fullscreen or close an open channel menu.
+
+The in-app **User Guide** button above Settings contains this quick start and direct links to Sources and EPG settings.
 
 For guide data, add an XMLTV URL under **Settings > EPG**, apply it, and select **Update Now** before manually matching channels.
 
 ## What Onyx Does
 
-- Loads local `.m3u` / `.m3u8` files, remote M3U URLs, and Xtream live TV accounts.
+- Loads local `.m3u` / `.m3u8` files, remote M3U URLs, and Xtream Live TV, Movies, and TV Shows.
 - Saves source profiles so you can reload a provider without re-entering the same details.
-- Browses large channel libraries by group, favorites, recents, and search.
-- Lets you hide noisy groups and collapse source/group sections.
+- Keeps the main navigation, searchable group list, and TV guide visible together while browsing large libraries.
+- Lets you search and independently hide noisy Live TV, Movies, and TV Shows groups under **Settings > Library**.
 - Loads one or more XMLTV EPG guides.
 - Caches guide data locally for matching and now/next programme display.
 - Supports manual EPG matching when automatic matching is not enough.
 - Plays streams through native `libmpv`.
-- Provides reload, stop, mute, volume, fullscreen, resume, resolution, and FPS controls in the player overlay.
+- Opens movies and episodes directly in fullscreen with idle-hiding controls, click-to-pause/resume, 30-second skips, seeking, detected resolution, subtitles, mute, volume, and one **Quit** action through native `libmpv`.
+- Lets automatic resume start in fullscreen (the default) or in the mini-player under **Settings > General**.
 
 ## Large Library Behavior
 
@@ -50,6 +54,8 @@ Onyx is built around large IPTV libraries. Recent startup and browsing work focu
 - startup EPG refreshes are delayed until cached guide directories have loaded
 - multiple startup EPG refreshes are staggered instead of launched all at once
 - the channel shelf renders large groups incrementally instead of trying to mount every visible channel card in one pass
+- VOD categories are fetched only when opened, one concrete category at a time; complete provider-wide catalogs never enter the Live TV startup path
+- A provider category is capped at 20,000 valid titles; if that safety limit is reached, Onyx displays an explicit truncation notice instead of presenting the count as complete
 - EPG now/next lookup uses faster indexed programme searches
 
 ## Privacy And Storage
@@ -83,6 +89,12 @@ App-state and EPG-cache writes are size-bounded, serialized, and atomically repl
 | Library | EPG | Sources |
 | --- | --- | --- |
 | ![Onyx library settings](docs/screenshots/library-settings.png) | ![Onyx EPG settings](docs/screenshots/epg-settings.png) | ![Onyx saved sources](docs/screenshots/saved-sources.png) |
+
+### On-demand library
+
+| Movies | Group visibility | In-app guide |
+| --- | --- | --- |
+| ![Onyx Movies browser](docs/screenshots/vod-movies.png) | ![Onyx movie group visibility settings](docs/screenshots/vod-library-settings.png) | ![Onyx in-app guide describing Movies and TV Shows](docs/screenshots/user-guide-vod.png) |
 
 ## Build From Source
 

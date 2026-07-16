@@ -1,5 +1,6 @@
 mod epg;
 mod persistence;
+mod vod;
 
 use std::{
     collections::HashMap,
@@ -17,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_PLAYLIST_BYTES: usize = 32 * 1024 * 1024;
 const MAX_XTREAM_BYTES: usize = 32 * 1024 * 1024;
+const MAX_VOD_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 const CONNECT_TIMEOUT_SECS: u64 = 15;
 const READ_TIMEOUT_SECS: u64 = 45;
 const PLAYLIST_OPERATION_TIMEOUT_SECS: u64 = 90;
@@ -821,6 +823,150 @@ async fn fetch_xtream_live_channels_inner(
     })
 }
 
+fn validate_vod_identifier(value: &str) -> Result<&str, String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 100
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err("The VOD item identifier is not valid.".to_string());
+    }
+    Ok(value)
+}
+
+fn build_vod_api_url(
+    domain: &str,
+    username: &str,
+    password: &str,
+    action: &str,
+    parameter: Option<(&str, &str)>,
+) -> Result<Url, String> {
+    let domain = normalize_xtream_domain_input(domain)?;
+    let username = username.trim();
+    let password = password.trim();
+    if username.is_empty() || password.is_empty() {
+        return Err("Xtream username and password are required.".to_string());
+    }
+    let mut url = build_player_api_url(&domain, username, password, Some(action))?;
+    if let Some((name, value)) = parameter {
+        url.query_pairs_mut()
+            .append_pair(name, validate_vod_identifier(value)?);
+    }
+    Ok(url)
+}
+
+async fn fetch_xtream_vod_value(
+    domain: String,
+    username: String,
+    password: String,
+    action: &str,
+    parameter: Option<(&str, &str)>,
+    failure_label: &str,
+) -> Result<Value, String> {
+    let url = build_vod_api_url(&domain, &username, &password, action, parameter)?;
+    let client = build_http_client()?;
+    let response =
+        fetch_text_with_limit(&client, url, MAX_VOD_CATALOG_BYTES, failure_label).await?;
+    serde_json::from_str(&response)
+        .map_err(|_| "The Xtream VOD response was not valid JSON.".to_string())
+}
+
+async fn fetch_xtream_vod_stream_origin(
+    domain: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, String> {
+    let normalized_domain = normalize_xtream_domain_input(domain)?;
+    let username = username.trim();
+    let password = password.trim();
+    if username.is_empty() || password.is_empty() {
+        return Err("Xtream username and password are required.".to_string());
+    }
+    let auth_url = build_player_api_url(&normalized_domain, username, password, None)?;
+    let auth_text = fetch_text_with_limit(
+        &build_http_client()?,
+        auth_url,
+        MAX_XTREAM_BYTES,
+        "Could not resolve the Xtream playback endpoint",
+    )
+    .await?;
+    let auth_response: Value = serde_json::from_str(&auth_text)
+        .map_err(|_| "The Xtream login response was not valid JSON.".to_string())?;
+    let user_info = get_required_object(&auth_response, "user_info")?;
+    if !is_truthy(user_info.get("auth")) {
+        return Err(
+            "Xtream authentication failed while resolving the playback endpoint.".to_string(),
+        );
+    }
+    Ok(build_stream_origin(&auth_response, &normalized_domain)?.to_string())
+}
+
+async fn fetch_xtream_vod_categories_inner(
+    domain: String,
+    username: String,
+    password: String,
+    kind: vod::VodKind,
+) -> Result<vod::VodCategoriesResponse, String> {
+    let stream_origin = fetch_xtream_vod_stream_origin(&domain, &username, &password).await?;
+    let response = fetch_xtream_vod_value(
+        domain,
+        username,
+        password,
+        kind.categories_action(),
+        None,
+        "Could not download Xtream VOD categories",
+    )
+    .await?;
+    Ok(vod::VodCategoriesResponse {
+        stream_origin,
+        categories: vod::parse_vod_categories(&response)?,
+    })
+}
+
+async fn fetch_xtream_vod_catalog_inner(
+    domain: String,
+    username: String,
+    password: String,
+    kind: vod::VodKind,
+    category_id: String,
+) -> Result<vod::VodCatalogResponse, String> {
+    let response = fetch_xtream_vod_value(
+        domain,
+        username,
+        password,
+        kind.catalog_action(),
+        Some(("category_id", &category_id)),
+        "Could not download the Xtream VOD catalog",
+    )
+    .await?;
+    vod::parse_vod_catalog(kind, &response)
+}
+
+async fn fetch_xtream_vod_details_inner(
+    domain: String,
+    username: String,
+    password: String,
+    kind: vod::VodKind,
+    item_id: String,
+) -> Result<vod::VodDetailsPayload, String> {
+    let id_parameter = match kind {
+        vod::VodKind::Movie => "vod_id",
+        vod::VodKind::Series => "series_id",
+    };
+    let response = fetch_xtream_vod_value(
+        domain,
+        username,
+        password,
+        kind.details_action(),
+        Some((id_parameter, &item_id)),
+        "Could not download Xtream VOD details",
+    )
+    .await?;
+    vod::parse_vod_details(kind, &item_id, &response)
+}
+
 #[tauri::command]
 async fn fetch_playlist_from_url(
     registry: State<'_, PlaylistOperationRegistry>,
@@ -853,6 +999,65 @@ async fn fetch_xtream_live_channels(
     .await
 }
 
+#[tauri::command]
+async fn fetch_xtream_vod_categories(
+    registry: State<'_, PlaylistOperationRegistry>,
+    domain: String,
+    username: String,
+    password: String,
+    kind: String,
+    operation_id: String,
+) -> Result<vod::VodCategoriesResponse, String> {
+    let kind = vod::VodKind::parse(&kind)?;
+    run_playlist_operation(
+        &registry,
+        &operation_id,
+        Duration::from_secs(PLAYLIST_OPERATION_TIMEOUT_SECS),
+        |_| fetch_xtream_vod_categories_inner(domain, username, password, kind),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn fetch_xtream_vod_catalog(
+    registry: State<'_, PlaylistOperationRegistry>,
+    domain: String,
+    username: String,
+    password: String,
+    kind: String,
+    category_id: String,
+    operation_id: String,
+) -> Result<vod::VodCatalogResponse, String> {
+    let kind = vod::VodKind::parse(&kind)?;
+    run_playlist_operation(
+        &registry,
+        &operation_id,
+        Duration::from_secs(PLAYLIST_OPERATION_TIMEOUT_SECS),
+        |_| fetch_xtream_vod_catalog_inner(domain, username, password, kind, category_id),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn fetch_xtream_vod_details(
+    registry: State<'_, PlaylistOperationRegistry>,
+    domain: String,
+    username: String,
+    password: String,
+    kind: String,
+    item_id: String,
+    operation_id: String,
+) -> Result<vod::VodDetailsPayload, String> {
+    let kind = vod::VodKind::parse(&kind)?;
+    run_playlist_operation(
+        &registry,
+        &operation_id,
+        Duration::from_secs(PLAYLIST_OPERATION_TIMEOUT_SECS),
+        |_| fetch_xtream_vod_details_inner(domain, username, password, kind, item_id),
+    )
+    .await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -862,6 +1067,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fetch_playlist_from_url,
             fetch_xtream_live_channels,
+            fetch_xtream_vod_categories,
+            fetch_xtream_vod_catalog,
+            fetch_xtream_vod_details,
             cancel_playlist_operation,
             load_app_state,
             save_app_state,
@@ -1100,6 +1308,20 @@ mod tests {
             assert!(!error.contains(&invalid));
         }
         assert!(validate_m3u_url_for_storage("").is_err());
+    }
+
+    #[test]
+    fn xtream_stream_origin_uses_authenticated_server_host_protocol_and_port() {
+        let auth_response = serde_json::json!({
+            "server_info": {
+                "server_protocol": "https",
+                "url": "stream.example",
+                "https_port": "8443"
+            }
+        });
+        let fallback = reqwest::Url::parse("http://login.example/base/").expect("fallback URL");
+        let origin = super::build_stream_origin(&auth_response, &fallback).expect("stream origin");
+        assert_eq!(origin.as_str(), "https://stream.example:8443/");
     }
 
     #[test]

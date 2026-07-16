@@ -12,7 +12,7 @@ A private, local-first Windows IPTV player for your own M3U, Xtream, and XMLTV s
 
 Onyx is a fast, local-first IPTV player built specifically for Windows.
 
-Bring your own M3U or M3U8 playlist, Xtream account, and XMLTV guide. Onyx keeps large channel libraries responsive, supports favorites and recents, and plays streams through native libmpv without requiring an Onyx account or cloud service.
+Bring your own M3U or M3U8 playlist, Xtream account, and XMLTV guide. Onyx organizes Live TV, Movies, and TV Shows into searchable groups, supports favorites and recents, and plays streams through native libmpv without requiring an Onyx account or cloud service.
 
 Your source data stays under your control. Onyx has no advertising, analytics, telemetry, account sync, or developer-operated backend. Remote playlist and guide URLs and Xtream passwords are protected through Windows Credential Manager; credential-free settings and caches remain on your device.
 
@@ -26,18 +26,18 @@ User guide: https://github.com/Guts444/Onyx/blob/main/docs/user-guide.md
 
 - Local M3U and M3U8 playlist files
 - Remote M3U playlist URLs
-- Xtream live TV accounts
+- Xtream Live TV, Movies, and TV Shows
 - Multiple XMLTV programme guides
 - Fast browsing and search for large channel libraries
-- Favorites, recents, hidden groups, and collapsible sections
+- Favorites, recents, and independently hidden Live TV, Movies, and TV Shows groups
 - Automatic and manual EPG matching
-- Native libmpv playback with fullscreen, volume, mute, resume, resolution, and FPS controls
+- Native libmpv playback with fullscreen, click-to-pause VOD, seeking, subtitles, volume, mute, and detected resolution/FPS indicators
 - Local-first storage with secrets protected by Windows Credential Manager
 - No ads, telemetry, analytics, or Onyx account
 
 ## What's new
 
-Corrects native player startup on clean Windows installations by making the Store package's libmpv, Vulkan loader, and Visual C++ runtime dependencies explicit and self-contained.
+Adds lazy Xtream Movies and TV Shows browsing with searchable vertical groups, per-provider group visibility settings, rich title and episode details, subtitles, and direct fullscreen playback. Also improves Live TV navigation, deterministic automatic resume, secured restart speed, and native video-surface reliability.
 
 ## Category
 
@@ -59,9 +59,9 @@ IPTV player; M3U; M3U8; Xtream; XMLTV; EPG; media player
 
 ## Screenshots
 
-Use these existing 1920px screenshots in this order:
+Use these current 1920px screenshots in this order:
 
-1. `docs/screenshots/home.png`
-2. `docs/screenshots/library-settings.png`
-3. `docs/screenshots/epg-settings.png`
-4. `docs/screenshots/saved-sources.png`
+1. `docs/screenshots/vod-movies.png`
+2. `docs/screenshots/vod-library-settings.png`
+3. `docs/screenshots/library-settings.png`
+4. `docs/screenshots/user-guide-vod.png`

@@ -8,6 +8,7 @@ import {
   getSourceOperationCommitState,
   migrateStartupPlaybackSession,
   migrateImportedChannelReferences,
+  resolveStartupResumeReadiness,
 } from "./appIntegration.ts";
 
 const source: SavedPlaylistSource = {
@@ -81,6 +82,18 @@ test("startup playback resume keeps its target when an imported playlist replace
     channelId: "new-a",
     resumeChannelId: "new-a",
   });
+});
+
+test("startup resume uses a secured playback-ready cache without waiting for provider refresh", () => {
+  assert.equal(resolveStartupResumeReadiness("source-a", true, "pending"), "ready");
+  assert.equal(resolveStartupResumeReadiness("source-a", true, "failed"), "ready");
+});
+
+test("startup resume waits only when a remote cache cannot reconstruct playback", () => {
+  assert.equal(resolveStartupResumeReadiness("source-a", false, "pending"), "wait-for-refresh");
+  assert.equal(resolveStartupResumeReadiness("source-a", false, "succeeded"), "ready");
+  assert.equal(resolveStartupResumeReadiness("source-a", false, "failed"), "unavailable");
+  assert.equal(resolveStartupResumeReadiness(null, false, "failed"), "ready");
 });
 
 test("canceling a delayed startup restore clears pending state without consuming its attempt", () => {

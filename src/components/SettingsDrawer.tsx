@@ -1,11 +1,14 @@
 import { useState } from "react";
 import type { EpgDirectoryResponse, EpgSource } from "../domain/epg";
 import type { PlaylistImport } from "../domain/iptv";
-import type { SavedPlaylistSource } from "../domain/sourceProfiles";
+import type { SavedPlaylistSource, SavedXtreamSource } from "../domain/sourceProfiles";
+import type { VodKind } from "../domain/vod";
 import { EpgSettingsPanel } from "./EpgSettingsPanel";
+import { GeneralSettingsPanel, type AutoResumeMode } from "./GeneralSettingsPanel";
 import { SourceProfilesPanel } from "./SourceProfilesPanel";
+import { VodCategorySettingsPanel } from "./VodCategorySettingsPanel";
 
-export type SettingsTab = "library" | "epg" | "sources";
+export type SettingsTab = "general" | "library" | "epg" | "sources";
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -26,11 +29,17 @@ interface SettingsDrawerProps {
   loadingSourceId: string | null;
   isImportingFile: boolean;
   notice: string | null;
+  autoResumeMode: AutoResumeMode;
+  vodSources: SavedXtreamSource[];
+  preferredVodSourceId: string | null;
   onClose: () => void;
   onSelectTab: (tab: SettingsTab) => void;
+  onAutoResumeModeChange: (mode: AutoResumeMode) => void;
   onEnableAllGroups: () => void;
   onDisableAllGroups: () => void;
   onToggleGroup: (group: string) => void;
+  getHiddenVodCategoryIds: (sourceId: string, kind: VodKind) => string[];
+  onChangeHiddenVodCategoryIds: (sourceId: string, kind: VodKind, ids: string[]) => void;
   onAddEpgSource: () => void;
   onToggleEpgSourceEnabled: (sourceId: string) => void;
   onRemoveEpgSource: (sourceId: string) => void;
@@ -67,11 +76,17 @@ export function SettingsDrawer({
   loadingSourceId,
   isImportingFile,
   notice,
+  autoResumeMode,
+  vodSources,
+  preferredVodSourceId,
   onClose,
   onSelectTab,
+  onAutoResumeModeChange,
   onEnableAllGroups,
   onDisableAllGroups,
   onToggleGroup,
+  getHiddenVodCategoryIds,
+  onChangeHiddenVodCategoryIds,
   onAddEpgSource,
   onToggleEpgSourceEnabled,
   onRemoveEpgSource,
@@ -89,6 +104,7 @@ export function SettingsDrawer({
   onUpdateSource,
 }: SettingsDrawerProps) {
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
+  const [librarySection, setLibrarySection] = useState<"live" | VodKind>("live");
   const groups = playlist?.groups ?? [];
   const normalizedGroupSearchQuery = groupSearchQuery.trim().toLowerCase();
   const filteredGroups = groups.filter((group) =>
@@ -112,14 +128,18 @@ export function SettingsDrawer({
           <div>
             <span className="settings-drawer__eyebrow">Settings</span>
             <h2 id="settings-title">
-              {activeTab === "library"
+              {activeTab === "general"
+                ? "General"
+                : activeTab === "library"
                 ? "Library"
                 : activeTab === "epg"
                 ? "EPG"
                 : "Saved Sources"}
             </h2>
             <p>
-              {activeTab === "library"
+              {activeTab === "general"
+                ? "Choose how Onyx behaves when it reopens a channel that was playing."
+                : activeTab === "library"
                 ? `Choose which groups should appear in the main channel browser for ${playlistDisplayName ?? "the current library"}.`
                 : activeTab === "epg"
                 ? "Guide data is cached locally per XMLTV source, and enabled guides are merged together when you match channels."
@@ -133,6 +153,13 @@ export function SettingsDrawer({
         </header>
 
         <div className="settings-tabs">
+          <button
+            type="button"
+            className={`chip ${activeTab === "general" ? "chip--active" : ""}`}
+            onClick={() => onSelectTab("general")}
+          >
+            General
+          </button>
           <button
             type="button"
             className={`chip ${activeTab === "library" ? "chip--active" : ""}`}
@@ -158,7 +185,19 @@ export function SettingsDrawer({
 
         {notice ? <div className="settings-notice">{notice}</div> : null}
 
-        {activeTab === "library" ? (
+        {activeTab === "general" ? (
+          <GeneralSettingsPanel
+            autoResumeMode={autoResumeMode}
+            onAutoResumeModeChange={onAutoResumeModeChange}
+          />
+        ) : activeTab === "library" ? (
+          <>
+            <div className="settings-tabs settings-tabs--secondary" aria-label="Library type">
+              <button type="button" className={`chip ${librarySection === "live" ? "chip--active" : ""}`} onClick={() => setLibrarySection("live")}>Live TV</button>
+              <button type="button" className={`chip ${librarySection === "movie" ? "chip--active" : ""}`} onClick={() => setLibrarySection("movie")}>Movies</button>
+              <button type="button" className={`chip ${librarySection === "series" ? "chip--active" : ""}`} onClick={() => setLibrarySection("series")}>TV Shows</button>
+            </div>
+            {librarySection === "live" ? (
           !playlist ? (
             <div className="settings-empty">
               <strong>No library loaded</strong>
@@ -238,7 +277,16 @@ export function SettingsDrawer({
                 })}
               </div>
             </>
-          )
+          )) : (
+            <VodCategorySettingsPanel
+              kind={librarySection}
+              sources={vodSources}
+              preferredSourceId={preferredVodSourceId}
+              getHiddenCategoryIds={getHiddenVodCategoryIds}
+              onChangeHiddenCategoryIds={onChangeHiddenVodCategoryIds}
+            />
+          )}
+          </>
         ) : activeTab === "epg" ? (
           <EpgSettingsPanel
             sources={epgSources}

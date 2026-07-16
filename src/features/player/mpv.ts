@@ -13,6 +13,9 @@ import {
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { Channel } from "../../domain/iptv";
 import { redactCredentials } from "../playlist/redaction";
+import { calculateVideoMarginRatio } from "./layout";
+import { clampSeekPosition, parseSubtitleTracks, type SubtitleTrack } from "./media";
+import { LatestPlaybackOperationCoordinator } from "./operations";
 
 export const DEFAULT_PLAYER_VOLUME = 72;
 const OBSERVED_PROPERTIES = [
@@ -24,6 +27,10 @@ const OBSERVED_PROPERTIES = [
   ["container-fps", "double", "none"],
   ["paused-for-cache", "flag"],
   ["idle-active", "flag"],
+  ["duration", "double", "none"],
+  ["time-pos", "double", "none"],
+  ["pause", "flag"],
+  ["track-list", "node"],
 ] as const satisfies ReadonlyArray<MpvObservableProperty>;
 
 export interface MpvPlayerState {
@@ -40,6 +47,20 @@ export interface MpvPlayerState {
   videoWidth: number | null;
   videoHeight: number | null;
   videoFps: number | null;
+  playbackMode: "live" | "vod" | null;
+  paused: boolean;
+  duration: number | null;
+  position: number | null;
+  subtitleTracks: SubtitleTrack[];
+}
+
+export interface MpvPlayableMedia {
+  id: string;
+  kind: "live" | "vod";
+  name: string;
+  stream: string | null;
+  isPlayable: boolean;
+  playabilityError?: string | null;
 }
 
 type PlayerLayoutMode = "windowed" | "fullscreen";
@@ -75,24 +96,10 @@ function normalizeVideoFps(value: unknown) {
 function getMarginRatio(surface: HTMLElement) {
   const rect = surface.getBoundingClientRect();
   const root = document.documentElement;
-  const width = Math.max(window.innerWidth || 0, root.clientWidth || 0, 1);
-  const height = Math.max(window.innerHeight || 0, root.clientHeight || 0, 1);
-
-  if (rect.width < 40 || rect.height < 40) {
-    return {
-      left: 0,
-      right: 0,
-      top: 0,
-      bottom: 0,
-    };
-  }
-
-  return {
-    left: Math.max(0, Math.min(1, rect.left / width)),
-    right: Math.max(0, Math.min(1, (width - rect.right) / width)),
-    top: Math.max(0, Math.min(1, rect.top / height)),
-    bottom: Math.max(0, Math.min(1, (height - rect.bottom) / height)),
-  };
+  return calculateVideoMarginRatio(rect, {
+    width: Math.max(window.innerWidth || 0, root.clientWidth || 0),
+    height: Math.max(window.innerHeight || 0, root.clientHeight || 0),
+  });
 }
 
 function describeInitError(error: unknown) {
@@ -119,9 +126,10 @@ export function useMpvPlayer(
   const isNativeHost = isTauri();
   const initializedRef = useRef(false);
   const initialVolumeRef = useRef(clampVolume(initialVolume));
-  const currentChannelRef = useRef<Channel | null>(null);
+  const currentMediaRef = useRef<MpvPlayableMedia | null>(null);
   const userStoppedPlaybackRef = useRef(false);
   const lastErrorLogRef = useRef<string | null>(null);
+  const playbackOperationsRef = useRef(new LatestPlaybackOperationCoordinator());
   const [state, setState] = useState<MpvPlayerState>({
     environment: isNativeHost ? "tauri" : "browser",
     ready: false,
@@ -138,7 +146,32 @@ export function useMpvPlayer(
     videoWidth: null,
     videoHeight: null,
     videoFps: null,
+    playbackMode: null,
+    paused: false,
+    duration: null,
+    position: null,
+    subtitleTracks: [],
   });
+
+  async function applyVideoLayout() {
+    const surface = surfaceRef.current;
+    if (!surface) return false;
+    const margin = getMarginRatio(surface);
+    if (!margin) return false;
+    await setVideoMarginRatio(margin);
+    return true;
+  }
+
+  async function prepareVideoLayout() {
+    const retryDelays = [0, 16, 50, 120];
+    for (const delay of retryDelays) {
+      if (delay > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+      }
+      if (await applyVideoLayout()) return true;
+    }
+    return false;
+  }
 
   useEffect(() => {
     if (!isNativeHost) {
@@ -226,13 +259,38 @@ export function useMpvPlayer(
                   ...currentState,
                   idleActive: event.data,
                   status:
-                    event.data && !userStoppedPlaybackRef.current && currentChannelRef.current
+                    event.data && !userStoppedPlaybackRef.current && currentMediaRef.current
                       ? currentState.error
                         ? "Playback error"
                         : "Waiting for the stream..."
                       : currentState.status,
                 }));
               }
+              break;
+            case "duration":
+              setState((currentState) => ({
+                ...currentState,
+                duration: normalizeVideoFps(event.data),
+              }));
+              break;
+            case "time-pos":
+              setState((currentState) => ({
+                ...currentState,
+                position: typeof event.data === "number" && Number.isFinite(event.data)
+                  ? Math.max(0, event.data)
+                  : null,
+              }));
+              break;
+            case "pause":
+              if (typeof event.data === "boolean") {
+                setState((currentState) => ({ ...currentState, paused: event.data }));
+              }
+              break;
+            case "track-list":
+              setState((currentState) => ({
+                ...currentState,
+                subtitleTracks: parseSubtitleTracks(event.data),
+              }));
               break;
             default:
               break;
@@ -267,7 +325,7 @@ export function useMpvPlayer(
                 loading: false,
                 buffering: false,
                 error: null,
-                status: "Playing live stream",
+                status: currentMediaRef.current?.kind === "vod" ? "Playing" : "Playing live stream",
               }));
               break;
             case "end-file": {
@@ -293,7 +351,9 @@ export function useMpvPlayer(
                   loading: false,
                   buffering: false,
                   error: null,
-                  status: "The stream ended.",
+                  status: currentMediaRef.current?.kind === "vod"
+                    ? "Playback complete"
+                    : "The stream ended.",
                   videoWidth: null,
                   videoHeight: null,
                   videoFps: null,
@@ -384,8 +444,10 @@ export function useMpvPlayer(
       cancelAnimationFrame(frameHandle);
       frameHandle = window.requestAnimationFrame(() => {
         const nextSurface = surfaceRef.current ?? surface;
+        const margin = getMarginRatio(nextSurface);
+        if (!margin) return;
 
-        void setVideoMarginRatio(getMarginRatio(nextSurface)).catch(() => {
+        void setVideoMarginRatio(margin).catch(() => {
           // Layout syncing is best-effort and can safely retry on the next event.
         });
       });
@@ -398,6 +460,7 @@ export function useMpvPlayer(
     const resizeObserver = new ResizeObserver(syncMargin);
     resizeObserver.observe(surface);
     window.addEventListener("resize", syncMargin);
+    document.addEventListener("scroll", syncMargin, true);
     document.addEventListener("fullscreenchange", syncMargin);
 
     return () => {
@@ -407,18 +470,21 @@ export function useMpvPlayer(
       });
       resizeObserver.disconnect();
       window.removeEventListener("resize", syncMargin);
+      document.removeEventListener("scroll", syncMargin, true);
       document.removeEventListener("fullscreenchange", syncMargin);
     };
   }, [isNativeHost, layoutMode, state.ready, surfaceRef]);
 
-  async function playChannel(channel: Channel) {
-    currentChannelRef.current = channel;
+  async function playMedia(media: MpvPlayableMedia, externalGuard: () => boolean = () => true) {
+    if (!externalGuard()) return false;
+    const operation = playbackOperationsRef.current.begin(externalGuard);
+    currentMediaRef.current = media;
 
-    if (!channel.isPlayable) {
+    if (!media.isPlayable) {
       setState((currentState) => ({
         ...currentState,
         idleActive: true,
-        error: channel.playabilityError ?? "This channel is not playable.",
+        error: media.playabilityError ?? "This channel is not playable.",
         status: "Channel unavailable",
         videoWidth: null,
         videoHeight: null,
@@ -453,7 +519,7 @@ export function useMpvPlayer(
       return false;
     }
 
-    if (channel.stream === null) {
+    if (media.stream === null) {
       setState((currentState) => ({
         ...currentState,
         idleActive: true,
@@ -477,16 +543,29 @@ export function useMpvPlayer(
       loading: true,
       buffering: false,
       error: null,
-      status: `Loading ${channel.name}...`,
+      status: `Loading ${media.name}...`,
       videoWidth: null,
       videoHeight: null,
       videoFps: null,
+      playbackMode: media.kind,
+      paused: false,
+      duration: null,
+      position: null,
+      subtitleTracks: [],
     }));
 
+    const stream = media.stream;
     try {
-      await command("loadfile", [channel.stream, "replace"]);
-      return true;
+      if (!(await prepareVideoLayout())) {
+        throw new Error("The player surface is not ready yet. Try the channel again.");
+      }
+      const result = await playbackOperationsRef.current.run(operation, async () => {
+        await command("loadfile", [stream, "replace"]);
+        return true;
+      });
+      return result === true;
     } catch (error) {
+      if (!operation.isCurrent()) return false;
       setState((currentState) => ({
         ...currentState,
         idleActive: true,
@@ -499,7 +578,19 @@ export function useMpvPlayer(
     }
   }
 
+  async function playChannel(channel: Channel, externalGuard?: () => boolean) {
+    return playMedia({
+      id: channel.id,
+      kind: "live",
+      name: channel.name,
+      stream: channel.stream,
+      isPlayable: channel.isPlayable,
+      playabilityError: channel.playabilityError,
+    }, externalGuard);
+  }
+
   async function stopPlayback() {
+    const operation = playbackOperationsRef.current.begin();
     if (!isNativeHost || !state.ready) {
       return;
     }
@@ -507,7 +598,11 @@ export function useMpvPlayer(
     userStoppedPlaybackRef.current = true;
 
     try {
-      await command("stop");
+      const result = await playbackOperationsRef.current.run(operation, async () => {
+        await command("stop");
+        return true;
+      });
+      if (result !== true) return;
       setState((currentState) => ({
         ...currentState,
         idleActive: true,
@@ -520,6 +615,7 @@ export function useMpvPlayer(
         videoFps: null,
       }));
     } catch (error) {
+      if (!operation.isCurrent()) return;
       setState((currentState) => ({
         ...currentState,
         idleActive: true,
@@ -530,11 +626,11 @@ export function useMpvPlayer(
   }
 
   async function reloadPlayback() {
-    if (!currentChannelRef.current) {
+    if (!currentMediaRef.current) {
       return;
     }
 
-    await playChannel(currentChannelRef.current);
+    await playMedia(currentMediaRef.current);
   }
 
   async function toggleMute() {
@@ -551,6 +647,36 @@ export function useMpvPlayer(
         status: "Playback error",
       }));
     }
+  }
+
+  async function togglePause() {
+    if (!isNativeHost || !state.ready || state.playbackMode !== "vod") return;
+    try {
+      await setProperty("pause", !state.paused);
+    } catch (error) {
+      setState((currentState) => ({
+        ...currentState,
+        error: describeCommandError(error),
+        status: "Playback error",
+      }));
+    }
+  }
+
+  async function seekRelative(seconds: number) {
+    if (!isNativeHost || !state.ready || state.playbackMode !== "vod" || !Number.isFinite(seconds)) {
+      return;
+    }
+    await command("seek", [seconds, "relative+exact"]);
+  }
+
+  async function seekAbsolute(seconds: number) {
+    if (!isNativeHost || !state.ready || state.playbackMode !== "vod") return;
+    await command("seek", [clampSeekPosition(seconds, state.duration), "absolute+exact"]);
+  }
+
+  async function setSubtitleTrack(trackId: number | null) {
+    if (!isNativeHost || !state.ready || state.playbackMode !== "vod") return;
+    await setProperty("sid", trackId ?? "no");
   }
 
   async function setVolumeLevel(volume: number) {
@@ -572,9 +698,14 @@ export function useMpvPlayer(
   return {
     player: state,
     playChannel,
+    playMedia,
     stopPlayback,
     reloadPlayback,
     toggleMute,
+    togglePause,
+    seekRelative,
+    seekAbsolute,
+    setSubtitleTrack,
     setVolumeLevel,
   };
 }

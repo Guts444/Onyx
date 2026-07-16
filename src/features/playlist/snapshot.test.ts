@@ -7,6 +7,7 @@ import {
   createPlaylistPersistenceCoordinator,
   createPlaylistSelectionState,
   isDisplayOnlyChannel,
+  isChannelPlaybackReady,
   isPlaylistCachePlaybackReady,
   resolvePlaylistSelectionHydration,
   revivePlaylistCacheSnapshot,
@@ -105,9 +106,28 @@ test("credential-free Xtream descriptors remain runtime-materializable in snapsh
   const savedChannel = result.playlist.channels[0];
 
   assert.equal(savedChannel.isPlayable, true);
+  assert.equal(isChannelPlaybackReady(savedChannel), true);
   assert.equal(isDisplayOnlyChannel(savedChannel), false);
   assert.equal(isPlaylistCachePlaybackReady(result), true);
   assert.equal(shouldRefreshPlaylistCache(result), false);
+});
+
+test("playback readiness is evaluated for the requested channel rather than a playlist-wide match", () => {
+  const playable = sanitizePlaylistCacheSnapshot(snapshot("source_xtream", {
+    ...remoteChannel,
+    id: "playable",
+    stream: null,
+    originalStream: null,
+    streamDescriptor: { kind: "xtream", streamType: "live", streamId: "42", container: "ts" },
+  })).playlist.channels[0];
+  const displayOnly = sanitizePlaylistCacheSnapshot(snapshot("source_xtream", {
+    ...remoteChannel,
+    id: "display-only",
+    isPlayable: false,
+  })).playlist.channels[0];
+
+  assert.equal(isChannelPlaybackReady(playable), true);
+  assert.equal(isChannelPlaybackReady(displayOnly), false);
 });
 
 test("snapshot sanitization intentionally strips runtime-only Xtream origin provenance", () => {

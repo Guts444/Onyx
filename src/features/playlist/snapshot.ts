@@ -16,11 +16,13 @@ export function isDisplayOnlyChannel(channel: Channel) {
     channel.streamDescriptor?.kind === "remote-m3u" && !channel.isPlayable;
 }
 
+export function isChannelPlaybackReady(channel: Channel) {
+  return (channel.isPlayable && channel.stream !== null) ||
+    (channel.isPlayable && validateXtreamStreamDescriptor(channel.streamDescriptor) !== null);
+}
+
 export function isPlaylistCachePlaybackReady(snapshot: PlaylistCacheSnapshot) {
-  return snapshot.playlist.channels.some((channel) =>
-    (channel.isPlayable && channel.stream !== null) ||
-    (channel.isPlayable && validateXtreamStreamDescriptor(channel.streamDescriptor) !== null),
-  );
+  return snapshot.playlist.channels.some(isChannelPlaybackReady);
 }
 
 export function shouldRefreshPlaylistCache(snapshot: PlaylistCacheSnapshot) {

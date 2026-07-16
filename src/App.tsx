@@ -3,9 +3,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelEpgMatchDialog } from "./components/ChannelEpgMatchDialog";
 import { ChannelShelf } from "./components/ChannelShelf";
-import { ChannelSidebar, type NavigationSection } from "./components/ChannelSidebar";
+import { ChannelSidebar } from "./components/ChannelSidebar";
+import type { AutoResumeMode } from "./components/GeneralSettingsPanel";
 import { PlayerPanel } from "./components/PlayerPanel";
 import { SettingsDrawer, type SettingsTab } from "./components/SettingsDrawer";
+import { UserGuideDrawer } from "./components/UserGuideDrawer";
+import { VodBrowser } from "./components/VodBrowser";
+import { VodPlayerPanel } from "./components/VodPlayerPanel";
 import {
   createEpgSource,
   getEpgSourceLabel,
@@ -26,8 +30,10 @@ import type {
   PlaylistCacheSnapshot,
   PlaylistSelectionState,
   SavedPlaylistSource,
+  SavedXtreamSource,
   SourceLibraryIndex,
 } from "./domain/sourceProfiles";
+import type { VodKind, VodNavigationState, VodPlaybackItem } from "./domain/vod";
 import {
   deleteEpgCache,
   getEpgCacheDiagnostics,
@@ -74,6 +80,10 @@ import {
   serializeEpgSources,
 } from "./features/epg/secrets";
 import { DEFAULT_PLAYER_VOLUME, useMpvPlayer } from "./features/player/mpv";
+import {
+  commitIfCurrentPlaybackRevision,
+  LatestPlaybackOperationCoordinator,
+} from "./features/player/operations";
 import { parseM3u } from "./features/playlist/m3u";
 import { createLocalM3uSourceIdentity } from "./features/playlist/channelFactory";
 import { cancelPlaylistOperation, downloadPlaylistFromUrl } from "./features/playlist/remote";
@@ -83,7 +93,7 @@ import { redactCredentials } from "./features/playlist/redaction";
 import {
   createPlaylistCacheSnapshot,
   createPlaylistPersistenceCoordinator,
-  isPlaylistCachePlaybackReady,
+  isChannelPlaybackReady,
   resolvePlaylistSelectionHydration,
   revivePlaylistCacheSnapshot,
   revivePlaylistSelectionState,
@@ -98,6 +108,7 @@ import {
   getSourceOperationCommitState,
   migrateImportedChannelReferences,
   migrateStartupPlaybackSession,
+  resolveStartupResumeReadiness,
 } from "./features/sources/appIntegration";
 import {
   getSourceSecretHydrationFingerprint,
@@ -129,6 +140,13 @@ import {
   saveSourceSecretsBeforePersist,
   saveXtreamPasswordBeforeCommit,
 } from "./features/sources/secrets";
+import {
+  getHiddenVodCategoryIds,
+  normalizeVodCategoryVisibilityStore,
+  removeVodCategoryVisibilitySource,
+  updateHiddenVodCategoryIds,
+  type VodCategoryVisibilityStore,
+} from "./features/vod/preferences";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { hashString } from "./utils/hash";
 import "./App.css";
@@ -147,6 +165,8 @@ const COLLAPSED_SOURCE_CARDS_STORAGE_KEY = "iptv-player:collapsed-source-cards";
 const EPG_MANUAL_MATCHES_STORAGE_KEY = "iptv-player:epg-manual-matches";
 const PLAYER_RESUME_STORAGE_KEY = "iptv-player:playback-session";
 const PLAYER_VOLUME_STORAGE_KEY = "iptv-player:player-volume";
+const AUTO_RESUME_MODE_STORAGE_KEY = "iptv-player:auto-resume-mode";
+const VOD_CATEGORY_VISIBILITY_STORAGE_KEY = "iptv-player:vod-hidden-categories";
 const RECENT_CHANNEL_LIMIT = 12;
 const ALL_CHANNELS_GROUP_ID = "__iptv_player_all__";
 const FAVORITES_GROUP_ID = "__iptv_player_favorites__";
@@ -155,8 +175,6 @@ const CHANNEL_RENDER_BATCH_SIZE = 320;
 const GUIDE_SLOT_MINUTES = 30;
 const GUIDE_VISIBLE_SLOT_COUNT = 4;
 const GUIDE_CLOCK_REFRESH_MS = 30 * 1000;
-type SidebarMode = "hidden" | "groups" | "menu";
-
 interface PlaybackSession {
   sourceId: string | null;
   channelId: string | null;
@@ -164,6 +182,18 @@ interface PlaybackSession {
   resumeSourceId: string | null;
   resumeChannelId: string | null;
   resumeInFullscreen: boolean;
+}
+
+function createEmptyVodNavigationState(): VodNavigationState {
+  return {
+    sourceId: null,
+    streamOrigin: null,
+    categories: [],
+    activeCategoryId: null,
+    searchQuery: "",
+    loadingCategories: false,
+    activeCatalogCount: 0,
+  };
 }
 
 function pushRecentId(recentIds: string[], channelId: string) {
@@ -322,6 +352,17 @@ function App() {
     PLAYER_VOLUME_STORAGE_KEY,
     DEFAULT_PLAYER_VOLUME,
   );
+  const [autoResumeMode, setAutoResumeMode, autoResumeModeHydrated] = usePersistentState<AutoResumeMode>(
+    AUTO_RESUME_MODE_STORAGE_KEY,
+    "fullscreen",
+    (value) => value === "mini-player" ? "mini-player" : "fullscreen",
+  );
+  const [hiddenVodCategoriesBySource, setHiddenVodCategoriesBySource] =
+    usePersistentState<VodCategoryVisibilityStore>(
+      VOD_CATEGORY_VISIBILITY_STORAGE_KEY,
+      {},
+      normalizeVodCategoryVisibilityStore,
+    );
   const [
     playlistSnapshot,
     setPlaylistSnapshot,
@@ -349,10 +390,13 @@ function App() {
       serializePlaylistSelectionState,
     );
   const [playlist, setPlaylist] = useState<PlaylistImport | null>(null);
-  const [navigationSection, setNavigationSection] = useState<NavigationSection>("tv");
-  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
-    playlistSnapshot?.playlist.channels.length ? "groups" : "menu",
-  );
+  const [activeSection, setActiveSection] = useState<"live" | "movies" | "series">("live");
+  const [visitedVodSections, setVisitedVodSections] = useState({ movies: false, series: false });
+  const [vodNavigationByKind, setVodNavigationByKind] = useState<Record<VodKind, VodNavigationState>>(() => ({
+    movie: createEmptyVodNavigationState(),
+    series: createEmptyVodNavigationState(),
+  }));
+  const [activeVodPlayback, setActiveVodPlayback] = useState<VodPlaybackItem | null>(null);
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
@@ -361,8 +405,9 @@ function App() {
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isUserGuideOpen, setIsUserGuideOpen] = useState(false);
   const [startupRestoreToken, setStartupRestoreToken] = useState<SourceOperationToken | null>(null);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("library");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [message, setMessage] = useState<string | null>(null);
   const [epgDirectoriesBySourceId, setEpgDirectoriesBySourceId] = useState<
     Record<string, EpgDirectoryResponse>
@@ -373,6 +418,7 @@ function App() {
   const [epgBusyBySourceId, setEpgBusyBySourceId] = useState<Record<string, EpgSourceBusyState>>({});
   const [hasLoadedEpgCacheDirectories, setHasLoadedEpgCacheDirectories] = useState(false);
   const [savedSourceSecretsHydrated, setSavedSourceSecretsHydrated] = useState(false);
+  const [activeSourceSecretHydrated, setActiveSourceSecretHydrated] = useState(false);
   const [epgSecretsHydrated, setEpgSecretsHydrated] = useState(false);
   const [epgStatusMessage, setEpgStatusMessage] = useState<string | null>(null);
   const [matcherChannel, setMatcherChannel] = useState<Channel | null>(null);
@@ -387,7 +433,10 @@ function App() {
   const startupPlaybackRestoreKeyRef = useRef<string | null>(null);
   const startupPlaybackRestoreCompletedRef = useRef(false);
   const startupPlaybackSessionRef = useRef<PlaybackSession | null>(null);
-  const fullscreenEscapeHandledRef = useRef(false);
+  const startupPlaybackRestoreGenerationRef = useRef(0);
+  const fullscreenStateRevisionRef = useRef(0);
+  const fullscreenHostOperationsRef = useRef(new LatestPlaybackOperationCoordinator());
+
   const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
   const hydratedPlaylistSnapshotAppliedRef = useRef(false);
   const selectionChangedBeforeHydrationRef = useRef(false);
@@ -433,6 +482,16 @@ function App() {
     savedEpgMappingsHydrated &&
     playbackSessionHydrated &&
     savedVolumeHydrated &&
+    autoResumeModeHydrated &&
+    playlistSnapshotHydrated &&
+    playlistSelectionHydrated;
+  const hasHydratedPlaybackState =
+    savedSourcesHydrated &&
+    activeSourceIdHydrated &&
+    activeSourceSecretHydrated &&
+    playbackSessionHydrated &&
+    savedVolumeHydrated &&
+    autoResumeModeHydrated &&
     playlistSnapshotHydrated &&
     playlistSelectionHydrated;
   savedSourcesRef.current = savedSources;
@@ -450,8 +509,18 @@ function App() {
   const loadingSourceId = sourceBusy?.origin === "local" ? null : sourceBusy?.sourceId ?? null;
   const isImportingFile = sourceBusy?.origin === "local";
   const isRestoringStartupSource = startupRestoreToken !== null;
-  const { player, playChannel, setVolumeLevel, stopPlayback, toggleMute } =
-    useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
+  const {
+    player,
+    playChannel,
+    playMedia,
+    setVolumeLevel,
+    stopPlayback,
+    toggleMute,
+    togglePause,
+    seekRelative,
+    seekAbsolute,
+    setSubtitleTrack,
+  } = useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
 
   useEffect(() => {
     selectedChannelIdRef.current = selectedChannelId;
@@ -542,34 +611,58 @@ function App() {
 
     let cancelled = false;
     setSavedSourceSecretsHydrated(false);
+    setActiveSourceSecretHydrated(false);
     const pendingReads = Object.values(savedSources).map((source) => ({
       sourceId: source.id,
       kind: source.kind,
       expectedFingerprint: getSourceSecretHydrationFingerprint(source),
       read: source.kind === "m3u_url" ? loadM3uUrl(source.id) : loadXtreamPassword(source.id),
     }));
+    const activePending = pendingReads.find((pending) => pending.sourceId === activeSourceId) ?? null;
+    const backgroundPending = pendingReads.filter((pending) => pending !== activePending);
 
-    void Promise.allSettled(pendingReads.map((pending) => pending.read))
-      .then((results) => {
+    const applySettlements = (settlements: SourceSecretHydrationSettlement[]) => {
+      if (settlements.length === 0) return;
+      const hydration = hydrateSourceSecrets(savedSourcesRef.current, settlements);
+      setSavedSources((currentSources) => hydrateSourceSecrets(currentSources, settlements).sources);
+      if (hydration.message) setMessage((currentMessage) => currentMessage ?? hydration.message);
+    };
+
+    const settleReads = async (reads: typeof pendingReads) => {
+      const results = await Promise.allSettled(reads.map((pending) => pending.read));
+      return reads.map((pending, index): SourceSecretHydrationSettlement => ({
+        sourceId: pending.sourceId,
+        kind: pending.kind,
+        expectedFingerprint: pending.expectedFingerprint,
+        result: results[index],
+      }));
+    };
+    const activeSettlementsPromise = settleReads(activePending ? [activePending] : []);
+    const backgroundSettlementsPromise = settleReads(backgroundPending);
+
+    void (async () => {
+      try {
+        if (activePending) {
+          const activeSettlements = await activeSettlementsPromise;
+          if (cancelled) return;
+          applySettlements(activeSettlements);
+        }
         if (cancelled) return;
-        const settlements: SourceSecretHydrationSettlement[] = pendingReads.map(
-          (pending, index) => ({
-            sourceId: pending.sourceId,
-            kind: pending.kind,
-            expectedFingerprint: pending.expectedFingerprint,
-            result: results[index],
-          }),
-        );
-        const hydration = hydrateSourceSecrets(savedSourcesRef.current, settlements);
-        setSavedSources((currentSources) => hydrateSourceSecrets(currentSources, settlements).sources);
-        if (hydration.message) setMessage((currentMessage) => currentMessage ?? hydration.message);
-      })
-      .finally(() => {
-        if (!cancelled) setSavedSourceSecretsHydrated(true);
-      });
+        setActiveSourceSecretHydrated(true);
+
+        const backgroundSettlements = await backgroundSettlementsPromise;
+        if (cancelled) return;
+        applySettlements(backgroundSettlements);
+      } finally {
+        if (!cancelled) {
+          setActiveSourceSecretHydrated(true);
+          setSavedSourceSecretsHydrated(true);
+        }
+      }
+    })();
 
     return () => { cancelled = true; };
-  }, [savedSourcesHydrated, setSavedSources, secretSourceIdsKey]);
+  }, [activeSourceId, savedSourcesHydrated, setSavedSources, secretSourceIdsKey]);
 
   useEffect(() => {
     if (!epgSourcesHydrated || epgSecretHydrationStartedRef.current) return;
@@ -670,12 +763,13 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const fullscreenRevision = fullscreenStateRevisionRef.current;
 
     if (isTauri()) {
       void getCurrentWindow()
         .isFullscreen()
         .then((fullscreen) => {
-          if (!cancelled) {
+          if (!cancelled && fullscreenStateRevisionRef.current === fullscreenRevision) {
             setIsFullscreen(fullscreen);
           }
         })
@@ -712,8 +806,11 @@ function App() {
 
       event.preventDefault();
       event.stopPropagation();
-      fullscreenEscapeHandledRef.current = true;
-      void handleToggleFullscreen();
+      if (activeVodPlayback) {
+        void handleStopVod();
+      } else {
+        void handleToggleFullscreen();
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -721,52 +818,8 @@ function App() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isFullscreen]);
+  }, [activeVodPlayback, isFullscreen]);
 
-  useEffect(() => {
-    if (isFullscreen || isSettingsOpen || matcherChannel !== null) {
-      return undefined;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
-        return;
-      }
-
-      if (fullscreenEscapeHandledRef.current) {
-        fullscreenEscapeHandledRef.current = false;
-        return;
-      }
-
-      if (!playlist) {
-        setNavigationSection("search");
-        setSidebarMode("menu");
-        return;
-      }
-
-      event.preventDefault();
-      if (sidebarMode === "hidden") {
-        setNavigationSection("tv");
-        setSidebarMode("groups");
-        return;
-      }
-
-      if (sidebarMode === "groups") {
-        setNavigationSection("search");
-        setSidebarMode("menu");
-        return;
-      }
-
-      setNavigationSection("search");
-      setSidebarMode("menu");
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isFullscreen, isSettingsOpen, matcherChannel, playlist, sidebarMode]);
 
   useEffect(() => {
     const nextVolume = Math.max(0, Math.min(100, Math.round(player.volume)));
@@ -800,12 +853,6 @@ function App() {
     void setVolumeLevel(savedVolume);
   }, [player.environment, player.ready, savedVolume, savedVolumeHydrated, setVolumeLevel]);
 
-  useEffect(() => {
-    if (!playlist) {
-      setNavigationSection("search");
-      setSidebarMode("menu");
-    }
-  }, [playlist]);
 
   function schedulePlayerLayoutSync() {
     const syncDelays = [0, 40, 140, 280, 520];
@@ -823,7 +870,7 @@ function App() {
     }
 
     schedulePlayerLayoutSync();
-  }, [isFullscreen, sidebarMode]);
+  }, [isFullscreen]);
 
   function canCommitSourceOperation(token: SourceOperationToken) {
     if (token.sourceId === null) {
@@ -909,9 +956,7 @@ function App() {
       setActiveSourceId(nextSourceId);
       setPlaylist(importedPlaylist);
       setSelectedChannelId(nextSelectedChannelId);
-      setNavigationSection("tv");
       setActiveGroup(ALL_CHANNELS_GROUP_ID);
-      setSidebarMode("groups");
       setSearchQuery("");
       setMessage(null);
       setIsSettingsOpen(false);
@@ -994,13 +1039,23 @@ function App() {
   const hasCachedStartupPlaylist = (cachedStartupSnapshot?.playlist.channels.length ?? 0) > 0;
   const cachedStartupPlaylistNeedsRefresh =
     cachedStartupSnapshot !== null && shouldRefreshPlaylistCache(cachedStartupSnapshot);
-  const cachedStartupPlaylistPlaybackReady =
-    cachedStartupSnapshot !== null && isPlaylistCachePlaybackReady(cachedStartupSnapshot);
+  const cachedStartupResumeChannel = playbackSession.resumeChannelId === null
+    ? null
+    : cachedStartupSnapshot?.playlist.channels.find(
+        (channel) => channel.id === playbackSession.resumeChannelId,
+      ) ?? null;
+  const cachedStartupResumeChannelPlaybackReady =
+    cachedStartupResumeChannel !== null && isChannelPlaybackReady(cachedStartupResumeChannel);
+  const startupResumeReadiness = resolveStartupResumeReadiness(
+    playbackSession.resumeSourceId,
+    cachedStartupResumeChannelPlaybackReady,
+    startupSourceRefreshResultRef.current,
+  );
   const shouldDelayResumeForStartupRestore =
     playbackSession.shouldResume &&
     playbackSession.resumeSourceId === activeSourceId &&
     startupSourceToRestore !== null &&
-    startupSourceRefreshResultRef.current === "pending";
+    startupResumeReadiness === "wait-for-refresh";
 
   useEffect(() => {
     if (!hasHydratedPersistentState) {
@@ -1082,6 +1137,7 @@ function App() {
   }, [hasHydratedPersistentState, startupSourceRevision, startupSourceToRestore?.id]);
 
   async function handleImportFile(file: File) {
+    cancelStartupPlaybackRestore();
     const token = sourceOperationsRef.current.start({
       origin: "local",
       sourceId: null,
@@ -1121,7 +1177,6 @@ function App() {
       activeGroup === ALL_CHANNELS_GROUP_ID ||
       (activeGroup === FAVORITES_GROUP_ID && Boolean(selectedChannel && favoriteIdSet.has(selectedChannel.id))) ||
       (Boolean(selectedChannel?.group) && activeGroup === selectedChannel?.group);
-    setNavigationSection("tv");
     if (!selectedGroupIsAlreadyVisible) {
       setActiveGroup(
         selectedChannel && favoriteIdSet.has(selectedChannel.id)
@@ -1131,11 +1186,10 @@ function App() {
           : ALL_CHANNELS_GROUP_ID,
       );
     }
-    setSidebarMode("groups");
     setSearchQuery("");
   }
 
-  async function playCanonicalChannel(channel: Channel) {
+  async function playCanonicalChannel(channel: Channel, isCurrent?: () => boolean) {
     try {
       const currentSourceId = activeSourceIdRef.current;
       const currentSource = currentSourceId ? savedSourcesRef.current[currentSourceId] : null;
@@ -1146,7 +1200,7 @@ function App() {
         channel,
         currentSource ?? { id: "local", kind: "m3u_url" },
       );
-      return await playChannel(materializedChannel);
+      return await playChannel(materializedChannel, isCurrent);
     } catch (error) {
       setMessage(redactCredentials(
         error instanceof Error ? error.message : "The channel could not be prepared for playback.",
@@ -1155,7 +1209,30 @@ function App() {
     }
   }
 
+  function cancelStartupPlaybackRestore() {
+    startupPlaybackRestoreGenerationRef.current += 1;
+    startupPlaybackRestoreCompletedRef.current = true;
+  }
+
+  async function applyHostFullscreenForRevision(nextFullscreen: boolean, fullscreenRevision: number) {
+    const isCurrent = () => fullscreenStateRevisionRef.current === fullscreenRevision;
+    const operation = fullscreenHostOperationsRef.current.begin(isCurrent);
+    const result = await fullscreenHostOperationsRef.current.run(operation, async () => {
+      if (isTauri()) {
+        const appWindow = getCurrentWindow();
+        if ((await appWindow.isFullscreen()) !== nextFullscreen) {
+          await appWindow.setFullscreen(nextFullscreen);
+        }
+      } else if (!nextFullscreen && document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
+      return true;
+    });
+    return result === true;
+  }
+
   async function handleSelectChannel(channel: Channel) {
+    cancelStartupPlaybackRestore();
     setSelectedChannelId(channel.id);
     persistSelectedChannel(channel.id);
     setRecentIds((currentIds) => pushRecentId(currentIds, channel.id));
@@ -1180,11 +1257,12 @@ function App() {
       shouldResume: didStartPlayback,
       resumeSourceId: didStartPlayback ? activeSourceId : null,
       resumeChannelId: didStartPlayback ? channel.id : null,
-      resumeInFullscreen: false,
+      resumeInFullscreen: autoResumeMode === "fullscreen",
     }));
   }
 
   async function handleStopPlayback() {
+    cancelStartupPlaybackRestore();
     setPlaybackSession((currentSession) => ({
       ...currentSession,
       sourceId: activeSourceId,
@@ -1198,7 +1276,71 @@ function App() {
     await stopPlayback();
   }
 
+  async function handleSelectSection(section: "live" | "movies" | "series") {
+    if (section === activeSection) return;
+    cancelStartupPlaybackRestore();
+    if (!player.idleActive) await stopPlayback();
+    setActiveVodPlayback(null);
+    setActiveSection(section);
+    if (section !== "live") {
+      setVisitedVodSections((current) => ({ ...current, [section]: true }));
+    }
+  }
+
+  async function handlePlayVod(item: VodPlaybackItem) {
+    cancelStartupPlaybackRestore();
+    const fullscreenRevision = ++fullscreenStateRevisionRef.current;
+    const isCurrentPlayback = () => fullscreenStateRevisionRef.current === fullscreenRevision;
+    setActiveVodPlayback(item);
+    setIsFullscreen(true);
+
+    try {
+      if (!(await applyHostFullscreenForRevision(true, fullscreenRevision))) return;
+
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+      });
+      if (!isCurrentPlayback()) return;
+      schedulePlayerLayoutSync();
+
+      const started = await playMedia({
+        id: item.id,
+        kind: "vod",
+        name: item.title,
+        stream: item.stream,
+        isPlayable: true,
+      }, isCurrentPlayback);
+      if (!isCurrentPlayback()) return;
+      if (!started) await handleStopVod();
+    } catch {
+      if (!isCurrentPlayback()) return;
+      setMessage("Fullscreen VOD playback could not be started.");
+      await handleStopVod();
+    }
+  }
+
+  async function handleStopVod() {
+    const fullscreenRevision = ++fullscreenStateRevisionRef.current;
+    const fullscreenExit = applyHostFullscreenForRevision(false, fullscreenRevision);
+    await stopPlayback();
+    try {
+      await fullscreenExit;
+    } catch {
+      // Playback still stops even if the host refuses the fullscreen transition.
+    }
+    commitIfCurrentPlaybackRevision(
+      fullscreenRevision,
+      () => fullscreenStateRevisionRef.current,
+      () => {
+        setIsFullscreen(false);
+        setActiveVodPlayback(null);
+        schedulePlayerLayoutSync();
+      },
+    );
+  }
+
   async function handleReloadPlayback() {
+    cancelStartupPlaybackRestore();
     const channel = selectedChannelIdRef.current
       ? importedReferencesRef.current.playlistSnapshot?.playlist.channels.find(
           (candidate) => candidate.id === selectedChannelIdRef.current,
@@ -1210,6 +1352,8 @@ function App() {
   }
 
   async function handleToggleFullscreen() {
+    cancelStartupPlaybackRestore();
+    const fullscreenRevision = ++fullscreenStateRevisionRef.current;
     try {
       if (!isFullscreen && channelGuideBodyRef.current) {
         channelScrollPositionRef.current = {
@@ -1222,7 +1366,7 @@ function App() {
         const nextFullscreen = !(await appWindow.isFullscreen());
 
         await appWindow.setFullscreen(nextFullscreen);
-        if (nextFullscreen && selectedChannel?.isPlayable) {
+        if (nextFullscreen && player.playbackMode !== "vod" && selectedChannel?.isPlayable) {
           setPlaybackSession((currentSession) => ({
             ...currentSession,
             sourceId: activeSourceId,
@@ -1230,13 +1374,15 @@ function App() {
             shouldResume: true,
             resumeSourceId: activeSourceId,
             resumeChannelId: selectedChannel.id,
-            resumeInFullscreen: true,
+            resumeInFullscreen: autoResumeMode === "fullscreen",
           }));
         }
         if (!nextFullscreen) {
           showSelectedChannelGroup();
         }
-        setIsFullscreen(nextFullscreen);
+        if (fullscreenStateRevisionRef.current === fullscreenRevision) {
+          setIsFullscreen(nextFullscreen);
+        }
         schedulePlayerLayoutSync();
         return;
       }
@@ -1248,13 +1394,15 @@ function App() {
       if (document.fullscreenElement) {
         await document.exitFullscreen();
         showSelectedChannelGroup();
-        setIsFullscreen(false);
+        if (fullscreenStateRevisionRef.current === fullscreenRevision) {
+          setIsFullscreen(false);
+        }
         schedulePlayerLayoutSync();
         return;
       }
 
       await playerShellRef.current.requestFullscreen();
-      if (selectedChannel?.isPlayable) {
+      if (player.playbackMode !== "vod" && selectedChannel?.isPlayable) {
         setPlaybackSession((currentSession) => ({
           ...currentSession,
           sourceId: activeSourceId,
@@ -1262,10 +1410,12 @@ function App() {
           shouldResume: true,
           resumeSourceId: activeSourceId,
           resumeChannelId: selectedChannel.id,
-          resumeInFullscreen: true,
+          resumeInFullscreen: autoResumeMode === "fullscreen",
         }));
       }
-      setIsFullscreen(true);
+      if (fullscreenStateRevisionRef.current === fullscreenRevision) {
+        setIsFullscreen(true);
+      }
       schedulePlayerLayoutSync();
     } catch (error) {
       const errorMessage =
@@ -1275,6 +1425,7 @@ function App() {
   }
 
   async function handleLoadSavedSource(sourceId: string) {
+    cancelStartupPlaybackRestore();
     const source = savedSourcesRef.current[sourceId];
 
     if (!source) return;
@@ -1490,6 +1641,9 @@ function App() {
       delete nextIndex[sourceId];
       return nextIndex;
     });
+    setHiddenVodCategoriesBySource((currentStore) =>
+      removeVodCategoryVisibilitySource(currentStore, sourceId),
+    );
     setCollapsedSourceIds((currentIds) =>
       currentIds.filter((currentId) => currentId !== sourceId),
     );
@@ -1551,9 +1705,7 @@ function App() {
         setPlaylist(null);
         setSelectedChannelId(null);
         setActiveGroup(null);
-        setSidebarMode("menu");
         setSearchQuery("");
-        setNavigationSection("search");
       });
     }
 
@@ -1561,7 +1713,7 @@ function App() {
   }
 
   function openSettings(tab: SettingsTab) {
-    setSidebarMode("menu");
+    setIsUserGuideOpen(false);
     setSettingsTab(tab);
     setIsSettingsOpen(true);
   }
@@ -1912,15 +2064,66 @@ function App() {
     [resolvedEpgMatchesByChannelId],
   );
   const savedSourcesList = useMemo(() => Object.values(savedSources), [savedSources]);
-  const searchResults = useMemo(
-    () =>
-      normalizedSearchQuery.length === 0
-        ? []
-        : enabledChannels
-            .filter((channel) => channel.name.toLowerCase().includes(normalizedSearchQuery))
-            .slice(0, 120),
-    [enabledChannels, normalizedSearchQuery],
+  const readyXtreamSources = useMemo(
+    () => savedSourcesList.filter(
+      (source): source is SavedXtreamSource => source.kind === "xtream" && isSourceProfileReady(source),
+    ),
+    [savedSourcesList],
   );
+  const preferredVodSourceId = readyXtreamSources.some((source) => source.id === activeSourceId)
+    ? activeSourceId
+    : readyXtreamSources[0]?.id ?? null;
+  const updateVodNavigation = useCallback((kind: VodKind, patch: Partial<VodNavigationState>) => {
+    setVodNavigationByKind((current) => ({
+      ...current,
+      [kind]: { ...current[kind], ...patch },
+    }));
+  }, []);
+  const getConfiguredHiddenVodCategoryIds = useCallback(
+    (sourceId: string, kind: VodKind) =>
+      getHiddenVodCategoryIds(hiddenVodCategoriesBySource, sourceId, kind),
+    [hiddenVodCategoriesBySource],
+  );
+  const handleChangeHiddenVodCategoryIds = useCallback(
+    (sourceId: string, kind: VodKind, ids: string[]) => {
+      setHiddenVodCategoriesBySource((currentStore) =>
+        updateHiddenVodCategoryIds(currentStore, sourceId, kind, ids),
+      );
+    },
+    [setHiddenVodCategoriesBySource],
+  );
+  const movieHiddenCategoryIds = getHiddenVodCategoryIds(
+    hiddenVodCategoriesBySource,
+    vodNavigationByKind.movie.sourceId,
+    "movie",
+  );
+  const seriesHiddenCategoryIds = getHiddenVodCategoryIds(
+    hiddenVodCategoriesBySource,
+    vodNavigationByKind.series.sourceId,
+    "series",
+  );
+  const visibleMovieNavigation = useMemo(() => {
+    const hidden = new Set(movieHiddenCategoryIds);
+    return {
+      ...vodNavigationByKind.movie,
+      categories: vodNavigationByKind.movie.categories.filter((category) => !hidden.has(category.id)),
+    };
+  }, [movieHiddenCategoryIds, vodNavigationByKind.movie]);
+  const visibleSeriesNavigation = useMemo(() => {
+    const hidden = new Set(seriesHiddenCategoryIds);
+    return {
+      ...vodNavigationByKind.series,
+      categories: vodNavigationByKind.series.categories.filter((category) => !hidden.has(category.id)),
+    };
+  }, [seriesHiddenCategoryIds, vodNavigationByKind.series]);
+  const activeVodNavigation = activeSection === "movies"
+    ? visibleMovieNavigation
+    : activeSection === "series"
+      ? visibleSeriesNavigation
+      : null;
+  const activeVodSourceName = activeVodNavigation?.sourceId
+    ? readyXtreamSources.find((source) => source.id === activeVodNavigation.sourceId)?.name ?? null
+    : null;
 
   function updateHiddenGroups(nextHiddenGroups: string[]) {
     if (!playlistPreferenceKey) {
@@ -1965,29 +2168,20 @@ function App() {
   }
 
   function handleSelectAllChannels() {
-    setNavigationSection("tv");
     setActiveGroup(ALL_CHANNELS_GROUP_ID);
-    setSidebarMode("hidden");
   }
 
   function handleSelectGroup(group: string) {
-    setNavigationSection("tv");
     setActiveGroup(group);
-    setSidebarMode("hidden");
   }
 
   function handleSelectFavoritesGroup() {
-    setNavigationSection("tv");
     setActiveGroup(FAVORITES_GROUP_ID);
-    setSidebarMode("hidden");
   }
 
   const visibleChannels = useMemo(() => {
-    const baseList =
-      navigationSection === "search"
-        ? normalizedSearchQuery.length > 0
-          ? enabledChannels
-          : []
+    const baseList = normalizedSearchQuery.length > 0
+        ? enabledChannels
         : activeGroup === FAVORITES_GROUP_ID
         ? favoriteChannels
         : activeGroup === ALL_CHANNELS_GROUP_ID
@@ -2001,7 +2195,7 @@ function App() {
     }
 
     const needsGroupFilter =
-      navigationSection !== "search" &&
+      normalizedSearchQuery.length === 0 &&
       activeGroup !== FAVORITES_GROUP_ID &&
       activeGroup !== ALL_CHANNELS_GROUP_ID;
     const needsSearchFilter = normalizedSearchQuery.length > 0;
@@ -2026,7 +2220,6 @@ function App() {
 
     return result;
   }, [
-    navigationSection,
     activeGroup,
     favoriteChannels,
     enabledChannels,
@@ -2037,7 +2230,7 @@ function App() {
 
   useEffect(() => {
     setChannelRenderLimit(CHANNEL_RENDER_INITIAL_LIMIT);
-  }, [activeGroup, navigationSection, normalizedSearchQuery, playlist?.importedAt]);
+  }, [activeGroup, normalizedSearchQuery, playlist?.importedAt]);
 
   useEffect(() => {
     if (!selectedChannelId) {
@@ -2059,7 +2252,7 @@ function App() {
     () => visibleChannels.slice(0, channelRenderLimit),
     [channelRenderLimit, visibleChannels],
   );
-  const channelScrollPositionKey = `${playlist?.importedAt ?? ""}\u0001${navigationSection}\u0001${
+  const channelScrollPositionKey = `${playlist?.importedAt ?? ""}\u0001${
     activeGroup ?? ""
   }\u0001${normalizedSearchQuery}`;
   channelScrollPositionKeyRef.current = channelScrollPositionKey;
@@ -2088,11 +2281,8 @@ function App() {
   }, [renderedChannels, resolvedEpgMatchesByChannelId, selectedGuide]);
   const visibleEpgChannelKeysKey = visibleEpgChannelKeys.join("\u0001");
   const favoritesCount = favoriteChannels.length;
-  const activeGroupLabel =
-    navigationSection === "search"
-      ? normalizedSearchQuery.length > 0
-        ? "Search results"
-        : "Search"
+  const activeGroupLabel = normalizedSearchQuery.length > 0
+      ? "Search results"
       : activeGroup === FAVORITES_GROUP_ID
       ? "Favorites"
       : activeGroup === ALL_CHANNELS_GROUP_ID
@@ -2100,21 +2290,6 @@ function App() {
       : activeGroup;
   const isFavoritesGroupActive = activeGroup === FAVORITES_GROUP_ID;
   const isAllChannelsGroupActive = activeGroup === ALL_CHANNELS_GROUP_ID;
-  const isSidebarVisible = sidebarMode !== "hidden";
-  const showSidebarRail = sidebarMode === "menu";
-  const sidebarVisibilityClass = isSidebarVisible ? "workspace__sidebar--visible" : "";
-  const sidebarModeClass =
-    sidebarMode === "menu"
-      ? "workspace__sidebar--menu"
-      : sidebarMode === "groups"
-      ? "workspace__sidebar--groups"
-      : "";
-  const workspaceModeClass =
-    sidebarMode === "menu"
-      ? "workspace--sidebar-menu"
-      : sidebarMode === "groups"
-      ? "workspace--sidebar-groups"
-      : "";
 
   function handleOpenEpgMatcher(channel: Channel) {
     if (enabledEpgChannels.length === 0) {
@@ -2395,34 +2570,30 @@ function App() {
   }, [activeGroup, enabledGroupSet, enabledGroups, playlist]);
 
   useEffect(() => {
-    if (startupPlaybackRestoreCompletedRef.current) {
-      return;
-    }
+    if (startupPlaybackRestoreCompletedRef.current) return;
 
     const startupPlaybackSession = startupPlaybackSessionRef.current;
-
-    if (
-      !hasHydratedPersistentState ||
+    const waitingForRequiredRefresh =
       shouldDelayResumeForStartupRestore ||
-      isRestoringStartupSource
-    ) {
-      return;
-    }
+      (isRestoringStartupSource && !cachedStartupResumeChannelPlaybackReady);
 
-    if (!playlist || player.environment !== "tauri" || !player.ready) {
-      return;
-    }
+    if (!hasHydratedPlaybackState || waitingForRequiredRefresh) return;
+    if (!playlist || player.environment !== "tauri" || !player.ready) return;
 
     const resumeSourceId = startupPlaybackSession?.resumeSourceId ?? null;
     const resumeChannelId = startupPlaybackSession?.resumeChannelId ?? null;
-    const resumeInFullscreen = startupPlaybackSession?.resumeInFullscreen ?? false;
 
     if (resumeChannelId === null || !startupPlaybackSession?.shouldResume || resumeSourceId !== activeSourceId) {
       startupPlaybackRestoreCompletedRef.current = true;
       return;
     }
 
-    if (resumeSourceId !== null && startupSourceRefreshResultRef.current !== "succeeded") {
+    const resumeReadiness = resolveStartupResumeReadiness(
+      resumeSourceId,
+      cachedStartupResumeChannelPlaybackReady,
+      startupSourceRefreshResultRef.current,
+    );
+    if (resumeReadiness !== "ready") {
       setPlaybackSession((currentSession) => ({
         ...currentSession,
         shouldResume: false,
@@ -2430,7 +2601,7 @@ function App() {
         resumeChannelId: null,
         resumeInFullscreen: false,
       }));
-      if (cachedStartupPlaylistNeedsRefresh || !cachedStartupPlaylistPlaybackReady) {
+      if (cachedStartupPlaylistNeedsRefresh || !cachedStartupResumeChannelPlaybackReady) {
         setMessage((currentMessage) => currentMessage ??
           "Cached source metadata is available for browsing, but refresh is required before playback.");
       }
@@ -2438,66 +2609,7 @@ function App() {
       return;
     }
 
-    const restoreKey = `${activeSourceId ?? "local"}\u0001${playlist.importedAt}\u0001${resumeChannelId}`;
-
-    if (startupPlaybackRestoreKeyRef.current === restoreKey) {
-      startupPlaybackRestoreCompletedRef.current = true;
-      return;
-    }
-
-    if (resumeInFullscreen && !isFullscreen) {
-      let cancelled = false;
-
-      const enterStartupFullscreen = async () => {
-        try {
-          if (isTauri()) {
-            const appWindow = getCurrentWindow();
-            if (!(await appWindow.isFullscreen())) {
-              await appWindow.setFullscreen(true);
-            }
-            if (!cancelled) {
-              setIsFullscreen(true);
-              schedulePlayerLayoutSync();
-            }
-            return;
-          }
-
-          if (playerShellRef.current && !document.fullscreenElement) {
-            await playerShellRef.current.requestFullscreen();
-          }
-
-          if (!cancelled) {
-            setIsFullscreen(true);
-            schedulePlayerLayoutSync();
-          }
-        } catch {
-          if (!cancelled) {
-            setPlaybackSession((currentSession) =>
-              (currentSession.resumeSourceId ?? null) === activeSourceId &&
-              (currentSession.resumeChannelId ?? null) === resumeChannelId
-                ? {
-                    ...currentSession,
-                    shouldResume: false,
-                    resumeSourceId: null,
-                    resumeChannelId: null,
-                    resumeInFullscreen: false,
-                  }
-                : currentSession,
-            );
-            startupPlaybackRestoreCompletedRef.current = true;
-          }
-        }
-      };
-
-      void enterStartupFullscreen();
-
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const channelToResume = (resumeChannelId !== null ? channelsById.get(resumeChannelId) : null) ?? null;
-
+    const channelToResume = channelsById.get(resumeChannelId) ?? null;
     if (!channelToResume || !channelToResume.isPlayable) {
       setPlaybackSession((currentSession) =>
         (currentSession.resumeSourceId ?? null) === activeSourceId
@@ -2514,28 +2626,66 @@ function App() {
       return;
     }
 
+    const restoreKey = `${activeSourceId ?? "local"}\u0001${playlist.importedAt}\u0001${resumeChannelId}`;
+    if (startupPlaybackRestoreKeyRef.current === restoreKey) {
+      startupPlaybackRestoreCompletedRef.current = true;
+      return;
+    }
+
+    const restoreGeneration = ++startupPlaybackRestoreGenerationRef.current;
     startupPlaybackRestoreKeyRef.current = restoreKey;
     startupPlaybackRestoreCompletedRef.current = true;
     setSelectedChannelId(channelToResume.id);
     persistSelectedChannel(channelToResume.id);
     setRecentIds((currentIds) => pushRecentId(currentIds, channelToResume.id));
 
-    void playCanonicalChannel(channelToResume).then((didStartPlayback) => {
+    const resumePlayback = async () => {
+      const isCurrentRestore = () =>
+        startupPlaybackRestoreGenerationRef.current === restoreGeneration;
+      const shouldUseFullscreen = autoResumeMode === "fullscreen";
+      const fullscreenRevision = ++fullscreenStateRevisionRef.current;
+      try {
+        const appWindow = getCurrentWindow();
+        const currentFullscreen = await appWindow.isFullscreen();
+        if (!isCurrentRestore()) return;
+        if (currentFullscreen !== shouldUseFullscreen) {
+          await appWindow.setFullscreen(shouldUseFullscreen);
+          if (!isCurrentRestore()) return;
+        }
+        if (fullscreenStateRevisionRef.current === fullscreenRevision) {
+          setIsFullscreen(shouldUseFullscreen);
+        }
+        schedulePlayerLayoutSync();
+      } catch {
+        if (isCurrentRestore()) {
+          setMessage((currentMessage) => currentMessage ??
+            "Playback resumed, but the saved startup player mode could not be applied.");
+        }
+      }
+
+      if (!isCurrentRestore()) return;
+      const didStartPlayback = await playCanonicalChannel(channelToResume, isCurrentRestore);
+      if (!isCurrentRestore()) return;
       setPlaybackSession((currentSession) =>
         (currentSession.resumeSourceId ?? null) === activeSourceId &&
         (currentSession.resumeChannelId ?? null) === channelToResume.id
           ? {
               ...currentSession,
               shouldResume: didStartPlayback,
+              resumeInFullscreen: autoResumeMode === "fullscreen",
             }
           : currentSession,
       );
-    });
+    };
+
+    void resumePlayback();
   }, [
     activeSourceId,
+    autoResumeMode,
+    cachedStartupPlaylistNeedsRefresh,
+    cachedStartupResumeChannelPlaybackReady,
     channelsById,
-    hasHydratedPersistentState,
-    isFullscreen,
+    hasHydratedPlaybackState,
     isRestoringStartupSource,
     player.environment,
     player.ready,
@@ -2545,7 +2695,28 @@ function App() {
     shouldDelayResumeForStartupRestore,
   ]);
 
-  if (!hasHydratedPersistentState) {
+  const vodPlayerPanel = activeVodPlayback ? (
+    <VodPlayerPanel
+      player={player}
+      media={activeVodPlayback}
+      isFullscreen={isFullscreen}
+      playerShellRef={playerShellRef}
+      playerSurfaceRef={playerSurfaceRef}
+      onTogglePause={() => { void togglePause(); }}
+      onSeekRelative={(seconds) => { void seekRelative(seconds); }}
+      onSeekAbsolute={(seconds) => { void seekAbsolute(seconds); }}
+      onSelectSubtitle={(trackId) => { void setSubtitleTrack(trackId); }}
+      onToggleMute={() => { void toggleMute(); }}
+      onSetVolume={(volume) => {
+        const nextVolume = Math.max(0, Math.min(100, Math.round(volume)));
+        setSavedVolume(nextVolume);
+        void setVolumeLevel(nextVolume);
+      }}
+      onQuit={() => { void handleStopVod(); }}
+    />
+  ) : null;
+
+  if (!hasHydratedPlaybackState) {
     return (
       <main className={`app-shell ${isFullscreen ? "app-shell--fullscreen" : ""}`}>
         <div className="panel empty-state">
@@ -2559,73 +2730,80 @@ function App() {
   return (
     <main className={`app-shell ${isFullscreen ? "app-shell--fullscreen" : ""}`}>
       {isFullscreen ? (
-        <PlayerPanel
-          player={player}
-          selectedChannel={selectedChannel}
-          guide={selectedGuide}
-          isFullscreen={isFullscreen}
-          playerShellRef={playerShellRef}
-          playerSurfaceRef={playerSurfaceRef}
-          onStop={() => {
-            void handleStopPlayback();
-          }}
-          onReload={() => {
-            void handleReloadPlayback();
-          }}
-          onToggleMute={() => {
-            void toggleMute();
-          }}
-          onSetVolume={(volume) => {
-            const nextVolume = Math.max(0, Math.min(100, Math.round(volume)));
-
-            setSavedVolume(nextVolume);
-            void setVolumeLevel(nextVolume);
-          }}
-          onToggleFullscreen={() => {
-            void handleToggleFullscreen();
-          }}
-        />
-      ) : (
-        <div className={`workspace ${workspaceModeClass}`}>
-          <div className={`workspace__sidebar ${sidebarVisibilityClass} ${sidebarModeClass}`.trim()}>
+        activeVodPlayback ? vodPlayerPanel : (
+          <PlayerPanel
+            player={player}
+            selectedChannel={selectedChannel}
+            guide={selectedGuide}
+            isFullscreen={isFullscreen}
+            playerShellRef={playerShellRef}
+            playerSurfaceRef={playerSurfaceRef}
+            onStop={() => {
+              void handleStopPlayback();
+            }}
+            onReload={() => {
+              void handleReloadPlayback();
+            }}
+            onToggleMute={() => {
+              void toggleMute();
+            }}
+            onSetVolume={(volume) => {
+              const nextVolume = Math.max(0, Math.min(100, Math.round(volume)));
+              setSavedVolume(nextVolume);
+              void setVolumeLevel(nextVolume);
+            }}
+            onToggleFullscreen={() => {
+              void handleToggleFullscreen();
+            }}
+          />
+        )
+      ) : null}
+      {(!isFullscreen || activeVodPlayback) ? (
+        <div
+          className={`workspace workspace--persistent-sidebar ${isFullscreen ? "workspace--fullscreen-background" : ""}`}
+          aria-hidden={isFullscreen}
+        >
+          <div className="workspace__sidebar workspace__sidebar--visible workspace__sidebar--persistent">
             <ChannelSidebar
-              showRail={showSidebarRail}
-              navigationSection={navigationSection}
+              activeSection={activeSection}
               playlistName={playlistDisplayName}
               enabledGroups={enabledGroups}
-              isAllChannelsActive={navigationSection === "tv" && isAllChannelsGroupActive}
-              isFavoritesActive={navigationSection === "tv" && isFavoritesGroupActive}
+              isAllChannelsActive={isAllChannelsGroupActive}
+              isFavoritesActive={isFavoritesGroupActive}
               activeGroup={activeGroup}
               favoritesCount={favoritesCount}
               allChannelCount={enabledChannels.length}
               channelCountByGroup={channelCountByGroup}
               searchQuery={searchQuery}
-              searchResults={searchResults}
-              selectedChannelId={selectedChannel?.id ?? null}
-              favoriteIdSet={favoriteIdSet}
               message={message}
-              onSelectNavigationSection={(section) => {
-                setNavigationSection(section);
-                setSidebarMode("menu");
-              }}
+              vodNavigation={activeVodNavigation}
+              vodSourceName={activeVodSourceName}
               onSearchChange={setSearchQuery}
-              onSelectChannel={(channel) => {
-                setSidebarMode("hidden");
-                void handleSelectChannel(channel);
-              }}
               onSelectAllChannels={handleSelectAllChannels}
               onSelectFavorites={handleSelectFavoritesGroup}
               onSelectGroup={handleSelectGroup}
+              onSelectSection={(section) => { void handleSelectSection(section); }}
+              onVodSearchChange={(value) => {
+                if (activeSection === "movies") updateVodNavigation("movie", { searchQuery: value });
+                if (activeSection === "series") updateVodNavigation("series", { searchQuery: value });
+              }}
+              onSelectVodCategory={(categoryId) => {
+                if (activeSection === "movies") updateVodNavigation("movie", { activeCategoryId: categoryId });
+                if (activeSection === "series") updateVodNavigation("series", { activeCategoryId: categoryId });
+              }}
+              onOpenUserGuide={() => {
+                setIsSettingsOpen(false);
+                setIsUserGuideOpen(true);
+              }}
               onOpenSettings={() => {
-                openSettings(playlist ? "library" : "sources");
+                openSettings("general");
               }}
             />
           </div>
 
           <div className="workspace__content">
-            <ChannelShelf
-              navigationSection={navigationSection}
-              isSidebarVisible={isSidebarVisible}
+            {activeSection === "live" ? (
+              <ChannelShelf
               preview={
                 <PlayerPanel
                   player={player}
@@ -2680,9 +2858,34 @@ function App() {
               onOpenEpgMatcher={handleOpenEpgMatcher}
               onLoadMoreChannels={handleLoadMoreVisibleChannels}
             />
+            ) : null}
+            {visitedVodSections.movies ? (
+              <VodBrowser
+                kind="movie"
+                sources={readyXtreamSources}
+                preferredSourceId={preferredVodSourceId}
+                isActive={activeSection === "movies"}
+                navigation={vodNavigationByKind.movie}
+                hiddenCategoryIds={movieHiddenCategoryIds}
+                onNavigationChange={(patch) => updateVodNavigation("movie", patch)}
+                onPlay={(item) => { void handlePlayVod(item); }}
+              />
+            ) : null}
+            {visitedVodSections.series ? (
+              <VodBrowser
+                kind="series"
+                sources={readyXtreamSources}
+                preferredSourceId={preferredVodSourceId}
+                isActive={activeSection === "series"}
+                navigation={vodNavigationByKind.series}
+                hiddenCategoryIds={seriesHiddenCategoryIds}
+                onNavigationChange={(patch) => updateVodNavigation("series", patch)}
+                onPlay={(item) => { void handlePlayVod(item); }}
+              />
+            ) : null}
           </div>
         </div>
-      )}
+      ) : null}
 
       <SettingsDrawer
         isOpen={isSettingsOpen}
@@ -2703,11 +2906,17 @@ function App() {
         loadingSourceId={loadingSourceId}
         isImportingFile={isImportingFile}
         notice={message}
+        autoResumeMode={autoResumeMode}
+        vodSources={readyXtreamSources}
+        preferredVodSourceId={preferredVodSourceId}
         onClose={() => setIsSettingsOpen(false)}
         onSelectTab={setSettingsTab}
+        onAutoResumeModeChange={setAutoResumeMode}
         onEnableAllGroups={handleEnableAllGroups}
         onDisableAllGroups={handleDisableAllGroups}
         onToggleGroup={handleToggleGroup}
+        getHiddenVodCategoryIds={getConfiguredHiddenVodCategoryIds}
+        onChangeHiddenVodCategoryIds={handleChangeHiddenVodCategoryIds}
         onAddEpgSource={handleAddEpgSource}
         onToggleEpgSourceEnabled={handleToggleEpgSourceEnabled}
         onRemoveEpgSource={handleRemoveEpgSource}
@@ -2733,6 +2942,13 @@ function App() {
           void handleRemoveSource(sourceId);
         }}
         onUpdateSource={handleUpdateSource}
+      />
+
+      <UserGuideDrawer
+        isOpen={isUserGuideOpen}
+        onClose={() => setIsUserGuideOpen(false)}
+        onOpenSources={() => openSettings("sources")}
+        onOpenEpg={() => openSettings("epg")}
       />
 
       <ChannelEpgMatchDialog

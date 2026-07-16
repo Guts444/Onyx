@@ -1,6 +1,6 @@
 [package]
 name = "onyx"
-version = "0.5.10"
+version = "0.6.0"
 description = "Onyx is a local-first Windows IPTV player built with Tauri, React, and libmpv"
 authors = ["Guts444"]
 edition = "2021"
@@ -24,6 +24,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 flate2 = "1"
 quick-xml = "0.41"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+percent-encoding = "2.3"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 serde = { version = "1", features = ["derive"] }

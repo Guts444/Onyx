@@ -4,14 +4,13 @@ Onyx is a Windows IPTV player for sources you already have. It does not provide 
 
 ## Quick Start
 
-1. Open **Settings** from the left navigation rail.
-2. Select **Sources**.
-3. Choose one of the following:
+1. Open **Settings** from the left navigation rail, then select **Sources**. You can also open **User Guide** above Settings and select **Open Sources**.
+2. Choose one of the following:
    - **Import .m3u** to load a local `.m3u` or `.m3u8` file.
    - **Add M3U URL** to create a saved remote-playlist profile.
    - **Add Xtream** to create a saved Xtream profile.
-4. For a saved profile, enter its details, leave it enabled, and select **Load Now**.
-5. Select a group, then left-click a channel to start playback.
+3. For a saved profile, enter its details, leave it enabled, and select **Load Now**.
+4. Open **Live TV**, optionally use the search field above the group list, select a group, then left-click a channel in the TV guide to start playback. Xtream sources can also expose **Movies** and **TV Shows** in the navigation rail.
 
 Onyx caches the loaded library locally. Enabled saved remote sources can refresh when the app starts.
 
@@ -19,16 +18,15 @@ Onyx caches the loaded library locally. Enabled saved remote sources can refresh
 
 ### Mouse
 
-- **Left-click** navigation items, groups, search results, channels, and buttons.
+- **Left-click** navigation items, groups, channels, and buttons.
 - **Right-click a channel row** to add or remove it from Favorites, or to assign an EPG listing.
-- **Double-click the video surface** to enter or exit fullscreen.
+- **Single-click a fullscreen movie or episode** to pause or resume it.
+- **Double-click the video surface** to enter or exit Live TV fullscreen, or to quit fullscreen movie/episode playback and return to its details.
 - **Move the pointer over the fullscreen player** to reveal playback controls.
 
 ### Escape key
 
 - In fullscreen, press **Esc** to leave fullscreen.
-- While focused on the channel guide, press **Esc** to restore the group list.
-- Press **Esc** again to restore the main navigation rail.
 - An open channel context menu also closes with **Esc**.
 
 Use the visible **Close** button to leave Settings or the EPG matching window.
@@ -41,9 +39,7 @@ Open **Live TV** from the navigation rail to browse:
 - **Favorites**
 - Any enabled playlist group
 
-Selecting a group focuses the guide and hides the sidebar to provide more room. Use **Esc** to step back through the group list and main navigation.
-
-Open **Search** to find channels by name across the current enabled library. Selecting a result starts playback and moves the channel into Recents.
+The main navigation, groups, and TV guide remain visible together. Use the search field above the groups to find channels by name across the current enabled library; the guide filters as you type. Clear the field to return to the selected group.
 
 For very large groups, Onyx loads more channel rows as you scroll. You can also select **Show more channels** at the bottom.
 
@@ -67,6 +63,27 @@ Left-click a channel to begin playback. In fullscreen, move the pointer to revea
 - Current resolution and frame rate, when available
 
 Double-click the video surface or use the **Fullscreen** button to change fullscreen mode. Onyx remembers the current volume and may resume the last playing channel when reopened.
+
+Open **Settings > General** to choose where automatic resume starts:
+
+- **Fullscreen** — resumes directly into fullscreen playback and is the default.
+- **Mini-player** — resumes above the TV guide with navigation still visible.
+
+Automatic startup resume remains Live-TV-only. Playing a movie or episode does not replace the saved live channel.
+
+## Movies And TV Shows
+
+Movies and TV shows are available for enabled Xtream sources when the provider exposes them. They are loaded on demand and never added to the Live TV startup path.
+
+1. Open **Movies** or **TV Shows** from the navigation rail.
+2. Select a provider if more than one enabled Xtream source is available.
+3. Use the search field above the vertical group list to filter titles in the selected group.
+4. Choose a group. Onyx loads one group at a time to avoid downloading the provider-wide catalog during ordinary browsing. Exceptionally large individual groups can still take time and memory to parse. Each group is capped at 20,000 valid titles; Onyx displays a notice when a provider response is truncated at that safety limit.
+5. For a TV show, select a season and then an episode.
+
+Movies and episodes open directly in fullscreen; Onyx does not place a mini-player underneath the details card. Move the pointer to reveal controls; they hide again after a few idle seconds. Single-click the video to pause or resume. Playback includes 30-second rewind and forward skips, timeline seeking, detected resolution, mute, volume, one **Quit** action, and embedded subtitle-track selection when the media contains subtitles. Double-click, choose **Quit**, or press **Esc** to stop and return to the same title. External sidecar subtitle URLs are not followed automatically.
+
+Movie and series metadata and catalogs are held in memory for the current session and are not written into the Live TV playlist cache.
 
 ## Managing Sources
 
@@ -96,14 +113,14 @@ Remote M3U URLs and Xtream passwords are stored through Windows Credential Manag
 
 ## Hiding Or Restoring Groups
 
-Open **Settings > Library** after loading a source.
+Open **Settings > Library** after loading a source, then choose **Live TV**, **Movies**, or **TV Shows**.
 
 - Select **Enabled** beside a group to hide it.
 - Select **Hidden** to restore it.
 - Use **Enable all** or **Disable all** for the entire library.
 - Use **Search groups** to find a group in a large playlist.
 
-Hidden groups are excluded from Live TV browsing and channel search. This setting is saved separately for each library.
+Hidden groups are excluded from the corresponding sidebar and search. Live TV visibility is saved per library; Movies and TV Shows visibility is saved independently for each Xtream provider.
 
 ## Adding An EPG Guide
 
@@ -146,7 +163,7 @@ To return to automatic matching, reopen the matcher and select **Clear Manual Ma
 ### A group or channel is missing
 
 - Open **Settings > Library** and restore any hidden groups.
-- Clear the channel search or choose **Live TV > All channels**.
+- Clear the channel search or choose **All channels** in Live TV.
 
 ### Reporting a problem
 

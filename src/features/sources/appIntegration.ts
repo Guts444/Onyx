@@ -55,6 +55,20 @@ export function migrateStartupPlaybackSession<T extends PlaybackSessionChannelRe
   return migratePlaybackSessionChannelIds(session, buildLegacyChannelIdMap(channels));
 }
 
+export type StartupSourceRefreshResult = "pending" | "succeeded" | "failed";
+export type StartupResumeReadiness = "ready" | "wait-for-refresh" | "unavailable";
+
+export function resolveStartupResumeReadiness(
+  resumeSourceId: string | null,
+  cachedPlaylistPlaybackReady: boolean,
+  refreshResult: StartupSourceRefreshResult,
+): StartupResumeReadiness {
+  if (resumeSourceId === null || cachedPlaylistPlaybackReady || refreshResult === "succeeded") {
+    return "ready";
+  }
+  return refreshResult === "pending" ? "wait-for-refresh" : "unavailable";
+}
+
 export function createStartupSourceRestoreState() {
   const attemptedRevisions = new Set<string>();
   let pendingRevision: string | null = null;

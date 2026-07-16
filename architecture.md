@@ -8,7 +8,7 @@ Onyx is a local-first Windows IPTV player built with Tauri, React, and libmpv.
 
 Current product constraints:
 
-- Live TV only. Do not add VOD movies or TV-show library work unless explicitly requested.
+- Live TV remains the startup and automatic-resume priority; Xtream Movies and TV Shows are separate, explicitly lazy sections.
 - Fast startup and responsive guide browsing matter more than loading every possible provider feature.
 - Saved sources, favorites, guide mappings, and playback state are local to the machine.
 - Xtream passwords and remote M3U/EPG URLs must stay out of JSON state/cache files and remain in the OS credential store.
@@ -25,17 +25,27 @@ Current product constraints:
 ## High-Level Layout
 
 - [src/App.tsx](/D:/Projects/Onyx-public/src/App.tsx)
-  Main app orchestration. Handles persistent state, source loading, player startup, guide windows, settings drawer state, and the sidebar/guide navigation flow.
+  Main app orchestration. Handles persistent state, source loading, player startup, guide windows, settings and guide dialogs, and the persistent live-TV layout.
 - [src/App.css](/D:/Projects/Onyx-public/src/App.css)
-  Main application styling, including the guide layout, sidebar modes, player shell styling, and settings drawer presentation.
+  Main application styling, including the guide layout, persistent sidebar, player shell styling, and settings/guide presentation.
 - [src/components/ChannelSidebar.tsx](/D:/Projects/Onyx-public/src/components/ChannelSidebar.tsx)
-  Left navigation rail plus search/group browser.
+  Persistent left navigation rail plus the searchable group browser.
 - [src/components/ChannelShelf.tsx](/D:/Projects/Onyx-public/src/components/ChannelShelf.tsx)
   Guide-first main screen, including timeline rows and the channel context menu.
 - [src/components/PlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/PlayerPanel.tsx)
   Shared embedded/fullscreen player shell and overlay chrome.
 - [src/components/SettingsDrawer.tsx](/D:/Projects/Onyx-public/src/components/SettingsDrawer.tsx)
-  Settings container for library, EPG, and saved sources.
+  Settings container for General, Library, EPG, and saved sources.
+- [src/components/GeneralSettingsPanel.tsx](/D:/Projects/Onyx-public/src/components/GeneralSettingsPanel.tsx)
+  General startup behavior, including the fullscreen/mini-player automatic-resume preference.
+- [src/components/UserGuideDrawer.tsx](/D:/Projects/Onyx-public/src/components/UserGuideDrawer.tsx)
+  Keyboard-modal in-app quick guide with shortcuts into Sources and EPG settings.
+- [src/components/VodBrowser.tsx](/D:/Projects/Onyx-public/src/components/VodBrowser.tsx)
+  Lazy Movies/TV Shows category browser, poster grid, metadata details, seasons, and episodes.
+- [src/components/VodPlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/VodPlayerPanel.tsx)
+  Fullscreen finite-media player controls for movies and episodes, including idle chrome and click/double-click gesture arbitration.
+- [src/components/VodCategorySettingsPanel.tsx](/D:/Projects/Onyx-public/src/components/VodCategorySettingsPanel.tsx)
+  Lazy, source-scoped Movies/TV Shows group visibility management under Library settings.
 
 ## Core Domains
 
@@ -73,36 +83,47 @@ Important rule:
 
 - Native player hook: [src/features/player/mpv.ts](/D:/Projects/Onyx-public/src/features/player/mpv.ts)
 - UI shell: [src/components/PlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/PlayerPanel.tsx)
+- VOD UI shell: [src/components/VodPlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/VodPlayerPanel.tsx)
 
 Important rules:
 
 - The Tauri window and page background must remain transparent for libmpv video to show through.
 - Decorative gradients belong on app panels, not on `html`, `body`, or `:root`.
-- Startup autoplay should only resume the last channel saved from fullscreen playback, not ordinary mini-player browsing.
+- Startup autoplay resumes the last active channel according to the independent General preference: fullscreen by default or mini-player when selected.
+- The player must synchronize native video margins before every `loadfile`, reject unmounted/zero-size surfaces, and resynchronize on nested scrolling as well as resize/fullscreen changes.
+- VOD play, pause, seek, stop, and fullscreen actions must never replace or clear the saved Live TV startup target.
+
+### Video On Demand
+
+- Frontend types: [src/domain/vod.ts](/D:/Projects/Onyx-public/src/domain/vod.ts)
+- Frontend provider bridge/materialization: [src/features/vod/api.ts](/D:/Projects/Onyx-public/src/features/vod/api.ts) and [src/features/vod/model.ts](/D:/Projects/Onyx-public/src/features/vod/model.ts)
+- Rust response normalization: [src-tauri/src/vod.rs](/D:/Projects/Onyx-public/src-tauri/src/vod.rs)
+
+VOD is Xtream-only. Categories are fetched when a VOD section or its Library settings subsection is first opened, then one concrete category catalog is downloaded at a time. Responses have transport limits and a 20,000-valid-title per-category cap. The backend returns explicit truncation metadata and the browser displays a notice when the cap is reached. A very large category can still require substantial parsing, IPC, and renderer memory; category-first loading reduces that exposure rather than pretending it is paging. Catalog metadata stays in memory and materialized `/movie/` or `/series/` URLs exist only at the final libmpv playback boundary. The authenticated `server_info` playback origin is resolved separately from the login endpoint so providers with distinct stream hosts or ports work correctly. Category visibility is the exception: bounded hidden-category IDs are persisted independently per source and VOD kind.
 
 ## Main UI Behavior
 
-### Sidebar State Machine
+### Persistent Live TV Layout
 
-The live browser intentionally works in three modes:
+Outside fullscreen, the primary navigation rail, searchable group pane, preview player, and TV guide remain visible together. Group selection never hides the navigation. Search is a field above the groups rather than a separate primary-navigation destination, and it filters enabled channels directly in the guide while preserving deferred/incremental rendering for large libraries.
 
-- `hidden`: full guide focus
-- `groups`: library/groups only
-- `menu`: full left rail with `Search`, `Live TV`, and `Settings`
-
-Expected `Esc` behavior:
-
-1. From full guide, `Esc` opens `groups`
-2. From `groups`, `Esc` opens `menu` and lands on `Search`
-3. Fullscreen `Esc` exits fullscreen first
-
-This behavior is coordinated in [src/App.tsx](/D:/Projects/Onyx-public/src/App.tsx).
+`Esc` is reserved for leaving fullscreen or closing an open channel menu/dialog; it does not walk through sidebar modes.
 
 ### Guide Behavior
 
-- Selecting `All channels`, `Favorites`, or a group should hide the sidebar and give the guide the full screen width.
+- Selecting `All channels`, `Favorites`, or a group updates the guide while leaving the navigation and groups visible.
 - Right-clicking a guide row must expose favorite and EPG assignment actions.
 - The preview player in the guide should stay close to a 16:9 frame.
+
+### VOD Behavior
+
+- Movies and TV Shows are destinations under Live TV in the persistent primary rail. Their search and visible vertical category list occupy the same persistent secondary-sidebar pattern used by Live TV.
+- Selecting a movie or episode transitions directly to the shared fullscreen native player. VOD has no embedded/mini-player details-page mode; double-clicking, pressing `Esc`, or choosing **Quit** returns to the preserved details view.
+- VOD chrome hides after pointer inactivity and reappears on movement. A delayed single-click toggles pause/resume; double-click cancels that pending toggle before quitting, and control events do not bubble into surface gestures.
+- Category catalogs and detail payloads load only after the user opens the corresponding section/title.
+- Poster images are lazy, card rendering is incremental, and switching away preserves the already loaded in-memory section state for the session.
+- Series episode maps are authoritative; season metadata is optional decoration.
+- Embedded subtitles come from mpv's `track-list`. Arbitrary provider sidecar subtitle URLs are not followed or persisted.
 
 ## Persistence Model
 
@@ -123,23 +144,25 @@ Key persisted buckets:
 - manual EPG mappings
 - playback session
 - saved volume
+- automatic-resume presentation mode
+- source-scoped hidden Movies and TV Shows category IDs
 
 Playback session details:
 
 - Current playback selection is tracked separately from the startup resume target.
-- The startup resume target is updated only when a channel is sent fullscreen.
-- Startup restore should bring back both the saved channel and fullscreen mode when the saved resume target was captured from fullscreen playback.
+- Any successfully playing channel can become the startup resume target.
+- Startup presentation is not inferred from playback history. The separate General preference is authoritative and defaults to fullscreen.
 - Startup restore must be a one-shot launch behavior. After launch completes, manual fullscreen enter and exit should never be overridden by the startup restore flow.
+- Startup resume uses generation and fullscreen-revision guards so delayed native operations cannot override a newer manual playback or window action.
 
 ## Startup Flow
 
-1. Hydrate persistent frontend state.
-2. Restore Xtream passwords and remote M3U/EPG URLs from the OS keyring into live in-memory state; independent keyring failures do not block other records.
-3. Load cached playlist snapshot immediately if available.
-4. If the active saved source exists, refresh it in the background or foreground depending on cache availability.
-5. Load cached EPG directories.
-6. Refresh enabled EPG sources on startup if configured.
-7. Resume the saved fullscreen startup channel once the active source and player are ready.
+1. Hydrate the playback-critical persisted state: saved sources, active source, playback target, volume, resume preference, playlist snapshot, and compact selection.
+2. Start all saved-source credential reads, but release playback startup as soon as the active source credential has settled; unrelated source credentials finish in the background.
+3. Load the credential-free cached playlist snapshot immediately. A validated Xtream descriptor is playable after active credential hydration, while a remote M3U cache remains intentionally display-only until refresh.
+4. Reconcile native fullscreen state explicitly with the General preference and issue the one-shot resume command for the exact cached target channel when materializable.
+5. Refresh the active source catalog in the background when a playable cache exists; wait for refresh only when the requested target cannot be reconstructed safely.
+6. Hydrate EPG credentials, load cached EPG directories, and refresh configured EPG sources independently of playback startup.
 
 ## Build And Release Files
 
@@ -155,7 +178,7 @@ When shipping a new version:
 
 - bump package/package-lock, Cargo/Cargo.lock, Tauri, and release-helper versions together
 - update `CHANGELOG.md`
-- add a new `RELEASE_NOTES_vX.Y.Z.md`
+- add a dated changelog section; tagged release automation extracts it as the curated public release notes
 - verify pinned toolchains and native provenance
 - run frontend/Rust checks before packaging
 - build and smoke-test the Tauri release bundle; do not describe a release as complete until packaging, smoke testing, and final review are actually complete
@@ -177,8 +200,8 @@ For release work, also run:
 ## Implementation Guardrails
 
 - Keep the app responsive with large libraries.
-- Preserve the live-TV-first design and avoid feature creep into VOD by default.
+- Preserve the live-TV-first startup/resume path; VOD work must remain isolated, lazy, bounded, and credential-free at rest.
 - Do not store Xtream passwords or remote M3U/EPG URLs in plaintext JSON, cache identifiers, logs, or diagnostics.
 - Keep npm and `package-lock.json` authoritative; do not add another JavaScript lockfile.
 - Do not break the transparent window/background requirement for native playback.
-- If changing startup playback, verify the fullscreen-only resume rule still holds.
+- If changing startup playback, verify both configured resume modes, exact-target cache readiness, active-source-first credential hydration, stale fullscreen probes, and cancellation by newer manual playback actions.

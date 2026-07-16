@@ -14,7 +14,7 @@ Start from a clean, synchronized `main` branch:
 ```powershell
 git switch main
 git pull --ff-only origin main
-python scripts/set-release-version.py 0.5.11
+python scripts/set-release-version.py 0.6.0
 ```
 
 The version script updates and verifies:
@@ -27,7 +27,7 @@ The version script updates and verifies:
 
 Add a dated `## vX.Y.Z` section at the top of `CHANGELOG.md`. The tagged release workflow extracts that exact section as the public GitHub release notes and fails closed if it is missing or empty.
 
-Store package versions are generated automatically as `(SemVer major + 1).minor.patch.0`. For example, Onyx `0.5.11` becomes Store package `1.5.11.0`.
+Store package versions are generated automatically as `(SemVer major + 1).minor.patch.0`. For example, Onyx `0.6.0` becomes Store package `1.6.0.0`.
 
 ## 2. Validate the candidate
 
@@ -37,7 +37,7 @@ Run the focused metadata and source gates:
 python scripts/test-verify-release-version.py
 python scripts/test-set-release-version.py
 python scripts/test-extract-changelog.py
-python scripts/verify-release-version.py 0.5.11
+python scripts/verify-release-version.py 0.6.0
 npm ci
 npm test
 npm run check
@@ -66,7 +66,7 @@ Commit the version, changelog, and application changes, then push `main`. Wait f
 ```powershell
 git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json CHANGELOG.md
 # Add the actual source/test files for the release as appropriate.
-git commit -m "release: prepare Onyx v0.5.11"
+git commit -m "release: prepare Onyx v0.6.0"
 git push origin main
 ```
 
@@ -75,8 +75,8 @@ git push origin main
 Create an annotated, immutable tag only after branch CI passes:
 
 ```powershell
-git tag -a v0.5.11 -m "Onyx v0.5.11"
-git push origin v0.5.11
+git tag -a v0.6.0 -m "Onyx v0.6.0"
+git push origin v0.6.0
 ```
 
 The **Windows release artifacts** workflow then:

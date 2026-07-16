@@ -12,11 +12,8 @@ import {
   type EpgResolvedGuide,
 } from "../domain/epg";
 import type { Channel } from "../domain/iptv";
-import type { NavigationSection } from "./ChannelSidebar";
 
 interface ChannelShelfProps {
-  navigationSection: NavigationSection;
-  isSidebarVisible: boolean;
   preview: ReactNode;
   activeGroupLabel: string | null;
   playlistName: string | null;
@@ -167,8 +164,6 @@ function buildGuideSegments(
 }
 
 export function ChannelShelf({
-  navigationSection,
-  isSidebarVisible,
   preview,
   activeGroupLabel,
   playlistName,
@@ -264,7 +259,7 @@ export function ChannelShelf({
       window.cancelAnimationFrame(settledFrameId);
       window.clearTimeout(settledLayoutTimerId);
     };
-  }, [channels, isSidebarVisible, navigationSection, scrollPositionKey, scrollPositionRef]);
+  }, [channels, scrollPositionKey, scrollPositionRef]);
 
   function handleListScroll(event: UIEvent<HTMLDivElement>) {
     scrollPositionRef.current = {
@@ -298,19 +293,15 @@ export function ChannelShelf({
   }
 
   return (
-    <section
-      className={`channel-shelf ${
-        isSidebarVisible ? "channel-shelf--sidebar-visible" : "channel-shelf--guide-focused"
-      }`}
-    >
-      <div className={`guide-hero ${isSidebarVisible ? "guide-hero--with-sidebar" : ""}`}>
-        <div className={`guide-hero__preview ${isSidebarVisible ? "guide-hero__preview--with-sidebar" : ""}`}>
+    <section className="channel-shelf channel-shelf--sidebar-visible">
+      <div className="guide-hero guide-hero--with-sidebar">
+        <div className="guide-hero__preview guide-hero__preview--with-sidebar">
           {preview}
         </div>
 
         <div className="guide-hero__details">
           <span className="channel-shelf__eyebrow">
-            {navigationSection === "search" ? "Search" : activeGroupLabel ?? "Live TV"}
+            {searchQuery.trim().length > 0 ? "Search" : activeGroupLabel ?? "Live TV"}
           </span>
           <h3>{selectedCurrentProgramme?.title ?? selectedChannel?.name ?? "Select a channel"}</h3>
           <div className="guide-hero__meta">
@@ -368,16 +359,11 @@ export function ChannelShelf({
             <strong>No channels available</strong>
             <span>Load a source from Settings to build the live TV guide.</span>
           </div>
-        ) : navigationSection === "search" && searchQuery.trim().length === 0 ? (
-          <div className="empty-state guide-grid__empty">
-            <strong>Start typing to search</strong>
-            <span>The live guide will narrow down as you search for channels.</span>
-          </div>
         ) : channels.length === 0 ? (
           <div className="empty-state guide-grid__empty">
             <strong>No channels match this view</strong>
             <span>
-              {navigationSection === "search"
+              {searchQuery.trim().length > 0
                 ? "Try a different search term."
                 : "Choose another group or add favorites from the channel context menu."}
             </span>

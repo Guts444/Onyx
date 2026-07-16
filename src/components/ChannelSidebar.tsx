@@ -1,11 +1,8 @@
 import { useEffect, useRef } from "react";
-import type { Channel } from "../domain/iptv";
-
-export type NavigationSection = "search" | "tv";
+import type { VodNavigationState } from "../domain/vod";
 
 interface ChannelSidebarProps {
-  showRail: boolean;
-  navigationSection: NavigationSection;
+  activeSection: "live" | "movies" | "series";
   playlistName: string | null;
   enabledGroups: string[];
   isAllChannelsActive: boolean;
@@ -15,29 +12,48 @@ interface ChannelSidebarProps {
   allChannelCount: number;
   channelCountByGroup: Record<string, number>;
   searchQuery: string;
-  searchResults: Channel[];
-  selectedChannelId: string | null;
-  favoriteIdSet: Set<string>;
   message: string | null;
-  onSelectNavigationSection: (section: NavigationSection) => void;
+  vodNavigation: VodNavigationState | null;
+  vodSourceName: string | null;
   onSearchChange: (value: string) => void;
-  onSelectChannel: (channel: Channel) => void;
   onSelectAllChannels: () => void;
   onSelectFavorites: () => void;
   onSelectGroup: (group: string) => void;
+  onSelectSection: (section: "live" | "movies" | "series") => void;
+  onVodSearchChange: (value: string) => void;
+  onSelectVodCategory: (categoryId: string) => void;
+  onOpenUserGuide: () => void;
   onOpenSettings: () => void;
 }
 
 interface SidebarIconProps {
-  type: "search" | "tv" | "settings";
+  type: "tv" | "movie" | "series" | "guide" | "settings";
 }
 
 function SidebarIcon({ type }: SidebarIconProps) {
-  if (type === "search") {
+  if (type === "movie") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="11" cy="11" r="5.5" fill="none" stroke="currentColor" strokeWidth="2" />
-        <path d="M15.5 15.5 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        <path d="m8 5 2.5 4M14 5l2.5 4M3.5 9h17" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        <path d="m10 12 5 2.5-5 2.5v-5Z" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  if (type === "series") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="6" width="18" height="13" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        <path d="m9 3 3 3 3-3M7 10h7M7 14h5M17.5 11v3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (type === "guide") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 4.5h10.5A3.5 3.5 0 0 1 19 8v11.5H8.5A3.5 3.5 0 0 1 5 16V4.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        <path d="M8.5 19.5A3.5 3.5 0 0 1 12 16h7M9 8h6M9 11.5h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       </svg>
     );
   }
@@ -67,8 +83,7 @@ function SidebarIcon({ type }: SidebarIconProps) {
 }
 
 export function ChannelSidebar({
-  showRail,
-  navigationSection,
+  activeSection,
   playlistName,
   enabledGroups,
   isAllChannelsActive,
@@ -78,53 +93,69 @@ export function ChannelSidebar({
   allChannelCount,
   channelCountByGroup,
   searchQuery,
-  searchResults,
-  selectedChannelId,
-  favoriteIdSet,
   message,
-  onSelectNavigationSection,
+  vodNavigation,
+  vodSourceName,
   onSearchChange,
-  onSelectChannel,
   onSelectAllChannels,
   onSelectFavorites,
   onSelectGroup,
+  onSelectSection,
+  onVodSearchChange,
+  onSelectVodCategory,
+  onOpenUserGuide,
   onOpenSettings,
 }: ChannelSidebarProps) {
   const hasPlaylist = playlistName !== null;
   const activeGroupRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    if (navigationSection !== "tv" || !activeGroup) return undefined;
+    const activeNavigationId = activeSection === "live" ? activeGroup : vodNavigation?.activeCategoryId;
+    if (!activeNavigationId) return undefined;
     const frameId = window.requestAnimationFrame(() => {
       activeGroupRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [activeGroup, navigationSection]);
+  }, [activeGroup, activeSection, vodNavigation?.activeCategoryId]);
 
   return (
-    <aside className={`panel sidebar ${showRail ? "" : "sidebar--groups-only"}`}>
-      {showRail ? (
-        <nav className="sidebar__rail" aria-label="Primary navigation">
+    <aside className="panel sidebar">
+      <nav className="sidebar__rail" aria-label="Primary navigation">
           <button
             type="button"
-            className={`sidebar__rail-button ${
-              navigationSection === "search" ? "sidebar__rail-button--active" : ""
-            }`}
-            onClick={() => onSelectNavigationSection("search")}
+            className={`sidebar__rail-button sidebar__rail-current ${activeSection === "live" ? "sidebar__rail-button--active" : ""}`}
+            aria-current={activeSection === "live" ? "page" : undefined}
+            onClick={() => onSelectSection("live")}
           >
-            <SidebarIcon type="search" />
-            <span>Search</span>
+            <SidebarIcon type="tv" />
+            <span>Live TV</span>
           </button>
 
           <button
             type="button"
-            className={`sidebar__rail-button ${
-              navigationSection === "tv" ? "sidebar__rail-button--active" : ""
-            }`}
-            onClick={() => onSelectNavigationSection("tv")}
+            className={`sidebar__rail-button ${activeSection === "movies" ? "sidebar__rail-button--active" : ""}`}
+            aria-current={activeSection === "movies" ? "page" : undefined}
+            onClick={() => onSelectSection("movies")}
           >
-            <SidebarIcon type="tv" />
-            <span>Live TV</span>
+            <SidebarIcon type="movie" />
+            <span>Movies</span>
+          </button>
+
+          <button
+            type="button"
+            className={`sidebar__rail-button ${activeSection === "series" ? "sidebar__rail-button--active" : ""}`}
+            aria-current={activeSection === "series" ? "page" : undefined}
+            onClick={() => onSelectSection("series")}
+          >
+            <SidebarIcon type="series" />
+            <span>TV Shows</span>
+          </button>
+
+          <div className="sidebar__rail-spacer" />
+
+          <button type="button" className="sidebar__rail-button" onClick={onOpenUserGuide}>
+            <SidebarIcon type="guide" />
+            <span>User Guide</span>
           </button>
 
           <button
@@ -135,72 +166,10 @@ export function ChannelSidebar({
             <SidebarIcon type="settings" />
             <span>Settings</span>
           </button>
-        </nav>
-      ) : null}
+      </nav>
 
       <div className="sidebar__panel">
-        {navigationSection === "search" ? (
-          <div className="sidebar__section">
-            <header className="sidebar__section-header">
-              <span className="sidebar__eyebrow">Search</span>
-              <h2>Find channels</h2>
-              <p>
-                {hasPlaylist
-                  ? "Search across the loaded source, then jump straight into the guide."
-                  : "Load a source first, then search for channels here."}
-              </p>
-            </header>
-
-            {hasPlaylist ? (
-              <label className="sidebar__search-field">
-                <span className="sidebar__search-label">Channel search</span>
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(event) => onSearchChange(event.currentTarget.value)}
-                  placeholder="Search all channels"
-                />
-              </label>
-            ) : null}
-
-            {!hasPlaylist ? (
-              <div className="empty-state">
-                <strong>No source loaded</strong>
-                <span>Open Settings to add an M3U or Xtream source, then return here to search.</span>
-              </div>
-            ) : searchQuery.trim().length === 0 ? (
-              <div className="empty-state">
-                <strong>Type to search</strong>
-                <span>Results update as you type so you can jump straight into the guide.</span>
-              </div>
-            ) : searchResults.length === 0 ? (
-              <div className="empty-state">
-                <strong>No channels match this search</strong>
-                <span>Try a different channel name, provider label, or a shorter search term.</span>
-              </div>
-            ) : (
-              <div className="sidebar__result-list">
-                {searchResults.map((channel) => {
-                  const isSelected = selectedChannelId === channel.id;
-                  const isFavorite = favoriteIdSet.has(channel.id);
-
-                  return (
-                    <button
-                      key={channel.id}
-                      type="button"
-                      className={`sidebar__result-card ${isSelected ? "sidebar__result-card--active" : ""}`}
-                      onClick={() => onSelectChannel(channel)}
-                    >
-                      <span className="sidebar__result-name">{channel.name}</span>
-                      <span className="sidebar__result-meta">{channel.group}</span>
-                      {isFavorite ? <span className="tag">Favorite</span> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        ) : (
+        {activeSection === "live" ? (
           <div className="sidebar__section">
             <header className="sidebar__section-header">
               <span className="sidebar__eyebrow">Live TV</span>
@@ -211,6 +180,18 @@ export function ChannelSidebar({
                   : "Open Settings to add a source and start browsing live channels."}
               </p>
             </header>
+
+            {hasPlaylist ? (
+              <label className="sidebar__search-field">
+                <span className="sidebar__search-label">Search channels</span>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => onSearchChange(event.currentTarget.value)}
+                  placeholder="Search all channels"
+                />
+              </label>
+            ) : null}
 
             {!hasPlaylist ? (
               <div className="empty-state">
@@ -259,6 +240,59 @@ export function ChannelSidebar({
                     </button>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+        ) : (
+          <div className="sidebar__section">
+            <header className="sidebar__section-header">
+              <span className="sidebar__eyebrow">On Demand</span>
+              <h2>{vodSourceName ?? (activeSection === "movies" ? "Movies" : "TV Shows")}</h2>
+              <p>
+                {vodNavigation?.categories.length ?? 0} groups available. Catalogs load one group at a time.
+              </p>
+            </header>
+
+            <label className="sidebar__search-field">
+              <span className="sidebar__search-label">Search {activeSection === "movies" ? "movies" : "TV shows"}</span>
+              <input
+                type="search"
+                value={vodNavigation?.searchQuery ?? ""}
+                onChange={(event) => onVodSearchChange(event.currentTarget.value)}
+                placeholder="Search this group"
+                disabled={!vodNavigation?.activeCategoryId}
+              />
+            </label>
+
+            {vodNavigation?.loadingCategories ? (
+              <div className="empty-state"><strong>Loading groups…</strong></div>
+            ) : vodNavigation && vodNavigation.categories.length > 0 ? (
+              <div className="sidebar__group-list">
+                {vodNavigation.categories.map((category) => {
+                  const isActive = category.id === vodNavigation.activeCategoryId;
+                  return (
+                    <button
+                      key={category.id}
+                      ref={isActive ? activeGroupRef : undefined}
+                      type="button"
+                      className={`sidebar__group-card ${isActive ? "sidebar__group-card--active" : ""}`}
+                      onClick={() => onSelectVodCategory(category.id)}
+                    >
+                      <span className="sidebar__group-name">{category.name}</span>
+                      <span className="sidebar__group-count">
+                        {isActive && vodNavigation.activeCatalogCount > 0
+                          ? `${vodNavigation.activeCatalogCount} titles`
+                          : activeSection === "movies" ? "Movie group" : "TV show group"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <strong>No visible groups</strong>
+                <span>Enable groups under Settings → Library.</span>
               </div>
             )}
           </div>

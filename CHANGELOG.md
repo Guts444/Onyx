@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.0 - 2026-07-16
+
+- **Simpler Live TV navigation**: The main menu, searchable group list, and TV guide now remain visible together; selecting a group no longer hides navigation, and Search is an in-place field above the groups instead of a separate menu destination.
+- **Built-in quick guide**: Added a User Guide button directly above Settings with current source, playback, EPG, and control instructions plus shortcuts into the relevant settings pages.
+- **Deterministic automatic resume**: Added **Settings > General** with fullscreen (default) and mini-player startup choices, and apply the selected presentation mode before resumed playback begins.
+- **Faster secured restart playback**: Credential-free Xtream channel descriptors can resume immediately after Credential Manager hydration while source and EPG refreshes continue in the background, avoiding the previous full-provider-refresh delay without persisting stream credentials.
+- **Xtream Movies and TV Shows**: Added lazy category-first VOD browsing with poster grids, rich movie/series details, season and episode selection, authenticated provider stream-origin discovery, and credential-safe playback materialization without putting large VOD catalogs on the Live TV startup path. Individual categories are capped at 20,000 valid titles with an explicit truncation notice.
+- **Consistent on-demand navigation**: Movies and TV Shows now use the same persistent sidebar pattern as Live TV, with title search above vertical provider groups instead of a horizontal category strip.
+- **Per-provider VOD libraries**: Added searchable Movies and TV Shows group management under **Settings > Library**, including independent enable/disable-all and per-group visibility choices that persist for each Xtream source.
+- **Fullscreen VOD transport**: Movies and episodes launch directly into fullscreen with idle-hiding controls, single-click pause/resume, double-click or **Quit** to return to preserved details, 30-second rewind/forward skips, timeline seeking, detected resolution, embedded subtitle selection, mute, and volume while automatic restart playback remains Live-TV-only.
+- **Native surface synchronization**: Fixed first-play and scroll-time races that could leave libmpv using whole-window or stale video margins behind the transparent UI.
+
 ## v0.5.10 - 2026-07-15
 
 - **Microsoft Store publication**: Onyx-IPTV is now publicly available through Microsoft Store with automatic Store-managed installation and updates.
