@@ -37,7 +37,7 @@ User guide: https://github.com/Guts444/Onyx/blob/main/docs/user-guide.md
 
 ## What's new
 
-Adds lazy Xtream Movies and TV Shows browsing with searchable vertical groups, per-provider group visibility settings, rich title and episode details, subtitles, and direct fullscreen playback. Also improves Live TV navigation, deterministic automatic resume, secured restart speed, and native video-surface reliability.
+Introduces an original Onyx app icon while retaining the updated in-app User Guide and the complete Movies, TV Shows, Live TV, library-management, fullscreen-control, and secured-resume improvements from the 0.6 release.
 
 ## Category
 

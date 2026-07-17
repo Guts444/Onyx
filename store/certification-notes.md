@@ -24,7 +24,8 @@ The playlist references Google's public Shaka Player demonstration HLS asset. It
 - Target: Windows 10/11 desktop x64.
 - WebView2 is expected to be present as a Windows system component.
 - Native playback uses `libmpv-2.dll`, `libmpv-wrapper.dll`, and a pinned Apache-2.0 Vulkan loader bundled beside `Onyx.exe`, plus the Store-delivered Microsoft Visual C++ desktop runtime framework.
-- Version 0.6.0 retains the self-contained native-player repair certified in 0.5.10 and adds optional Xtream Movies/TV Shows browsing. The public noncredentialed fixture above remains the certification path because Onyx does not provide third-party Xtream credentials or media.
+- Version 0.6.1 retains the self-contained native-player repair certified in 0.5.10 and the optional Xtream Movies/TV Shows browsing introduced in 0.6.0. The public noncredentialed fixture above remains the certification path because Onyx does not provide third-party Xtream credentials or media.
+- Every packaged application icon and Store tile is generated from the original Onyx black-gem play mark in `src-tauri/icons/icon-master.png`. The 0.6.1 package contains no Tauri logo or other third-party product imagery in its tile assets.
 - The `runFullTrust` restricted capability is required for this packaged Tauri desktop application and native libmpv playback.
 - Network access is used only for URLs and services configured by the user.
 - Remote playlist/guide URLs and Xtream passwords are stored in Windows Credential Manager.

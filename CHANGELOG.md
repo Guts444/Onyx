@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.1 - 2026-07-16
+
+- **Original Onyx identity**: Replaced every default Tauri application and Microsoft Store tile asset with an original black-onyx play-gem icon owned by the Onyx project.
+
 ## v0.6.0 - 2026-07-16
 
 - **Simpler Live TV navigation**: The main menu, searchable group list, and TV guide now remain visible together; selecting a group no longer hides navigation, and Search is an in-place field above the groups instead of a separate menu destination.
