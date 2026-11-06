@@ -329,10 +329,7 @@ async fn fetch_bytes_with_limit(
         .map_err(|error| format!("{failure_label}: {}", error.without_url()))?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "The request failed with HTTP {}.",
-            response.status()
-        ));
+        return Err(crate::http_status_message(response.status()));
     }
 
     if let Some(content_length) = response.content_length() {

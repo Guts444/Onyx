@@ -16,8 +16,8 @@ use serde_json::Value;
 use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime, State};
 use tokio_util::sync::CancellationToken;
 
-const MAX_PLAYLIST_BYTES: usize = 32 * 1024 * 1024;
-const MAX_XTREAM_BYTES: usize = 32 * 1024 * 1024;
+const MAX_PLAYLIST_BYTES: usize = 128 * 1024 * 1024;
+const MAX_XTREAM_BYTES: usize = 128 * 1024 * 1024;
 const MAX_VOD_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 const CONNECT_TIMEOUT_SECS: u64 = 15;
 const READ_TIMEOUT_SECS: u64 = 45;
@@ -456,6 +456,29 @@ fn normalize_xtream_domain_input(raw_input: &str) -> Result<Url, String> {
     Ok(parsed_url)
 }
 
+fn import_limit_message(byte_limit: usize) -> String {
+    format!(
+        "The response is larger than the {} MB import limit.",
+        byte_limit / (1024 * 1024)
+    )
+}
+
+/// Formats a non-success HTTP status for users. `StatusCode`'s `Display` prints
+/// `884 <unknown status code>` for codes outside the standard set, which is
+/// library text; use the bare number in that case.
+pub(crate) fn http_status_message(status: reqwest::StatusCode) -> String {
+    match status.canonical_reason() {
+        Some(_) => format!("The request failed with HTTP {status}."),
+        None => format!("The request failed with HTTP status {}.", status.as_u16()),
+    }
+}
+
+fn is_xtream_login_url(url: &Url) -> bool {
+    url.path().ends_with("get.php")
+        && url.query_pairs().any(|(key, _)| key == "username")
+        && url.query_pairs().any(|(key, _)| key == "password")
+}
+
 async fn fetch_text_with_limit(
     client: &Client,
     url: Url,
@@ -469,15 +492,12 @@ async fn fetch_text_with_limit(
         .map_err(|error| format!("{failure_label}: {}", error.without_url()))?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "The request failed with HTTP {}.",
-            response.status()
-        ));
+        return Err(http_status_message(response.status()));
     }
 
     if let Some(content_length) = response.content_length() {
         if content_length > byte_limit as u64 {
-            return Err("The response is too large to import safely.".to_string());
+            return Err(import_limit_message(byte_limit));
         }
     }
 
@@ -490,7 +510,7 @@ async fn fetch_text_with_limit(
         )
     })? {
         if body.len() + chunk.len() > byte_limit {
-            return Err("The response is too large to import safely.".to_string());
+            return Err(import_limit_message(byte_limit));
         }
 
         body.extend_from_slice(&chunk);
@@ -659,6 +679,13 @@ where
 async fn fetch_playlist_from_url_inner(url: String) -> Result<String, String> {
     let normalized_url = normalize_playlist_url_input(&url)?;
     let client = build_http_client()?;
+    // A refused M3U export from an Xtream provider is the same dead end as an
+    // empty one, so both point at the login path.
+    let xtream_hint = if is_xtream_login_url(&normalized_url) {
+        " The provider may support Xtream login instead of the M3U export."
+    } else {
+        ""
+    };
 
     match fetch_text_with_limit(
         &client,
@@ -670,20 +697,12 @@ async fn fetch_playlist_from_url_inner(url: String) -> Result<String, String> {
     {
         Ok(playlist_text) => Ok(playlist_text),
         Err(error) if error == "The server returned an empty response." => {
-            let hint = if normalized_url.path().ends_with("get.php")
-                && normalized_url
-                    .query_pairs()
-                    .any(|(key, _)| key == "username")
-                && normalized_url
-                    .query_pairs()
-                    .any(|(key, _)| key == "password")
-            {
-                " The provider may support Xtream login even when the M3U export is empty."
-            } else {
-                ""
-            };
-
-            Err(format!("The URL returned an empty playlist.{hint}"))
+            Err(format!("The URL returned an empty playlist.{xtream_hint}"))
+        }
+        Err(error)
+            if !xtream_hint.is_empty() && error.starts_with("The request failed with HTTP") =>
+        {
+            Err(format!("{error}{xtream_hint}"))
         }
         Err(error) => Err(error),
     }
@@ -1096,12 +1115,12 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_xtream_stream, scrub_saved_source_secrets, validate_epg_url_for_storage,
-        validate_m3u_url_for_storage, XtreamChannelPayload, EPG_URL_SECRET_SERVICE,
-        EPG_URL_SECRET_SERVICE_DEV, EPG_URL_SECRET_SERVICE_PROD, INVALID_M3U_URL_MESSAGE,
-        M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_DEV, M3U_URL_SECRET_SERVICE_PROD,
-        UNSUPPORTED_M3U_URL_SCHEME_MESSAGE, XTREAM_SECRET_SERVICE, XTREAM_SECRET_SERVICE_DEV,
-        XTREAM_SECRET_SERVICE_PROD,
+        choose_xtream_stream, http_status_message, is_xtream_login_url, scrub_saved_source_secrets,
+        validate_epg_url_for_storage, validate_m3u_url_for_storage, XtreamChannelPayload,
+        EPG_URL_SECRET_SERVICE, EPG_URL_SECRET_SERVICE_DEV, EPG_URL_SECRET_SERVICE_PROD,
+        INVALID_M3U_URL_MESSAGE, M3U_URL_SECRET_SERVICE, M3U_URL_SECRET_SERVICE_DEV,
+        M3U_URL_SECRET_SERVICE_PROD, UNSUPPORTED_M3U_URL_SCHEME_MESSAGE, XTREAM_SECRET_SERVICE,
+        XTREAM_SECRET_SERVICE_DEV, XTREAM_SECRET_SERVICE_PROD,
     };
     use std::{
         io::{Read, Write},
@@ -1109,6 +1128,33 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn http_status_message_uses_library_text_only_for_known_codes() {
+        assert_eq!(
+            http_status_message(reqwest::StatusCode::FORBIDDEN),
+            "The request failed with HTTP 403 Forbidden."
+        );
+        let unknown = reqwest::StatusCode::from_u16(884).unwrap();
+        assert_eq!(
+            http_status_message(unknown),
+            "The request failed with HTTP status 884."
+        );
+    }
+
+    #[test]
+    fn xtream_login_hint_matches_only_get_php_with_credentials() {
+        let parse = |value: &str| reqwest::Url::parse(value).unwrap();
+        assert!(is_xtream_login_url(&parse(
+            "http://example.test/get.php?username=u&password=p&type=m3u_plus"
+        )));
+        assert!(!is_xtream_login_url(&parse(
+            "http://example.test/get.php?username=u&type=m3u_plus"
+        )));
+        assert!(!is_xtream_login_url(&parse(
+            "http://example.test/playlist.m3u?username=u&password=p"
+        )));
+    }
 
     fn test_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
