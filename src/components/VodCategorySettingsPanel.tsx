@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SavedXtreamSource } from "../domain/sourceProfiles";
 import type { VodCategory, VodKind } from "../domain/vod";
-import { redactCredentials } from "../features/playlist/redaction";
+import { getErrorMessage } from "../features/errors/messages";
 import {
   cancelVodOperation,
   createVodOperationId,
@@ -57,7 +57,7 @@ export function VodCategorySettingsPanel({
       })
       .catch((reason) => {
         if (!cancelled) {
-          setError(redactCredentials(reason instanceof Error ? reason.message : String(reason)));
+          setError(getErrorMessage(reason, "The provider categories could not be loaded."));
         }
       })
       .finally(() => {

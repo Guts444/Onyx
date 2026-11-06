@@ -13,7 +13,7 @@ import type {
   VodNavigationState,
   VodPlaybackItem,
 } from "../domain/vod";
-import { redactCredentials } from "../features/playlist/redaction";
+import { getErrorMessage } from "../features/errors/messages";
 import {
   cancelVodOperation,
   createVodOperationId,
@@ -35,10 +35,6 @@ interface VodBrowserProps {
 }
 
 const PAGE_SIZE = 72;
-
-function getErrorMessage(error: unknown) {
-  return redactCredentials(error instanceof Error ? error.message : String(error));
-}
 
 function formatDuration(seconds: number | null) {
   if (seconds === null || !Number.isFinite(seconds)) return null;
@@ -114,7 +110,7 @@ export function VodBrowser({
         });
       })
       .catch((error) => {
-        if (!cancelled) setCatalogError(getErrorMessage(error));
+        if (!cancelled) setCatalogError(getErrorMessage(error, "The provider catalog could not be loaded."));
       })
       .finally(() => {
         if (!cancelled) onNavigationChange({ loadingCategories: false });
@@ -162,7 +158,7 @@ export function VodBrowser({
         }
       })
       .catch((error) => {
-        if (!cancelled) setCatalogError(getErrorMessage(error));
+        if (!cancelled) setCatalogError(getErrorMessage(error, "The provider catalog could not be loaded."));
       })
       .finally(() => {
         if (!cancelled) setLoadingCatalog(false);
@@ -191,7 +187,7 @@ export function VodBrowser({
         setSeasonNumber(nextDetails.seasons[0]?.number ?? null);
       })
       .catch((error) => {
-        if (!cancelled) setDetailsError(getErrorMessage(error));
+        if (!cancelled) setDetailsError(getErrorMessage(error, "The title details could not be loaded."));
       })
       .finally(() => {
         if (!cancelled) setDetailsLoading(false);

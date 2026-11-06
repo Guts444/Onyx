@@ -12,6 +12,7 @@ import {
 } from "tauri-plugin-libmpv-api";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { Channel } from "../../domain/iptv";
+import { getErrorMessage } from "../errors/messages";
 import { redactCredentials } from "../playlist/redaction";
 import { calculateVideoMarginRatio } from "./layout";
 import { clampSeekPosition, parseSubtitleTracks, type SubtitleTrack } from "./media";
@@ -103,19 +104,13 @@ function getMarginRatio(surface: HTMLElement) {
 }
 
 function describeInitError(error: unknown) {
-  const message = redactCredentials(
-    error instanceof Error ? error.message : "Unknown initialization error.",
-  );
+  const message = getErrorMessage(error, "Unknown initialization error.");
 
   return `libmpv could not start. Review the mpv dependency setup, then place libmpv-wrapper.dll and libmpv-2.dll in src-tauri/lib/. Original error: ${message}`;
 }
 
 function describeCommandError(error: unknown) {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return redactCredentials(error.message.trim());
-  }
-
-  return "The player command failed.";
+  return getErrorMessage(error, "The player command failed.");
 }
 
 export function useMpvPlayer(
