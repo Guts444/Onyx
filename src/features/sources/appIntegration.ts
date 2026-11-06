@@ -57,6 +57,7 @@ export function migrateStartupPlaybackSession<T extends PlaybackSessionChannelRe
 
 export type StartupSourceRefreshResult = "pending" | "succeeded" | "failed";
 export type StartupResumeReadiness = "ready" | "wait-for-refresh" | "unavailable";
+export type StartupResumeOutcome = "resume" | "keep-intent" | "clear-intent";
 
 export function resolveStartupResumeReadiness(
   resumeSourceId: string | null,
@@ -67,6 +68,22 @@ export function resolveStartupResumeReadiness(
     return "ready";
   }
   return refreshResult === "pending" ? "wait-for-refresh" : "unavailable";
+}
+
+/**
+ * Decides what happens to a stored resume intent once startup restore has run
+ * out of ways to play it. A refresh that failed or was cancelled must never
+ * erase the intent: the next successful launch should still resume. Only a
+ * channel that no longer exists clears it.
+ */
+export function resolveStartupResumeOutcome(input: {
+  readiness: StartupResumeReadiness;
+  channelAvailable: boolean;
+}): StartupResumeOutcome {
+  if (input.readiness !== "ready") {
+    return "keep-intent";
+  }
+  return input.channelAvailable ? "resume" : "clear-intent";
 }
 
 export function createStartupSourceRestoreState() {
@@ -93,6 +110,17 @@ export function createStartupSourceRestoreState() {
       if (pendingRevision === revision) {
         pendingRevision = null;
       }
+    },
+    /**
+     * Records a revision as handled without a startup refresh, so a manual
+     * load does not trigger the startup effect to download the same source a
+     * second time.
+     */
+    markAttempted(revision: string) {
+      if (pendingRevision === revision) {
+        pendingRevision = null;
+      }
+      attemptedRevisions.add(revision);
     },
     hasPending(revision: string) {
       return pendingRevision === revision;

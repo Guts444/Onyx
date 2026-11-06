@@ -7,9 +7,138 @@ import type {
 } from "../../domain/sourceProfiles";
 import { buildLegacyChannelIdMap, migrateChannelId } from "./migration.ts";
 import { redactCredentials } from "./redaction.ts";
+import { throwIfAborted, yieldToEventLoop } from "./cooperative.ts";
+
 
 export const DISPLAY_ONLY_ERROR = "Refresh this saved source before playback.";
 const MAX_SELECTION_FIELD_LENGTH = 512;
+const ASCII_ONLY = /^[\u0000-\u007F]*$/;
+
+/**
+ * Policy ceiling for what Onyx is willing to persist as a playlist snapshot.
+ * It sits below the Rust key limit (see `persistence.rs`) with margin, because
+ * the estimate is not the exact serialization. Above it the library still
+ * loads and runs for the session, but it is deliberately not cached.
+ */
+export const MAX_PERSISTED_SNAPSHOT_BYTES = 40 * 1024 * 1024;
+const SNAPSHOT_ENVELOPE_HEADROOM_BYTES = 4096;
+
+function utf8ByteLength(value: string) {
+  if (ASCII_ONLY.test(value)) {
+    return value.length;
+  }
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      // A high surrogate pairs with the next code unit into one 4-byte scalar.
+      bytes += 4;
+      index += 1;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * JSON size estimate. It adds one comma per object/array entry and counts
+ * strings as UTF-8 bytes plus quotes, so it tracks `JSON.stringify(...).length`
+ * without materializing the multi-hundred-megabyte string. It does not account
+ * for JSON escapes: a quote, a backslash or a control character costs one to
+ * five extra bytes each, so a string-dense snapshot can come out slightly low.
+ * The persistence policy ceiling sits well under the Rust snapshot cap to
+ * absorb that gap.
+ */
+function jsonByteEstimate(value: unknown): number {
+  if (typeof value === "string") return utf8ByteLength(value) + 2;
+  if (typeof value === "number" || typeof value === "boolean") return String(value).length;
+  if (value === null || value === undefined) return 4;
+  if (Array.isArray(value)) {
+    let total = 2;
+    for (let index = 0; index < value.length; index += 1) total += jsonByteEstimate(value[index]) + 1;
+    return total;
+  }
+  if (typeof value === "object") {
+    let total = 2;
+    for (const key in value as Record<string, unknown>) {
+      total += utf8ByteLength(key) + 3 + jsonByteEstimate((value as Record<string, unknown>)[key]) + 1;
+    }
+    return total;
+  }
+  return 0;
+}
+
+export function estimateSerializedSnapshotBytes(snapshot: PlaylistCacheSnapshot) {
+  return SNAPSHOT_ENVELOPE_HEADROOM_BYTES + jsonByteEstimate(snapshot);
+}
+
+export function isSnapshotWithinPersistLimit(
+  snapshot: PlaylistCacheSnapshot,
+  limit = MAX_PERSISTED_SNAPSHOT_BYTES,
+) {
+  return estimateSerializedSnapshotBytes(snapshot) <= limit;
+}
+
+/**
+ * The stored stand-in for a library too large to cache. It keeps the identity
+ * (`cacheId`, `sourceId`, `savedAt`) so selection and deletion keep working,
+ * and carries no channels, so nothing stale can be restored as a library.
+ */
+export function createPlaceholderPlaylistSnapshot(snapshot: PlaylistCacheSnapshot): PlaylistCacheSnapshot {
+  return {
+    version: 1,
+    cacheId: snapshot.cacheId,
+    sourceId: snapshot.sourceId,
+    playlist: {
+      name: snapshot.playlist.name,
+      channels: [],
+      groups: [],
+      importedAt: snapshot.playlist.importedAt,
+      disabledChannelCount: 0,
+      skippedEntryCount: 0,
+    },
+    savedAt: snapshot.savedAt,
+  };
+}
+
+/**
+ * The single storage policy for playlist snapshots. Every writer reaches this
+ * through the persistent-state serializer, so no path can push an oversized
+ * snapshot across IPC or onto disk.
+ */
+export function prepareSanitizedSnapshotForStorage(
+  sanitized: PlaylistCacheSnapshot,
+  limit = MAX_PERSISTED_SNAPSHOT_BYTES,
+) {
+  return isSnapshotWithinPersistLimit(sanitized, limit)
+    ? { snapshot: sanitized, persisted: true }
+    : { snapshot: createPlaceholderPlaylistSnapshot(sanitized), persisted: false };
+}
+
+export function preparePlaylistSnapshotForStorage(
+  snapshot: PlaylistCacheSnapshot,
+  limit = MAX_PERSISTED_SNAPSHOT_BYTES,
+) {
+  return prepareSanitizedSnapshotForStorage(sanitizePlaylistCacheSnapshot(snapshot), limit);
+}
+
+/**
+ * Cooperative variant for the import path: sanitize with progress and cancel,
+ * then apply the same storage policy the synchronous serializer enforces.
+ */
+export async function preparePlaylistSnapshotForStorageInChunks(
+  snapshot: PlaylistCacheSnapshot,
+  options: SnapshotSanitizeOptions = {},
+) {
+  const sanitized = await sanitizePlaylistCacheSnapshotInChunks(snapshot, options);
+  throwIfAborted(options.signal);
+  return prepareSanitizedSnapshotForStorage(sanitized);
+}
 
 export function isDisplayOnlyChannel(channel: Channel) {
   return channel.stream === null && channel.originalStream === null &&
@@ -116,6 +245,53 @@ export function revivePlaylistCacheSnapshot(value: unknown): PlaylistCacheSnapsh
   return cache;
 }
 
+interface SanitizedSnapshotHeader {
+  cacheId: string;
+  sourceId: string;
+  playlistName: string;
+  groups: string[];
+  importedAt: string;
+  skippedEntryCount: number;
+  savedAt: string;
+}
+
+function createSanitizedSnapshotHeader(snapshot: PlaylistCacheSnapshot): SanitizedSnapshotHeader {
+  return {
+    cacheId: metadata(snapshot.cacheId),
+    sourceId: metadata(snapshot.sourceId ?? ""),
+    playlistName: metadata(snapshot.playlist.name, "Channels"),
+    groups: Array.isArray(snapshot.playlist.groups)
+      ? snapshot.playlist.groups.map((group) => metadata(group))
+      : [],
+    importedAt: metadata(snapshot.playlist.importedAt),
+    skippedEntryCount: Number.isFinite(snapshot.playlist.skippedEntryCount)
+      ? snapshot.playlist.skippedEntryCount
+      : 0,
+    savedAt: metadata(snapshot.savedAt),
+  };
+}
+
+function createSanitizedSnapshot(
+  header: SanitizedSnapshotHeader,
+  channels: Channel[],
+  disabledChannelCount: number,
+): PlaylistCacheSnapshot {
+  return {
+    version: 1,
+    cacheId: header.cacheId,
+    sourceId: header.sourceId,
+    playlist: {
+      name: header.playlistName,
+      channels,
+      groups: header.groups,
+      importedAt: header.importedAt,
+      disabledChannelCount,
+      skippedEntryCount: header.skippedEntryCount,
+    },
+    savedAt: header.savedAt,
+  };
+}
+
 export function sanitizePlaylistCacheSnapshot(snapshot: PlaylistCacheSnapshot): PlaylistCacheSnapshot {
   if (snapshot.sourceId === null) {
     return {
@@ -128,28 +304,65 @@ export function sanitizePlaylistCacheSnapshot(snapshot: PlaylistCacheSnapshot): 
   }
 
   const channels = snapshot.playlist.channels.map(rebuildRemoteChannel);
-  return {
-    version: 1,
-    cacheId: metadata(snapshot.cacheId),
-    sourceId: metadata(snapshot.sourceId),
-    playlist: {
-      name: metadata(snapshot.playlist.name, "Channels"),
-      channels,
-      groups: Array.isArray(snapshot.playlist.groups)
-        ? snapshot.playlist.groups.map((group) => metadata(group))
-        : [],
-      importedAt: metadata(snapshot.playlist.importedAt),
-      disabledChannelCount: channels.filter((channel) => !channel.isPlayable).length,
-      skippedEntryCount: Number.isFinite(snapshot.playlist.skippedEntryCount)
-        ? snapshot.playlist.skippedEntryCount
-        : 0,
-    },
-    savedAt: metadata(snapshot.savedAt),
-  };
+  return createSanitizedSnapshot(
+    createSanitizedSnapshotHeader(snapshot),
+    channels,
+    channels.filter((channel) => !channel.isPlayable).length,
+  );
+}
+
+export interface SnapshotSanitizeOptions {
+  signal?: AbortSignal;
+  onProgress?: (fraction: number) => void;
+  sliceBudgetMs?: number;
+}
+
+/**
+ * Same sanitization, sliced so a library with hundreds of thousands of
+ * channels can be prepared with progress and a working cancel instead of one
+ * multi-second block. Local snapshots are already O(1) and delegate.
+ */
+export async function sanitizePlaylistCacheSnapshotInChunks(
+  snapshot: PlaylistCacheSnapshot,
+  options: SnapshotSanitizeOptions = {},
+): Promise<PlaylistCacheSnapshot> {
+  if (snapshot.sourceId === null) {
+    options.onProgress?.(1);
+    return sanitizePlaylistCacheSnapshot(snapshot);
+  }
+
+  const { signal, onProgress, sliceBudgetMs = 8 } = options;
+  const header = createSanitizedSnapshotHeader(snapshot);
+  const source = snapshot.playlist.channels;
+  const channels: Channel[] = [];
+  let disabledChannelCount = 0;
+  let index = 0;
+  let lastReported = 0;
+
+  while (index < source.length) {
+    const sliceStartedAt = performance.now();
+    do {
+      const channel = rebuildRemoteChannel(source[index]);
+      if (!channel.isPlayable) disabledChannelCount += 1;
+      channels.push(channel);
+      index += 1;
+    } while (index < source.length && performance.now() - sliceStartedAt < sliceBudgetMs);
+
+    const fraction = index / source.length;
+    if (onProgress && fraction - lastReported >= 0.02) {
+      lastReported = fraction;
+      onProgress(fraction);
+    }
+    throwIfAborted(signal);
+    await yieldToEventLoop();
+  }
+
+  onProgress?.(1);
+  return createSanitizedSnapshot(header, channels, disabledChannelCount);
 }
 
 export function serializePlaylistCacheSnapshot(snapshot: PlaylistCacheSnapshot | null) {
-  return snapshot === null ? null : sanitizePlaylistCacheSnapshot(snapshot);
+  return snapshot === null ? null : preparePlaylistSnapshotForStorage(snapshot).snapshot;
 }
 
 /** Compatibility wrapper for callers that still provide a pre-split snapshot shape. */
@@ -238,8 +451,14 @@ export function resolvePlaylistSelectionHydration(
   if (selectedChannelId === null && !userSelectionChanged) {
     const selectionMatches = persistedSelection?.cacheId === cache.cacheId &&
       persistedSelection.sourceId === cache.sourceId;
+    // A placeholder snapshot deliberately carries no channels, so membership
+    // cannot be checked. The persisted selection is the only record of the
+    // resume intent, and it is scoped to this exact cache, so it is kept.
+    const isPlaceholder = cache.playlist.channels.length === 0;
     selectedChannelId = selectionMatches
-      ? migrateValid(persistedSelection.selectedChannelId)
+      ? isPlaceholder && persistedSelection.selectedChannelId !== null
+        ? persistedSelection.selectedChannelId
+        : migrateValid(persistedSelection.selectedChannelId)
       : null;
     if (selectedChannelId === null && "legacySelectedChannelId" in cache) {
       selectedChannelId = migrateValid(cache.legacySelectedChannelId);

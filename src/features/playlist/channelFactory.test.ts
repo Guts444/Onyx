@@ -5,6 +5,7 @@ import {
   canonicalizeStreamIdentity,
   createLegacyChannelId,
   createLocalM3uSourceIdentity,
+  createLocalM3uSourceIdentityAsync,
   normalizeStreamReference,
 } from "./channelFactory.ts";
 import { sanitizePlaylistSnapshot } from "./snapshot.ts";
@@ -420,6 +421,25 @@ test("createLocalM3uSourceIdentity is content-aware and does not expose the file
   assert.notEqual(first, sameNameDifferentContent);
   assert.match(first, /^local-file_[0-9a-f]{64}$/);
   assert.equal(first.includes("Private Channels"), false);
+});
+
+test("the async local identity matches the sync identity for ASCII, Unicode and large text", async () => {
+  const large = `#EXTM3U\n${Array.from(
+    { length: 12_000 },
+    (_, index) => `#EXTINF:-1,Ch ${index}\nhttps://example.com/${index}.ts`,
+  ).join("\n")}`;
+  const cases: Array<[string, string]> = [
+    ["Private Channels.m3u", "#EXTM3U\nhttps://one"],
+    ["Canais Privados.m3u", "#EXTM3U\n#EXTINF:-1,Notícias 日本 — 24/7\nhttps://two"],
+    ["large.m3u", large],
+  ];
+
+  for (const [fileName, text] of cases) {
+    assert.equal(
+      await createLocalM3uSourceIdentityAsync(fileName, text),
+      createLocalM3uSourceIdentity(fileName, text),
+    );
+  }
 });
 
 test("createLegacyChannelId preserves the previous deterministic ID mapping", () => {

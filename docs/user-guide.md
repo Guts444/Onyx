@@ -12,7 +12,7 @@ Onyx is a Windows IPTV player for sources you already have. It does not provide 
 3. For a saved profile, enter its details, leave it enabled, and select **Load Now**.
 4. Open **Live TV**, optionally use the search field above the group list, select a group, then left-click a channel in the TV guide to start playback. Xtream sources can also expose **Movies** and **TV Shows** in the navigation rail.
 
-Onyx caches the loaded library locally. Enabled saved remote sources can refresh when the app starts.
+Onyx caches the loaded library locally. Enabled saved remote sources can refresh when the app starts. Very large libraries still load, but Onyx does not keep them between launches: a saved URL or Xtream source reloads from the provider at the next start, and an imported file must be imported again. Onyx says so when that happens.
 
 ## Navigation And Controls
 
@@ -111,6 +111,15 @@ You can collapse a saved source card by selecting its header. Disabling a profil
 
 Remote M3U URLs and Xtream passwords are stored through Windows Credential Manager rather than in Onyx's ordinary settings files.
 
+### Large playlists
+
+Onyx accepts playlists up to 128 MB, including provider exports that mix live channels with large on-demand catalogs. While a playlist downloads and parses, **Settings > Sources** shows what stage it is in and, once parsing starts, a percentage. Select **Cancel** on the importing or loading row to stop; the library you already had stays open.
+
+Playlists of roughly 100,000 channels or more are too large to keep between launches. They load normally and everything works for the session, but Onyx shows a notice when it happens:
+
+- a saved **M3U URL** or **Xtream** source reloads from the provider the next time Onyx starts;
+- an imported **.m3u file** has no saved source to reload, so import the file again.
+
 ## Hiding Or Restoring Groups
 
 Open **Settings > Library** after loading a source, then choose **Live TV**, **Movies**, or **TV Shows**.
@@ -153,6 +162,11 @@ To return to automatic matching, reopen the matcher and select **Clear Manual Ma
 - Confirm the source is current and the channel URL is still valid.
 - For a saved remote source, open **Settings > Sources** and select **Load Now**.
 - If only some channels fail, the source may contain unavailable or unsupported stream entries.
+
+### A source does not load
+
+- Onyx now shows the actual reason, for example `The request failed with HTTP 403.`, `The response is larger than the 128 MB import limit.`, or a connection or TLS failure. The message can be forwarded as-is; Onyx removes credentials and URLs from it.
+- For a saved profile, check the domain or URL in **Settings > Sources** and select **Load Now** again.
 
 ### The guide is empty or incorrect
 

@@ -12,8 +12,9 @@ use std::{
 
 /// Default app-state cap, including the version envelope.
 pub const MAX_STATE_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_PLAYLIST_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_PLAYLIST_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_PLAYLIST_SELECTION_BYTES: usize = 4 * 1024;
+pub const MAX_SOURCE_LIBRARY_INDEX_BYTES: usize = 48 * 1024 * 1024;
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MAX_KEY_BYTES: usize = 160;
 const ENVELOPE_MAGIC: &str = "onyx-app-state";
@@ -75,6 +76,10 @@ impl Store {
         match key {
             "iptv-player:playlist-snapshot" => MAX_PLAYLIST_SNAPSHOT_BYTES,
             "iptv-player:playlist-selection" => MAX_PLAYLIST_SELECTION_BYTES,
+            // The index tracks one id per channel for source cleanup. At the
+            // largest playlist the 128 MiB download cap allows (about 630,000
+            // channels at 213 bytes per entry) it needs about 46 MiB.
+            "iptv-player:source-library-index" => MAX_SOURCE_LIBRARY_INDEX_BYTES,
             _ => MAX_STATE_BYTES,
         }
     }
@@ -974,8 +979,9 @@ mod tests {
         let store = Store::new(directory.0.clone());
 
         for (key, maximum) in [
-            ("iptv-player:playlist-snapshot", 32 * 1024 * 1024),
+            ("iptv-player:playlist-snapshot", 64 * 1024 * 1024),
             ("iptv-player:playlist-selection", 4 * 1024),
+            ("iptv-player:source-library-index", 48 * 1024 * 1024),
             ("settings", MAX_STATE_BYTES),
         ] {
             store

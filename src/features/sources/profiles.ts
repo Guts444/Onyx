@@ -122,7 +122,9 @@ export function mergeSourceLibraryIndexEntry(
   }
 
   return {
-    channelIds: [...nextChannelIds].sort((left, right) => left.localeCompare(right)),
+    // Channel ids are ASCII hex, so code-unit order is stable and avoids the
+    // locale collator's cost on a set that can hold hundreds of thousands.
+    channelIds: [...nextChannelIds].sort(),
     playlistPreferenceKeys: [...nextPlaylistPreferenceKeys].sort((left, right) =>
       left.localeCompare(right),
     ),

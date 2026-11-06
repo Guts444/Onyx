@@ -6,9 +6,12 @@ import {
   createPlaylistCacheSnapshot,
   createPlaylistPersistenceCoordinator,
   createPlaylistSelectionState,
+  createPlaceholderPlaylistSnapshot,
+  estimateSerializedSnapshotBytes,
   isDisplayOnlyChannel,
   isChannelPlaybackReady,
   isPlaylistCachePlaybackReady,
+  preparePlaylistSnapshotForStorage,
   resolvePlaylistSelectionHydration,
   revivePlaylistCacheSnapshot,
   revivePlaylistSelectionState,
@@ -296,4 +299,64 @@ test("selection from another cache or source is rejected and rebound to the curr
     assert.equal(resolved.selectedChannelId, "a");
     assert.deepStrictEqual(resolved.selectionState, createPlaylistSelectionState(cache, "a"));
   }
+});
+
+test("the persisted snapshot size estimate never undercounts the real serialization", () => {
+  const encoder = new TextEncoder();
+  const cases = [snapshot("source_remote", remoteChannel), snapshot(null, remoteChannel)];
+  for (const value of cases) {
+    const sanitized = sanitizePlaylistCacheSnapshot(value);
+    const actual = encoder.encode(JSON.stringify(sanitized)).length;
+    const estimate = estimateSerializedSnapshotBytes(sanitized);
+    assert.ok(estimate >= actual, `estimate ${estimate} undercounts ${actual}`);
+    // The envelope headroom is a fixed 4 KiB, so the estimate stays within a
+    // bounded margin even for a single-channel fixture.
+    assert.ok(estimate - actual <= 8 * 1024, `estimate ${estimate} is too loose over ${actual}`);
+  }
+});
+
+test("a snapshot over the policy ceiling becomes a quiet identity-only placeholder", () => {
+  const value = snapshot("source_remote", remoteChannel);
+  const prepared = preparePlaylistSnapshotForStorage(value, 256);
+
+  assert.equal(prepared.persisted, false);
+  assert.equal(prepared.snapshot.cacheId, value.cacheId);
+  assert.equal(prepared.snapshot.sourceId, value.sourceId);
+  assert.equal(prepared.snapshot.savedAt, value.savedAt);
+  assert.equal(prepared.snapshot.playlist.name, value.playlist.name);
+  assert.deepStrictEqual(prepared.snapshot.playlist.channels, []);
+  assert.deepStrictEqual(prepared.snapshot.playlist.groups, []);
+  assert.equal(/corrupt|degraded|quarantined/i.test(JSON.stringify(prepared.snapshot)), false);
+
+  const revived = revivePlaylistCacheSnapshot(JSON.parse(JSON.stringify(prepared.snapshot)));
+  assert.notEqual(revived, null);
+  if (revived === null) throw new Error("the placeholder must revive");
+  assert.equal(isPlaylistCachePlaybackReady(revived), false);
+  assert.equal(shouldRefreshPlaylistCache(revived), true);
+});
+
+test("a snapshot under the policy ceiling keeps its channels", () => {
+  const value = snapshot("source_remote", remoteChannel);
+  const prepared = preparePlaylistSnapshotForStorage(value, 64 * 1024);
+
+  assert.equal(prepared.persisted, true);
+  assert.equal(prepared.snapshot.playlist.channels.length, 1);
+  assert.equal(prepared.snapshot.playlist.channels[0].id, "remote");
+});
+
+test("a placeholder keeps the persisted selection, a foreign selection still clears", () => {
+  const placeholder = createPlaceholderPlaylistSnapshot(snapshot("source_remote", remoteChannel));
+  const selection = createPlaylistSelectionState(snapshot("source_remote", remoteChannel), "remote");
+
+  const kept = resolvePlaylistSelectionHydration(placeholder, selection, false, null);
+  assert.equal(kept.selectedChannelId, "remote");
+  assert.deepStrictEqual(kept.selectionState, createPlaylistSelectionState(placeholder, "remote"));
+
+  const foreign = resolvePlaylistSelectionHydration(
+    placeholder,
+    { ...selection, cacheId: "another-cache" },
+    false,
+    null,
+  );
+  assert.equal(foreign.selectedChannelId, null);
 });

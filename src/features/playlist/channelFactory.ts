@@ -288,6 +288,32 @@ export function createLocalM3uSourceIdentity(fileName: string, playlistText: str
   return `local-file_${sha256(JSON.stringify([fileName.trim().toLowerCase(), sha256(playlistText)]))}`;
 }
 
+function bytesToHex(bytes: Uint8Array) {
+  let hex = "";
+  for (const byte of bytes) {
+    hex += byte.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+async function sha256HexAsync(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return bytesToHex(new Uint8Array(digest));
+}
+
+/**
+ * Async twin of `createLocalM3uSourceIdentity` with the identical output, for
+ * large imported files: Web Crypto hashes off the UI thread, while the sync
+ * implementation runs a hand-written SHA-256 over the whole playlist text.
+ */
+export async function createLocalM3uSourceIdentityAsync(fileName: string, playlistText: string) {
+  if (!globalThis.crypto?.subtle) {
+    return createLocalM3uSourceIdentity(fileName, playlistText);
+  }
+  const textDigest = await sha256HexAsync(playlistText);
+  return `local-file_${await sha256HexAsync(JSON.stringify([fileName.trim().toLowerCase(), textDigest]))}`;
+}
+
 export function normalizeStreamReference(
   stream: string,
   context: Pick<StreamOriginContext, "trust"> = { trust: "remote" },

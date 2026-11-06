@@ -68,6 +68,10 @@ export function redactCredentialUrl(value: string) {
 }
 
 export function redactCredentials(value: string) {
+  // Every embedded-URL match requires a scheme separator. Most channel
+  // metadata has none, and this pre-check keeps snapshot sanitization linear
+  // instead of running the URL scanner three million times on a big library.
+  if (!value.includes("://")) return value;
   return value.replace(EMBEDDED_URL, (matchedUrl) => {
     let url = matchedUrl;
     let trailing = "";

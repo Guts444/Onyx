@@ -24,36 +24,36 @@ Current product constraints:
 
 ## High-Level Layout
 
-- [src/App.tsx](/D:/Projects/Onyx-public/src/App.tsx)
+- [src/App.tsx](src/App.tsx)
   Main app orchestration. Handles persistent state, source loading, player startup, guide windows, settings and guide dialogs, and the persistent live-TV layout.
-- [src/App.css](/D:/Projects/Onyx-public/src/App.css)
+- [src/App.css](src/App.css)
   Main application styling, including the guide layout, persistent sidebar, player shell styling, and settings/guide presentation.
-- [src/components/ChannelSidebar.tsx](/D:/Projects/Onyx-public/src/components/ChannelSidebar.tsx)
+- [src/components/ChannelSidebar.tsx](src/components/ChannelSidebar.tsx)
   Persistent left navigation rail plus the searchable group browser.
-- [src/components/ChannelShelf.tsx](/D:/Projects/Onyx-public/src/components/ChannelShelf.tsx)
+- [src/components/ChannelShelf.tsx](src/components/ChannelShelf.tsx)
   Guide-first main screen, including timeline rows and the channel context menu.
-- [src/components/PlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/PlayerPanel.tsx)
+- [src/components/PlayerPanel.tsx](src/components/PlayerPanel.tsx)
   Shared embedded/fullscreen player shell and overlay chrome.
-- [src/components/SettingsDrawer.tsx](/D:/Projects/Onyx-public/src/components/SettingsDrawer.tsx)
+- [src/components/SettingsDrawer.tsx](src/components/SettingsDrawer.tsx)
   Settings container for General, Library, EPG, and saved sources.
-- [src/components/GeneralSettingsPanel.tsx](/D:/Projects/Onyx-public/src/components/GeneralSettingsPanel.tsx)
+- [src/components/GeneralSettingsPanel.tsx](src/components/GeneralSettingsPanel.tsx)
   General startup behavior, including the fullscreen/mini-player automatic-resume preference.
-- [src/components/UserGuideDrawer.tsx](/D:/Projects/Onyx-public/src/components/UserGuideDrawer.tsx)
+- [src/components/UserGuideDrawer.tsx](src/components/UserGuideDrawer.tsx)
   Keyboard-modal in-app quick guide with shortcuts into Sources and EPG settings.
-- [src/components/VodBrowser.tsx](/D:/Projects/Onyx-public/src/components/VodBrowser.tsx)
+- [src/components/VodBrowser.tsx](src/components/VodBrowser.tsx)
   Lazy Movies/TV Shows category browser, poster grid, metadata details, seasons, and episodes.
-- [src/components/VodPlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/VodPlayerPanel.tsx)
+- [src/components/VodPlayerPanel.tsx](src/components/VodPlayerPanel.tsx)
   Fullscreen finite-media player controls for movies and episodes, including idle chrome and click/double-click gesture arbitration.
-- [src/components/VodCategorySettingsPanel.tsx](/D:/Projects/Onyx-public/src/components/VodCategorySettingsPanel.tsx)
+- [src/components/VodCategorySettingsPanel.tsx](src/components/VodCategorySettingsPanel.tsx)
   Lazy, source-scoped Movies/TV Shows group visibility management under Library settings.
 
 ## Core Domains
 
 ### Sources
 
-- Saved source records live in [src/domain/sourceProfiles.ts](/D:/Projects/Onyx-public/src/domain/sourceProfiles.ts).
-- Source helpers live in [src/features/sources/profiles.ts](/D:/Projects/Onyx-public/src/features/sources/profiles.ts).
-- Xtream passwords and remote M3U URLs live in the OS credential store through [src/features/sources/secrets.ts](/D:/Projects/Onyx-public/src/features/sources/secrets.ts).
+- Saved source records live in [src/domain/sourceProfiles.ts](src/domain/sourceProfiles.ts).
+- Source helpers live in [src/features/sources/profiles.ts](src/features/sources/profiles.ts).
+- Xtream passwords and remote M3U URLs live in the OS credential store through [src/features/sources/secrets.ts](src/features/sources/secrets.ts).
 
 Important rule:
 
@@ -62,17 +62,17 @@ Important rule:
 
 ### Playlists
 
-- M3U parsing: [src/features/playlist/m3u.ts](/D:/Projects/Onyx-public/src/features/playlist/m3u.ts)
-- Remote playlist download: [src/features/playlist/remote.ts](/D:/Projects/Onyx-public/src/features/playlist/remote.ts)
-- Xtream import: [src/features/playlist/xtream.ts](/D:/Projects/Onyx-public/src/features/playlist/xtream.ts)
+- M3U parsing: [src/features/playlist/m3u.ts](src/features/playlist/m3u.ts)
+- Remote playlist download: [src/features/playlist/remote.ts](src/features/playlist/remote.ts)
+- Xtream import: [src/features/playlist/xtream.ts](src/features/playlist/xtream.ts)
 
 ### EPG
 
-- Frontend domain/types: [src/domain/epg.ts](/D:/Projects/Onyx-public/src/domain/epg.ts)
-- Frontend API bridge: [src/features/epg/api.ts](/D:/Projects/Onyx-public/src/features/epg/api.ts)
-- Matching logic: [src/features/epg/matching.ts](/D:/Projects/Onyx-public/src/features/epg/matching.ts)
-- Rust cache/window logic: [src-tauri/src/epg.rs](/D:/Projects/Onyx-public/src-tauri/src/epg.rs)
-- EPG URL credential bridge: [src/features/epg/secrets.ts](/D:/Projects/Onyx-public/src/features/epg/secrets.ts)
+- Frontend domain/types: [src/domain/epg.ts](src/domain/epg.ts)
+- Frontend API bridge: [src/features/epg/api.ts](src/features/epg/api.ts)
+- Matching logic: [src/features/epg/matching.ts](src/features/epg/matching.ts)
+- Rust cache/window logic: [src-tauri/src/epg.rs](src-tauri/src/epg.rs)
+- EPG URL credential bridge: [src/features/epg/secrets.ts](src/features/epg/secrets.ts)
 
 Important rule:
 
@@ -81,9 +81,9 @@ Important rule:
 
 ### Player
 
-- Native player hook: [src/features/player/mpv.ts](/D:/Projects/Onyx-public/src/features/player/mpv.ts)
-- UI shell: [src/components/PlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/PlayerPanel.tsx)
-- VOD UI shell: [src/components/VodPlayerPanel.tsx](/D:/Projects/Onyx-public/src/components/VodPlayerPanel.tsx)
+- Native player hook: [src/features/player/mpv.ts](src/features/player/mpv.ts)
+- UI shell: [src/components/PlayerPanel.tsx](src/components/PlayerPanel.tsx)
+- VOD UI shell: [src/components/VodPlayerPanel.tsx](src/components/VodPlayerPanel.tsx)
 
 Important rules:
 
@@ -95,9 +95,9 @@ Important rules:
 
 ### Video On Demand
 
-- Frontend types: [src/domain/vod.ts](/D:/Projects/Onyx-public/src/domain/vod.ts)
-- Frontend provider bridge/materialization: [src/features/vod/api.ts](/D:/Projects/Onyx-public/src/features/vod/api.ts) and [src/features/vod/model.ts](/D:/Projects/Onyx-public/src/features/vod/model.ts)
-- Rust response normalization: [src-tauri/src/vod.rs](/D:/Projects/Onyx-public/src-tauri/src/vod.rs)
+- Frontend types: [src/domain/vod.ts](src/domain/vod.ts)
+- Frontend provider bridge/materialization: [src/features/vod/api.ts](src/features/vod/api.ts) and [src/features/vod/model.ts](src/features/vod/model.ts)
+- Rust response normalization: [src-tauri/src/vod.rs](src-tauri/src/vod.rs)
 
 VOD is Xtream-only. Categories are fetched when a VOD section or its Library settings subsection is first opened, then one concrete category catalog is downloaded at a time. Responses have transport limits and a 20,000-valid-title per-category cap. The backend returns explicit truncation metadata and the browser displays a notice when the cap is reached. A very large category can still require substantial parsing, IPC, and renderer memory; category-first loading reduces that exposure rather than pretending it is paging. Catalog metadata stays in memory and materialized `/movie/` or `/series/` URLs exist only at the final libmpv playback boundary. The authenticated `server_info` playback origin is resolved separately from the login endpoint so providers with distinct stream hosts or ports work correctly. Category visibility is the exception: bounded hidden-category IDs are persisted independently per source and VOD kind.
 
@@ -127,7 +127,7 @@ Outside fullscreen, the primary navigation rail, searchable group pane, preview 
 
 ## Persistence Model
 
-Most persistent UI and library state is stored through the shared hook in [src/hooks/usePersistentState.ts](/D:/Projects/Onyx-public/src/hooks/usePersistentState.ts).
+Most persistent UI and library state is stored through the shared hook in [src/hooks/usePersistentState.ts](src/hooks/usePersistentState.ts).
 
 The Rust persistence backend writes a versioned envelope per key, serializes in-process and cross-process writes, enforces size/schema/credential checks, and uses durable temporary-file replacement plus validated backups. Corrupt safe data can be quarantined and recovered from backup; unsafe credential-bearing or oversized legacy artifacts are not retained as recovery copies. Frontend migrations rewrite compatible legacy state to URL-free IDs while preserving user references where a safe old-to-new match exists.
 
@@ -166,13 +166,13 @@ Playback session details:
 
 ## Build And Release Files
 
-- Authoritative JavaScript package metadata and dependency graph: [package.json](/D:/Projects/Onyx-public/package.json) and `package-lock.json` (npm only; use `npm ci`)
-- Desktop version metadata: [src-tauri/tauri.conf.json](/D:/Projects/Onyx-public/src-tauri/tauri.conf.json) and [src-tauri/Cargo.toml](/D:/Projects/Onyx-public/src-tauri/Cargo.toml)
+- Authoritative JavaScript package metadata and dependency graph: [package.json](package.json) and `package-lock.json` (npm only; use `npm ci`)
+- Desktop version metadata: [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) and [src-tauri/Cargo.toml](src-tauri/Cargo.toml)
 - Pinned toolchains: `.nvmrc`, `package.json#packageManager`, and `rust-toolchain.toml`
 - Native provenance and verification: `src-tauri/lib/SOURCES.md`, `src-tauri/lib/SHA256SUMS`, and `scripts/verify-native-deps.ps1`; release inputs must come from the fixed recorded URLs and match both archive and extracted-file hashes
-- Changelog: [CHANGELOG.md](/D:/Projects/Onyx-public/CHANGELOG.md)
+- Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Release notes: `RELEASE_NOTES_v*.md`
-- Release helper script: [Build Onyx Release.cmd](/D:/Projects/Onyx-public/Build%20Onyx%20Release.cmd)
+- Release helper script: [Build Onyx Release.cmd](Build%20Onyx%20Release.cmd)
 
 When shipping a new version:
 

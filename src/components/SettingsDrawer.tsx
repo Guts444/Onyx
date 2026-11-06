@@ -5,7 +5,7 @@ import type { SavedPlaylistSource, SavedXtreamSource } from "../domain/sourcePro
 import type { VodKind } from "../domain/vod";
 import { EpgSettingsPanel } from "./EpgSettingsPanel";
 import { GeneralSettingsPanel, type AutoResumeMode } from "./GeneralSettingsPanel";
-import { SourceProfilesPanel } from "./SourceProfilesPanel";
+import { SourceProfilesPanel, type SourceProgressState } from "./SourceProfilesPanel";
 import { VodCategorySettingsPanel } from "./VodCategorySettingsPanel";
 
 export type SettingsTab = "general" | "library" | "epg" | "sources";
@@ -28,6 +28,7 @@ interface SettingsDrawerProps {
   collapsedSourceIds: string[];
   loadingSourceId: string | null;
   isImportingFile: boolean;
+  sourceProgress: SourceProgressState | null;
   notice: string | null;
   autoResumeMode: AutoResumeMode;
   vodSources: SavedXtreamSource[];
@@ -50,6 +51,7 @@ interface SettingsDrawerProps {
   onAddM3uProfile: () => void;
   onAddXtreamProfile: () => void;
   onImportFile: (file: File) => void;
+  onCancelSourceOperation: () => void;
   onToggleSourceCollapsed: (sourceId: string) => void;
   onToggleSourceEnabled: (sourceId: string) => void;
   onLoadSource: (sourceId: string) => void;
@@ -75,6 +77,7 @@ export function SettingsDrawer({
   collapsedSourceIds,
   loadingSourceId,
   isImportingFile,
+  sourceProgress,
   notice,
   autoResumeMode,
   vodSources,
@@ -97,6 +100,7 @@ export function SettingsDrawer({
   onAddM3uProfile,
   onAddXtreamProfile,
   onImportFile,
+  onCancelSourceOperation,
   onToggleSourceCollapsed,
   onToggleSourceEnabled,
   onLoadSource,
@@ -309,9 +313,11 @@ export function SettingsDrawer({
             collapsedSourceIds={collapsedSourceIds}
             loadingSourceId={loadingSourceId}
             isImportingFile={isImportingFile}
+            sourceProgress={sourceProgress}
             onAddM3uProfile={onAddM3uProfile}
             onAddXtreamProfile={onAddXtreamProfile}
             onImportFile={onImportFile}
+            onCancelSourceOperation={onCancelSourceOperation}
             onToggleCollapsed={onToggleSourceCollapsed}
             onToggleEnabled={onToggleSourceEnabled}
             onLoadSource={onLoadSource}

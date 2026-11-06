@@ -2,7 +2,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const M3U_PREFIX_PATTERN = /^m3u\s*:\s*/i;
 const BROWSER_PLAYLIST_DEADLINE_MS = 90_000;
-const MAX_PLAYLIST_BYTES = 32 * 1024 * 1024;
+const MAX_PLAYLIST_BYTES = 128 * 1024 * 1024;
+const MAX_PLAYLIST_LIMIT_MESSAGE = "The playlist is larger than the 128 MB import limit.";
 
 function normalizeUrlInput(rawInput: string) {
   return rawInput.replace(M3U_PREFIX_PATTERN, "").trim();
@@ -35,7 +36,7 @@ async function downloadPlaylistInBrowser(url: string, signal: AbortSignal) {
     if (!response.ok) throw new Error(`The request failed with HTTP ${response.status}.`);
     const declaredLength = Number(response.headers.get("content-length"));
     if (Number.isFinite(declaredLength) && declaredLength > MAX_PLAYLIST_BYTES) {
-      throw new Error("The response is too large to import safely.");
+      throw new Error(MAX_PLAYLIST_LIMIT_MESSAGE);
     }
 
     if (!response.body) return await response.text();
@@ -48,7 +49,7 @@ async function downloadPlaylistInBrowser(url: string, signal: AbortSignal) {
       byteLength += value.byteLength;
       if (byteLength > MAX_PLAYLIST_BYTES) {
         await reader.cancel();
-        throw new Error("The response is too large to import safely.");
+        throw new Error(MAX_PLAYLIST_LIMIT_MESSAGE);
       }
       chunks.push(value);
     }

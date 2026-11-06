@@ -1,15 +1,22 @@
 import type { SavedPlaylistSource } from "../domain/sourceProfiles";
 import { isSourceProfileReady } from "../features/sources/profiles";
 
+export interface SourceProgressState {
+  phase: string;
+  percent: number | null;
+}
+
 interface SourceProfilesPanelProps {
   sources: SavedPlaylistSource[];
   activeSourceId: string | null;
   collapsedSourceIds: string[];
   loadingSourceId: string | null;
   isImportingFile: boolean;
+  sourceProgress: SourceProgressState | null;
   onAddM3uProfile: () => void;
   onAddXtreamProfile: () => void;
   onImportFile: (file: File) => void;
+  onCancelSourceOperation: () => void;
   onToggleCollapsed: (sourceId: string) => void;
   onToggleEnabled: (sourceId: string) => void;
   onLoadSource: (sourceId: string) => void;
@@ -26,15 +33,26 @@ function formatLastLoaded(lastLoadedAt: string | null) {
   return `Last loaded ${parsedDate.toLocaleString()}`;
 }
 
+function formatSourceProgress(progress: SourceProgressState | null, idleLabel: string) {
+  if (!progress) {
+    return idleLabel;
+  }
+  return progress.percent === null
+    ? `${progress.phase}...`
+    : `${progress.phase} ${progress.percent}%`;
+}
+
 export function SourceProfilesPanel({
   sources,
   activeSourceId,
   collapsedSourceIds,
   loadingSourceId,
   isImportingFile,
+  sourceProgress,
   onAddM3uProfile,
   onAddXtreamProfile,
   onImportFile,
+  onCancelSourceOperation,
   onToggleCollapsed,
   onToggleEnabled,
   onLoadSource,
@@ -70,6 +88,14 @@ export function SourceProfilesPanel({
             />
             {isImportingFile ? "Importing..." : "Import .m3u"}
           </label>
+          {isImportingFile ? (
+            <span className="source-progress" role="status">
+              <span>{formatSourceProgress(sourceProgress, "Preparing playlist")}</span>
+              <button type="button" className="control-button" onClick={onCancelSourceOperation}>
+                Cancel
+              </button>
+            </span>
+          ) : null}
           <button type="button" className="control-button" onClick={onAddM3uProfile}>
             Add M3U URL
           </button>
@@ -143,8 +169,18 @@ export function SourceProfilesPanel({
                       disabled={!isReady || isLoading}
                       aria-label={`Load source ${sourceLabel}`}
                     >
-                      {isLoading ? "Loading..." : "Load Now"}
+                      {isLoading ? formatSourceProgress(sourceProgress, "Loading...") : "Load Now"}
                     </button>
+                    {isLoading ? (
+                      <button
+                        type="button"
+                        className="control-button"
+                        onClick={onCancelSourceOperation}
+                        aria-label={`Cancel loading source ${sourceLabel}`}
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="control-button control-button--danger"

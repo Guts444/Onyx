@@ -1,10 +1,17 @@
-import type { PlaylistImport } from "../../domain/iptv";
+import type { Channel, PlaylistImport } from "../../domain/iptv";
 import {
   buildChannel,
   sanitizeLabel,
   sanitizeOptionalLabel,
   type StreamOriginContext,
-} from "./channelFactory";
+} from "./channelFactory.ts";
+import {
+  PLAYLIST_CANCELLED_MESSAGE,
+  throwIfAborted,
+  yieldToEventLoop,
+} from "./cooperative.ts";
+
+export { PLAYLIST_CANCELLED_MESSAGE };
 
 interface PendingChannelMeta {
   name: string;
@@ -13,6 +20,16 @@ interface PendingChannelMeta {
   tvgId: string | null;
   tvgName: string | null;
 }
+
+export interface M3uParseProgressOptions {
+  signal?: AbortSignal;
+  onProgress?: (fraction: number) => void;
+  /** Work allowed before yielding back to the event loop. */
+  sliceBudgetMs?: number;
+}
+
+const DEFAULT_SLICE_BUDGET_MS = 8;
+const PROGRESS_STEP = 0.01;
 
 function parseAttributes(source: string) {
   const attributes: Record<string, string> = {};
@@ -66,25 +83,22 @@ function parseExtinfLine(line: string, fallbackIndex: number, fallbackGroup: str
   } satisfies PendingChannelMeta;
 }
 
-export function parseM3u(
-  playlistText: string,
-  fileName: string,
-  origin: StreamOriginContext,
-): PlaylistImport {
-  const normalizedText = playlistText.replace(/^\uFEFF/, "");
-  const lines = normalizedText.split(/\r?\n/);
-  const channels = [];
-
+/**
+ * The one M3U line state machine. `parseM3u` and `parseM3uInChunks` are thin
+ * drivers over this, so the two paths cannot drift.
+ */
+function createM3uDocumentParser(origin: StreamOriginContext) {
+  const channels: Channel[] = [];
   let pendingChannel: PendingChannelMeta | null = null;
   let fallbackGroup: string | null = null;
   let disabledChannelCount = 0;
   let skippedEntryCount = 0;
 
-  for (const rawLine of lines) {
+  function consumeLine(rawLine: string) {
     const line = rawLine.trim();
 
     if (line.length === 0) {
-      continue;
+      return;
     }
 
     if (line.startsWith("#EXTINF")) {
@@ -94,7 +108,7 @@ export function parseM3u(
 
       pendingChannel = parseExtinfLine(line, channels.length + 1, fallbackGroup);
       fallbackGroup = pendingChannel.group;
-      continue;
+      return;
     }
 
     if (line.startsWith("#EXTGRP:")) {
@@ -107,11 +121,11 @@ export function parseM3u(
         };
       }
 
-      continue;
+      return;
     }
 
     if (line.startsWith("#")) {
-      continue;
+      return;
     }
 
     const channel = buildChannel(
@@ -136,24 +150,97 @@ export function parseM3u(
     fallbackGroup = null;
   }
 
-  if (pendingChannel !== null) {
-    skippedEntryCount += 1;
+  function finish(fileName: string): PlaylistImport {
+    if (pendingChannel !== null) {
+      skippedEntryCount += 1;
+    }
+
+    if (channels.length === 0) {
+      throw new Error("The playlist did not contain any channels that could be listed.");
+    }
+
+    const groups = [...new Set(channels.map((channel) => channel.group))].sort((left, right) =>
+      left.localeCompare(right),
+    );
+
+    return {
+      name: sanitizeLabel(fileName.replace(/\.[^.]+$/, ""), "Imported playlist", 80),
+      channels,
+      groups,
+      importedAt: new Date().toISOString(),
+      disabledChannelCount,
+      skippedEntryCount,
+    };
   }
 
-  if (channels.length === 0) {
-    throw new Error("The playlist did not contain any channels that could be listed.");
+  return { consumeLine, finish };
+}
+
+export function parseM3u(
+  playlistText: string,
+  fileName: string,
+  origin: StreamOriginContext,
+): PlaylistImport {
+  const parser = createM3uDocumentParser(origin);
+  const normalizedText = playlistText.replace(/^\uFEFF/, "");
+
+  for (const rawLine of normalizedText.split(/\r?\n/)) {
+    parser.consumeLine(rawLine);
   }
 
-  const groups = [...new Set(channels.map((channel) => channel.group))].sort((left, right) =>
-    left.localeCompare(right),
-  );
+  return parser.finish(fileName);
+}
 
-  return {
-    name: sanitizeLabel(fileName.replace(/\.[^.]+$/, ""), "Imported playlist", 80),
-    channels,
-    groups,
-    importedAt: new Date().toISOString(),
-    disabledChannelCount,
-    skippedEntryCount,
-  };
+/**
+ * Same parse, sliced so the webview can paint, show progress and cancel.
+ * The caller's AbortSignal is checked at every yield.
+ */
+export async function parseM3uInChunks(
+  playlistText: string,
+  fileName: string,
+  origin: StreamOriginContext,
+  options: M3uParseProgressOptions = {},
+): Promise<PlaylistImport> {
+  const parser = createM3uDocumentParser(origin);
+  const { signal, onProgress, sliceBudgetMs = DEFAULT_SLICE_BUDGET_MS } = options;
+  const totalLength = playlistText.length;
+  let cursor = 0;
+  let lastReported = 0;
+
+  while (cursor < totalLength) {
+    const sliceStartedAt = performance.now();
+
+    do {
+      let newlineIndex = playlistText.indexOf("\n", cursor);
+      if (newlineIndex === -1) {
+        newlineIndex = totalLength;
+      }
+
+      let lineEnd = newlineIndex;
+      if (lineEnd > cursor && playlistText.charCodeAt(lineEnd - 1) === 13) {
+        lineEnd -= 1;
+      }
+
+      let line = playlistText.slice(cursor, lineEnd);
+      if (cursor === 0 && line.charCodeAt(0) === 0xfeff) {
+        line = line.slice(1);
+      }
+
+      parser.consumeLine(line);
+      cursor = newlineIndex + 1;
+    } while (cursor < totalLength && performance.now() - sliceStartedAt < sliceBudgetMs);
+
+    const fraction = Math.min(1, cursor / totalLength);
+    if (onProgress && fraction - lastReported >= PROGRESS_STEP) {
+      lastReported = fraction;
+      onProgress(fraction);
+    }
+
+    throwIfAborted(signal);
+    await yieldToEventLoop();
+  }
+
+  throwIfAborted(signal);
+  onProgress?.(1);
+  return parser.finish(fileName);
 }

@@ -7,6 +7,7 @@ import { ChannelSidebar } from "./components/ChannelSidebar";
 import type { AutoResumeMode } from "./components/GeneralSettingsPanel";
 import { PlayerPanel } from "./components/PlayerPanel";
 import { SettingsDrawer, type SettingsTab } from "./components/SettingsDrawer";
+import type { SourceProgressState } from "./components/SourceProfilesPanel";
 import { UserGuideDrawer } from "./components/UserGuideDrawer";
 import { VodBrowser } from "./components/VodBrowser";
 import { VodPlayerPanel } from "./components/VodPlayerPanel";
@@ -79,21 +80,22 @@ import {
   saveEpgUrlsBeforePersist,
   serializeEpgSources,
 } from "./features/epg/secrets";
+import { getErrorMessage } from "./features/errors/messages";
 import { DEFAULT_PLAYER_VOLUME, useMpvPlayer } from "./features/player/mpv";
 import {
   commitIfCurrentPlaybackRevision,
   LatestPlaybackOperationCoordinator,
 } from "./features/player/operations";
-import { parseM3u } from "./features/playlist/m3u";
-import { createLocalM3uSourceIdentity } from "./features/playlist/channelFactory";
+import { parseM3uInChunks } from "./features/playlist/m3u";
+import { createLocalM3uSourceIdentityAsync } from "./features/playlist/channelFactory";
 import { cancelPlaylistOperation, downloadPlaylistFromUrl } from "./features/playlist/remote";
 import { importXtreamPlaylist } from "./features/playlist/xtream";
 import { materializeChannelForPlayback } from "./features/playlist/materialize";
-import { redactCredentials } from "./features/playlist/redaction";
 import {
   createPlaylistCacheSnapshot,
   createPlaylistPersistenceCoordinator,
   isChannelPlaybackReady,
+  preparePlaylistSnapshotForStorageInChunks,
   resolvePlaylistSelectionHydration,
   revivePlaylistCacheSnapshot,
   revivePlaylistSelectionState,
@@ -102,12 +104,14 @@ import {
   serializePlaylistSelectionState,
   shouldRefreshPlaylistCache,
 } from "./features/playlist/snapshot";
+import { redactCredentials } from "./features/playlist/redaction";
 import {
   createSourceRevisionTracker,
   createStartupSourceRestoreState,
   getSourceOperationCommitState,
   migrateImportedChannelReferences,
   migrateStartupPlaybackSession,
+  resolveStartupResumeOutcome,
   resolveStartupResumeReadiness,
 } from "./features/sources/appIntegration";
 import {
@@ -279,6 +283,20 @@ function removeMappingsForSourceScope(
   return nextMappings;
 }
 
+/**
+ * Shown when a library is deliberately not cached. A saved source can be
+ * reloaded on the next launch; an imported file cannot, because it has no
+ * saved source identity. The profile name is redacted and never replaced by
+ * the source URL, which lives in the OS credential store.
+ */
+function buildSnapshotNotCachedNotice(sourceId: string | null, sourceName: string | null) {
+  if (sourceId === null) {
+    return "This playlist is too large to keep between launches. Onyx cannot reload an imported file, so import it again when you need it.";
+  }
+  const sourceLabel = redactCredentials(sourceName?.trim() || "this source");
+  return `This library is too large to keep between launches. Onyx will reload it from ${sourceLabel} when it starts.`;
+}
+
 function App() {
   const epgSourcesPersistenceRef = useRef<EpgSource[]>([]);
   const epgMappingMigrationReadyRef = useRef(false);
@@ -314,7 +332,7 @@ function App() {
     scrubSourceProfileSecrets,
     saveSourceSecretsBeforePersist,
   );
-  const [sourceLibraryIndex, setSourceLibraryIndex, sourceLibraryIndexHydrated, sourceLibraryIndexMetadata] =
+  const [sourceLibraryIndex, setSourceLibraryIndex, sourceLibraryIndexHydrated, sourceLibraryIndexMetadata, sourceLibraryIndexPersistenceFailed] =
     usePersistentState<SourceLibraryIndex>(SOURCE_LIBRARY_INDEX_STORAGE_KEY, {});
   const [activeSourceId, setActiveSourceId, activeSourceIdHydrated] = usePersistentState<string | null>(
     ACTIVE_SOURCE_STORAGE_KEY,
@@ -401,6 +419,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [sourceBusy, setSourceBusy] = useState<SourceBusyState | null>(null);
+  const [sourceProgress, setSourceProgress] = useState<SourceProgressState | null>(null);
   const [channelRenderLimit, setChannelRenderLimit] = useState(CHANNEL_RENDER_INITIAL_LIMIT);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -597,6 +616,13 @@ function App() {
       setMessage("Playlist changes could not be saved. They may be lost when the app closes.");
     }
   }, [playlistSelectionPersistenceFailed, playlistSnapshotPersistenceFailed]);
+
+  useEffect(() => {
+    if (sourceLibraryIndexPersistenceFailed) {
+      setMessage((currentMessage) => currentMessage ??
+        "The source library index could not be saved. Deleting this source later may leave some favorites behind.");
+    }
+  }, [sourceLibraryIndexPersistenceFailed]);
 
   const secretSourceIdsKey = useMemo(
     () => Object.values(savedSources)
@@ -897,12 +923,32 @@ function App() {
     },
   ) {
     if (!canCommitSourceOperation(token)) return false;
+
+    const nextSourceId = options?.sourceId ?? null;
+    // Prepare before anything reads current state or changes playback. The
+    // prepare yields for seconds on large libraries, and a favorite toggled or
+    // a channel played during that window would be overwritten by the commit.
+    const preparedSnapshot = await preparePlaylistSnapshotForStorageInChunks(
+      createPlaylistCacheSnapshot(nextSourceId, importedPlaylist),
+      {
+        signal: token.signal,
+        onProgress: (fraction) => {
+          if (canCommitSourceOperation(token)) {
+            setSourceProgress({
+              phase: "Preparing library",
+              percent: Math.round(fraction * 100),
+            });
+          }
+        },
+      },
+    );
+    if (!canCommitSourceOperation(token)) return false;
+
     if (!options?.keepPlaybackRunning) {
       await stopPlayback();
     }
     if (!canCommitSourceOperation(token)) return false;
 
-    const nextSourceId = options?.sourceId ?? null;
     const currentReferences = importedReferencesRef.current;
     const migrated = migrateImportedChannelReferences(importedPlaylist.channels, {
       ...currentReferences,
@@ -943,6 +989,12 @@ function App() {
         startupPlaybackSessionRef.current,
       );
     }
+    const notCachedNotice = preparedSnapshot.persisted
+      ? null
+      : buildSnapshotNotCachedNotice(
+          nextSourceId,
+          nextSourceId ? savedSourcesRef.current[nextSourceId]?.name ?? null : null,
+        );
     startTransition(() => {
       setFavoriteIds(migrated.favoriteIds);
       setRecentIds(migrated.recentIds);
@@ -950,7 +1002,7 @@ function App() {
       setSourceLibraryIndex(nextLibraryIndex);
       setSavedEpgMappings(migrated.savedEpgMappings);
       createPlaylistPersistenceCoordinator(setPlaylistSnapshot, setPlaylistSelection).replace(
-        createPlaylistCacheSnapshot(nextSourceId, importedPlaylist),
+        preparedSnapshot.snapshot,
         nextSelectedChannelId,
       );
       setActiveSourceId(nextSourceId);
@@ -958,7 +1010,7 @@ function App() {
       setSelectedChannelId(nextSelectedChannelId);
       setActiveGroup(ALL_CHANNELS_GROUP_ID);
       setSearchQuery("");
-      setMessage(null);
+      setMessage(notCachedNotice);
       setIsSettingsOpen(false);
 
       if (nextSourceId) {
@@ -970,6 +1022,13 @@ function App() {
         });
       }
     });
+    if (nextSourceId) {
+      // This revision was just fetched by a manual load. Mark it handled so the
+      // startup restore effect does not download the same source again.
+      startupRestoreStateRef.current.markAttempted(
+        sourceRevisionsRef.current.current(nextSourceId),
+      );
+    }
     return true;
   }
 
@@ -993,16 +1052,32 @@ function App() {
     let importedPlaylist: PlaylistImport;
 
     if (source.kind === "m3u_url") {
+      setSourceProgress({ phase: "Downloading playlist", percent: null });
       const { fileName, playlistText } = await downloadPlaylistFromUrl(
         source.url,
         token.operationId,
         token.signal,
       );
-      importedPlaylist = parseM3u(playlistText, fileName, {
-        sourceId: source.id,
-        trust: "remote",
-      });
+      if (!canCommitSourceOperation(token)) return false;
+      setSourceProgress({ phase: "Reading playlist", percent: 0 });
+      importedPlaylist = await parseM3uInChunks(
+        playlistText,
+        fileName,
+        { sourceId: source.id, trust: "remote" },
+        {
+          signal: token.signal,
+          onProgress: (fraction) => {
+            if (canCommitSourceOperation(token)) {
+              setSourceProgress({
+                phase: "Reading playlist",
+                percent: Math.round(fraction * 100),
+              });
+            }
+          },
+        },
+      );
     } else {
+      setSourceProgress({ phase: "Downloading channels", percent: null });
       importedPlaylist = await importXtreamPlaylist(
         source.domain,
         source.username,
@@ -1013,6 +1088,7 @@ function App() {
     }
 
     if (!canCommitSourceOperation(token)) return false;
+    setSourceProgress({ phase: "Preparing library", percent: null });
     const currentSnapshot = importedReferencesRef.current.playlistSnapshot;
     return applyImportedPlaylist(importedPlaylist, token, {
       sourceId: source.id,
@@ -1100,9 +1176,7 @@ function App() {
       } catch (error) {
         if (operationToken.isCurrent()) {
           startupSourceRefreshResultRef.current = "failed";
-          const safeError = redactCredentials(
-            error instanceof Error ? error.message : "The saved source could not be refreshed.",
-          );
+          const safeError = getErrorMessage(error, "The saved source could not be refreshed.");
           setMessage(
             hasCachedStartupPlaylist
               ? `Using cached library metadata. ${safeError}`
@@ -1110,6 +1184,7 @@ function App() {
           );
         }
       } finally {
+        if (operationToken.isCurrent()) setSourceProgress(null);
         setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, operationToken));
         setStartupRestoreToken((currentToken) =>
           currentToken === operationToken ? null : currentToken,
@@ -1144,22 +1219,37 @@ function App() {
       expectedFingerprint: null,
     });
     setSourceBusy(beginSourceBusy(token));
+    setSourceProgress({ phase: "Reading playlist", percent: null });
 
     try {
       const playlistText = await file.text();
       if (!canCommitSourceOperation(token)) return;
-      const importedPlaylist = parseM3u(playlistText, file.name, {
-        sourceId: createLocalM3uSourceIdentity(file.name, playlistText),
-        trust: "trusted-local",
-      });
+      setSourceProgress({ phase: "Identifying playlist", percent: null });
+      const sourceId = await createLocalM3uSourceIdentityAsync(file.name, playlistText);
+      if (!canCommitSourceOperation(token)) return;
+      const importedPlaylist = await parseM3uInChunks(
+        playlistText,
+        file.name,
+        { sourceId, trust: "trusted-local" },
+        {
+          signal: token.signal,
+          onProgress: (fraction) => {
+            if (canCommitSourceOperation(token)) {
+              setSourceProgress({
+                phase: "Reading playlist",
+                percent: Math.round(fraction * 100),
+              });
+            }
+          },
+        },
+      );
       await applyImportedPlaylist(importedPlaylist, token, { sourceId: null });
     } catch (error) {
       if (canCommitSourceOperation(token)) {
-        setMessage(redactCredentials(
-          error instanceof Error ? error.message : "The playlist could not be imported.",
-        ));
+        setMessage(getErrorMessage(error, "The playlist could not be imported."));
       }
     } finally {
+      if (token.isCurrent()) setSourceProgress(null);
       setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, token));
     }
   }
@@ -1202,9 +1292,7 @@ function App() {
       );
       return await playChannel(materializedChannel, isCurrent);
     } catch (error) {
-      setMessage(redactCredentials(
-        error instanceof Error ? error.message : "The channel could not be prepared for playback.",
-      ));
+      setMessage(getErrorMessage(error, "The channel could not be prepared for playback."));
       return false;
     }
   }
@@ -1312,9 +1400,9 @@ function App() {
       }, isCurrentPlayback);
       if (!isCurrentPlayback()) return;
       if (!started) await handleStopVod();
-    } catch {
+    } catch (error) {
       if (!isCurrentPlayback()) return;
-      setMessage("Fullscreen VOD playback could not be started.");
+      setMessage(getErrorMessage(error, "Fullscreen VOD playback could not be started."));
       await handleStopVod();
     }
   }
@@ -1418,10 +1506,20 @@ function App() {
       }
       schedulePlayerLayoutSync();
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Fullscreen mode could not be changed.";
-      setMessage(errorMessage);
+      setMessage(getErrorMessage(error, "Fullscreen mode could not be changed."));
     }
+  }
+
+  function handleCancelSourceOperation() {
+    if (sourceBusy?.origin === "startup") {
+      // The startup restore will not commit, so release the resume gate that
+      // waits for its result instead of leaving a permanent "wait for refresh".
+      startupSourceRefreshResultRef.current = "failed";
+    }
+    sourceOperationsRef.current.cancelCurrent();
+    setSourceBusy(null);
+    setSourceProgress(null);
+    setMessage("Cancelled loading the source.");
   }
 
   async function handleLoadSavedSource(sourceId: string) {
@@ -1445,11 +1543,10 @@ function App() {
       await importFromSavedSource(source, token);
     } catch (error) {
       if (canCommitSourceOperation(token)) {
-        setMessage(redactCredentials(
-          error instanceof Error ? error.message : "The saved source could not be loaded.",
-        ));
+        setMessage(getErrorMessage(error, "The saved source could not be loaded."));
       }
     } finally {
+      if (token.isCurrent()) setSourceProgress(null);
       setSourceBusy((currentBusy) => finishSourceBusy(currentBusy, token));
     }
   }
@@ -1541,9 +1638,10 @@ function App() {
       } catch (error) {
         if (sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
           setMessage(
-            error instanceof Error
-              ? error.message
-              : "The saved source credential could not be removed. Existing saved data was kept.",
+            getErrorMessage(
+              error,
+              "The saved source credential could not be removed. Existing saved data was kept.",
+            ),
           );
         }
       }
@@ -1563,9 +1661,10 @@ function App() {
       } catch (error) {
         if (sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
           setMessage(
-            error instanceof Error
-              ? error.message
-              : "Saved source changes could not be secured. Existing saved data was kept.",
+            getErrorMessage(
+              error,
+              "Saved source changes could not be secured. Existing saved data was kept.",
+            ),
           );
         }
       }
@@ -1589,9 +1688,10 @@ function App() {
     } catch (error) {
       if (sourceMutationsRef.current.canCommit(mutation, savedSourcesRef.current[sourceId])) {
         setMessage(
-          error instanceof Error
-            ? error.message
-            : "The saved source credential could not be removed. Existing saved data was kept.",
+          getErrorMessage(
+            error,
+            "The saved source credential could not be removed. Existing saved data was kept.",
+          ),
         );
       }
       return;
@@ -1784,9 +1884,10 @@ function App() {
         });
       });
     } catch (error) {
-      setMessage(error instanceof Error
-        ? error.message
-        : "EPG URL changes could not be secured. Existing saved data was kept.");
+      setMessage(getErrorMessage(
+        error,
+        "EPG URL changes could not be secured. Existing saved data was kept.",
+      ));
       return false;
     }
   }
@@ -1817,9 +1918,10 @@ function App() {
         // A removed profile cannot commit subsequent cache mutations.
       });
     }).catch((error: unknown) => {
-      setMessage(error instanceof Error
-        ? error.message
-        : "The saved EPG URL could not be removed. Existing saved data was kept.");
+      setMessage(getErrorMessage(
+        error,
+        "The saved EPG URL could not be removed. Existing saved data was kept.",
+      ));
     });
   }
 
@@ -2540,9 +2642,9 @@ function App() {
           return;
         }
 
-        const errorMessage =
-          error instanceof Error ? error.message : "The current guide schedule could not be loaded.";
-        setEpgStatusMessage(errorMessage);
+        setEpgStatusMessage(
+          getErrorMessage(error, "The current guide schedule could not be loaded."),
+        );
       });
 
     return () => {
@@ -2593,24 +2695,24 @@ function App() {
       cachedStartupResumeChannelPlaybackReady,
       startupSourceRefreshResultRef.current,
     );
-    if (resumeReadiness !== "ready") {
-      setPlaybackSession((currentSession) => ({
-        ...currentSession,
-        shouldResume: false,
-        resumeSourceId: null,
-        resumeChannelId: null,
-        resumeInFullscreen: false,
-      }));
-      if (cachedStartupPlaylistNeedsRefresh || !cachedStartupResumeChannelPlaybackReady) {
-        setMessage((currentMessage) => currentMessage ??
-          "Cached source metadata is available for browsing, but refresh is required before playback.");
-      }
+    const channelToResume = channelsById.get(resumeChannelId) ?? null;
+    const resumeOutcome = resolveStartupResumeOutcome({
+      readiness: resumeReadiness,
+      channelAvailable: Boolean(channelToResume?.isPlayable),
+    });
+
+    if (resumeOutcome === "keep-intent") {
+      // A refresh that failed or was cancelled must never erase where the user
+      // stopped: the next successful launch still resumes from it.
+      setMessage((currentMessage) => currentMessage ??
+        (hasCachedStartupPlaylist
+          ? "Using the cached library. The startup refresh failed, so playback will resume next launch."
+          : "The saved source could not be refreshed, so the guide is empty. Your resume point is kept for the next successful launch."));
       startupPlaybackRestoreCompletedRef.current = true;
       return;
     }
 
-    const channelToResume = channelsById.get(resumeChannelId) ?? null;
-    if (!channelToResume || !channelToResume.isPlayable) {
+    if (resumeOutcome === "clear-intent" || channelToResume === null) {
       setPlaybackSession((currentSession) =>
         (currentSession.resumeSourceId ?? null) === activeSourceId
           ? {
@@ -2905,6 +3007,7 @@ function App() {
         collapsedSourceIds={collapsedSourceIds}
         loadingSourceId={loadingSourceId}
         isImportingFile={isImportingFile}
+        sourceProgress={sourceProgress}
         notice={message}
         autoResumeMode={autoResumeMode}
         vodSources={readyXtreamSources}
@@ -2933,6 +3036,7 @@ function App() {
         onImportFile={(file) => {
           void handleImportFile(file);
         }}
+        onCancelSourceOperation={handleCancelSourceOperation}
         onToggleSourceCollapsed={handleToggleSourceCollapsed}
         onToggleSourceEnabled={handleToggleSourceEnabled}
         onLoadSource={(sourceId) => {

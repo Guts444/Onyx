@@ -1356,6 +1356,14 @@ img {
   transform: none;
 }
 
+.source-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
 .control-button--primary {
   border: 1px solid rgba(107, 199, 255, 0.55);
   background: linear-gradient(135deg, #4eb8ff, #347de8);

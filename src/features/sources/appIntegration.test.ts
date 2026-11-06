@@ -8,6 +8,7 @@ import {
   getSourceOperationCommitState,
   migrateStartupPlaybackSession,
   migrateImportedChannelReferences,
+  resolveStartupResumeOutcome,
   resolveStartupResumeReadiness,
 } from "./appIntegration.ts";
 
@@ -94,6 +95,44 @@ test("startup resume waits only when a remote cache cannot reconstruct playback"
   assert.equal(resolveStartupResumeReadiness("source-a", false, "succeeded"), "ready");
   assert.equal(resolveStartupResumeReadiness("source-a", false, "failed"), "unavailable");
   assert.equal(resolveStartupResumeReadiness(null, false, "failed"), "ready");
+});
+
+test("a failed startup refresh keeps the stored resume intent for the next launch", () => {
+  assert.equal(
+    resolveStartupResumeOutcome({ readiness: "unavailable", channelAvailable: false }),
+    "keep-intent",
+  );
+  assert.equal(
+    resolveStartupResumeOutcome({ readiness: "unavailable", channelAvailable: true }),
+    "keep-intent",
+  );
+  assert.equal(
+    resolveStartupResumeOutcome({ readiness: "wait-for-refresh", channelAvailable: true }),
+    "keep-intent",
+  );
+});
+
+test("a ready startup cache resumes when the channel exists and clears only when it is gone", () => {
+  assert.equal(
+    resolveStartupResumeOutcome({ readiness: "ready", channelAvailable: true }),
+    "resume",
+  );
+  assert.equal(
+    resolveStartupResumeOutcome({ readiness: "ready", channelAvailable: false }),
+    "clear-intent",
+  );
+});
+
+test("a manual load marks its revision attempted so startup restore does not fetch it again", () => {
+  const restore = createStartupSourceRestoreState();
+
+  restore.markAttempted("revision-a");
+
+  assert.equal(restore.hasAttempted("revision-a"), true);
+  assert.equal(restore.plan("revision-a"), false);
+
+  // Editing the source issues a new revision, which is still eligible.
+  assert.equal(restore.plan("revision-b"), true);
 });
 
 test("canceling a delayed startup restore clears pending state without consuming its attempt", () => {

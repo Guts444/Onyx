@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Real source errors**: Playlist, saved-source, credential, EPG, and on-demand failures now show the reason the backend actually returned, such as an HTTP status, a TLS or connection failure, or an import limit. Credentials and URLs inside those messages are redacted before they reach the screen.
+- **Large playlists**: Playlists up to 128 MB now load from a URL or a local file, parsing is reported as progress with a **Cancel** button, and the app stays usable while a large library is read. A library too large to cache still works for the session, and Onyx now says plainly whether a saved source will reload at the next start or whether an imported file must be imported again.
+- **Higher storage ceilings**: Raised the playlist snapshot and source library index limits so large libraries keep their favorites, recents, EPG mappings, and source-cleanup behavior, and added a visible notice when that saved data cannot be stored.
+- **Dependency security updates**: Updated JavaScript and Rust dependencies to clear every open advisory, including TLS certificate verification and root certificate handling in the download stack.
+
 ## v0.6.1 - 2026-07-16
 
 - **Original Onyx identity**: Replaced every default Tauri application and Microsoft Store tile asset with an original black-onyx play-gem icon owned by the Onyx project.
