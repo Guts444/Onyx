@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## v0.6.2 - 2026-11-06
 
 - **Real source errors**: Playlist, saved-source, credential, EPG, and on-demand failures now show the reason the backend actually returned, such as an HTTP status, a TLS or connection failure, or an import limit. Credentials and URLs inside those messages are redacted before they reach the screen.
 - **Large playlists**: Playlists up to 128 MB now load from a URL or a local file, parsing is reported as progress with a **Cancel** button, and the app stays usable while a large library is read. A library too large to cache still works for the session, and Onyx now says plainly whether a saved source will reload at the next start or whether an imported file must be imported again.
 - **Higher storage ceilings**: Raised the playlist snapshot and source library index limits so large libraries keep their favorites, recents, EPG mappings, and source-cleanup behavior, and added a visible notice when that saved data cannot be stored.
+- **More dependable loading and resume**: A manual **Load Now** now downloads a source once instead of twice, and a failed refresh at startup no longer forgets the channel to resume.
 - **Dependency security updates**: Updated JavaScript and Rust dependencies to clear every open advisory, including TLS certificate verification and root certificate handling in the download stack.
 
 ## v0.6.1 - 2026-07-16
