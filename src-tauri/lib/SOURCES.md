@@ -17,8 +17,10 @@ Onyx packages exactly three Windows x86-64 DLLs. `SHA256SUMS` pins the bytes acc
 - Architecture: PE32+ x86-64 (`0x8664`)
 - Embedded file/product version: `v0.41.0-877-ge5486b96d`
 - Version/source: mpv `v0.41.0-877-ge5486b96d`, `zhongfly/mpv-winbuild` non-v3 LGPL development archive
-- Fixed release URL: <https://github.com/zhongfly/mpv-winbuild/releases/download/2026-07-12-e5486b96d7/mpv-dev-lgpl-x86_64-20260712-git-e5486b96d7.7z>
-- Upstream archive SHA-256: `c558312716e7add9166a6240c38c5fbac713b8a76062fdc1c65b1afe2ef32898`
+- Fixed release URL: <https://github.com/Guts444/Onyx/releases/download/v0.6.1/Onyx_0.6.1_x64-setup.exe>
+- Upstream archive SHA-256: `9f5599b49c06d9493a80a98a5a72a506bc6067cc9d5f05c18debd2ff3113d836`
+- Mirror note: `zhongfly/mpv-winbuild` prunes old releases and removed this one, so the fixed URL above is Onyx's own v0.6.1 NSIS installer, which bundles the identical DLL at `lib/libmpv-2.dll`. The script extracts it and checks it against `SHA256SUMS`. Do not delete that release asset while this DLL stays pinned.
+- Original upstream asset (no longer published): `https://github.com/zhongfly/mpv-winbuild/releases/download/2026-07-12-e5486b96d7/mpv-dev-lgpl-x86_64-20260712-git-e5486b96d7.7z`, SHA-256 `c558312716e7add9166a6240c38c5fbac713b8a76062fdc1c65b1afe2ef32898`
 - Extracted upstream DLL SHA-256: `1c71c4b893c0ac0a71011c970e2bf096a5b58ea3e0449db749fff0112badfd6e`
 - Verification performed 2026-07-12: the fixed upstream archive was downloaded, its archive digest matched the release manifest, and its extracted DLL replaced and now matches the local DLL byte-for-byte.
 

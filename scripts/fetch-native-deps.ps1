@@ -77,7 +77,8 @@ $archiveHashes = [Regex]::Matches($sources, '(?m)^- Upstream archive SHA-256: `(
 if ($archiveHashes.Count -ne 3) { throw "SOURCES.md must contain exactly three upstream archive hashes." }
 $wrapperArchiveHash = $archiveHashes[0].Groups[1].Value
 
-# The second fixed URL belongs to mpv. Parse all fixed URLs to avoid accepting a moving endpoint.
+# The second fixed URL supplies libmpv-2.dll: Onyx's own v0.6.1 installer, because upstream pruned
+# the original mpv archive (see SOURCES.md). Parse all fixed URLs to avoid accepting a moving endpoint.
 $urlMatches = [Regex]::Matches($sources, '(?m)^- Fixed release URL: <(https://[^>]+)>(?:\x0D)?$')
 if ($urlMatches.Count -ne 3) { throw "SOURCES.md must contain exactly three fixed HTTPS release URLs." }
 $wrapperUrl = $urlMatches[0].Groups[1].Value
@@ -118,23 +119,23 @@ if (-not $Force) {
 $sevenZip = Get-Command "7z.exe" -ErrorAction SilentlyContinue
 if (-not $sevenZip) { $sevenZip = Get-Command "7z" -ErrorAction SilentlyContinue }
 if (-not $sevenZip -and (Test-Path -LiteralPath "C:\Program Files\7-Zip\7z.exe")) {
-    $sevenZip = Get-Item -LiteralPath "C:\Program Files\7-Zip\7z.exe"
+    $sevenZip = Get-Command "C:\Program Files\7-Zip\7z.exe"
 }
 if (-not $sevenZip) {
-    throw "7-Zip is required to extract the pinned mpv .7z archive. Install 7-Zip or use a GitHub Windows runner where 7z is preinstalled."
+    throw "7-Zip is required to extract the pinned libmpv source installer. Install 7-Zip or use a GitHub Windows runner where 7z is preinstalled."
 }
 
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("onyx-native-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 try {
     $wrapperArchive = Join-Path $tempRoot "libmpv-wrapper.zip"
-    $mpvArchive = Join-Path $tempRoot "mpv.7z"
+    $mpvArchive = Join-Path $tempRoot "onyx-setup.exe"
     $vulkanArchive = Join-Path $tempRoot "vulkan-loader.zip"
     Invoke-WebRequest -Uri $wrapperUrl -OutFile $wrapperArchive -MaximumRedirection 5 -TimeoutSec 180 -UseBasicParsing
     Invoke-WebRequest -Uri $mpvUrl -OutFile $mpvArchive -MaximumRedirection 5 -TimeoutSec 180 -UseBasicParsing
     Invoke-WebRequest -Uri $vulkanUrl -OutFile $vulkanArchive -MaximumRedirection 5 -TimeoutSec 180 -UseBasicParsing
     Assert-Sha256 $wrapperArchive $wrapperArchiveHash "libmpv-wrapper archive"
-    Assert-Sha256 $mpvArchive $mpvArchiveHash "mpv archive"
+    Assert-Sha256 $mpvArchive $mpvArchiveHash "libmpv source archive"
     Assert-Sha256 $vulkanArchive $vulkanArchiveHash "Vulkan loader package"
 
     $wrapperExtract = Join-Path $tempRoot "wrapper"
