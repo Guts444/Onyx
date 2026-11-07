@@ -120,10 +120,25 @@ Outside fullscreen, the primary navigation rail, searchable group pane, preview 
 - Movies and TV Shows are destinations under Live TV in the persistent primary rail. Their search and visible vertical category list occupy the same persistent secondary-sidebar pattern used by Live TV.
 - Selecting a movie or episode transitions directly to the shared fullscreen native player. VOD has no embedded/mini-player details-page mode; double-clicking, pressing `Esc`, or choosing **Quit** returns to the preserved details view.
 - VOD chrome hides after pointer inactivity and reappears on movement. A delayed single-click toggles pause/resume; double-click cancels that pending toggle before quitting, and control events do not bubble into surface gestures.
+- A finished title shows **Playback complete** instead of freezing on the last frame. A stalled or dropped title retries and re-opens at the last known position.
 - Category catalogs and detail payloads load only after the user opens the corresponding section/title.
 - Poster images are lazy, card rendering is incremental, and switching away preserves the already loaded in-memory section state for the session.
 - Series episode maps are authoritative; season metadata is optional decoration.
 - Embedded subtitles come from mpv's `track-list`. Arbitrary provider sidecar subtitle URLs are not followed or persisted.
+
+### Playback Recovery
+
+[src/features/player/recovery.ts](src/features/player/recovery.ts) is a pure state machine. [src/features/player/mpv.ts](src/features/player/mpv.ts) feeds it loader, first-frame, progress, buffering, pause, seek, end-of-stream, and load-failure events and runs the only timer (1 s). Thresholds and the ladder are documented in `HANDOFF-onyx-v0.7.0-2026-11-06.md` section 9.
+
+- **First frame, not metadata.** The UI reports playing only after `playback-restart`. `file-loaded` means the headers parsed; audio-only streams reach `playback-restart` too.
+- **Triggers.** No frame within 20 s, 15 s without progress while `paused-for-cache` is set (30 s otherwise), an mpv error before the first frame, or a clean end of a live stream.
+- **Ladder.** 1/2/4/8 second delays, at most five attempts. A failure before the first frame is refusal-shaped (the pinned wrapper cannot report HTTP status) and gets one retry, but only if the media has never played in this ladder. The ladder resets after 60 s of sustained progress.
+- **VOD completion.** A title is complete only when the position reaches the end of a known duration. The duration is the provider's declared value when the catalog supplied one, then the longest value mpv has reported; a shrinking duration is ignored. An early EOF retries from the last position, and a retry that hits EOF again without advancing is the real end, so a truncated title cannot loop.
+- **Pause across loads.** `keep-open` leaves `pause=true` at EOF, and mpv preserves it across `loadfile`; every load clears it explicitly or a retry silently starts paused.
+- **One connection.** A retry is a fresh `loadfile replace`; mpv closes the previous stream first, and the server-side connection count is expected to peak at one.
+- **User actions win.** Any new playback, stop, or source change cancels a pending retry. The `end-file stop` produced by Onyx's own `loadfile replace` is consumed and never shown as a user stop.
+- **mpv EOF semantics.** With `keep-open=yes`, libavformat reports a closed stream or a mid-stream reset as EOF: no `end-file` arrives. Recovery therefore watches `eof-reached` and progress rather than `end-file`. HLS live reloads (`end-file` immediately followed by `start-file`) belong to mpv and are ignored.
+- **No logs.** The pinned `libmpv-wrapper` never calls `mpv_request_log_messages`, so `log-message` events never reach Onyx. Recovery cannot distinguish a 403 from a 500 and classifies by timing instead.
 
 ## Persistence Model
 

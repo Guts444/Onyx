@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0 - Unreleased
+
+- **Stream recovery**: A stream that never opens, stops progressing, drops mid-playback, or ends cleanly on a live channel is now retried automatically with a visible **Retrying (2 of 5)…** status instead of freezing on the last frame. Failures that arrive before any frame get a single retry, the ladder stops with a clear error and a working **Reload**, and changing channel, stopping, or switching source cancels a pending retry. Retried movies and episodes re-open at the position they reached.
+- **Playback truth**: Onyx now reports **Playing** only when a real frame exists, and a finished movie or episode shows **Playback complete** instead of a frozen picture.
+- **Reload for VOD**: The fullscreen movie and episode player now has a **Reload** control.
+
 ## v0.6.2 - 2026-11-06
 
 - **Real source errors**: Playlist, saved-source, credential, EPG, and on-demand failures now show the reason the backend actually returned, such as an HTTP status, a TLS or connection failure, or an import limit. Credentials and URLs inside those messages are redacted before they reach the screen.

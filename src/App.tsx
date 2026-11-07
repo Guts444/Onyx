@@ -534,6 +534,7 @@ function App() {
     playMedia,
     setVolumeLevel,
     stopPlayback,
+    reloadPlayback,
     toggleMute,
     togglePause,
     seekRelative,
@@ -1397,6 +1398,7 @@ function App() {
         name: item.title,
         stream: item.stream,
         isPlayable: true,
+        durationHint: item.durationSecs,
       }, isCurrentPlayback);
       if (!isCurrentPlayback()) return;
       if (!started) await handleStopVod();
@@ -2815,6 +2817,7 @@ function App() {
         void setVolumeLevel(nextVolume);
       }}
       onQuit={() => { void handleStopVod(); }}
+      onReload={() => { void reloadPlayback(); }}
     />
   ) : null;
 

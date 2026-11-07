@@ -83,4 +83,5 @@ export interface VodPlaybackItem {
   plot: string | null;
   season: number | null;
   episode: number | null;
+  durationSecs: number | null;
 }

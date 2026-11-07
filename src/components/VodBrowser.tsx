@@ -246,6 +246,7 @@ export function VodBrowser({
       plot: details.plot,
       season: null,
       episode: null,
+      durationSecs: details.durationSecs,
     });
   }
 
@@ -267,6 +268,7 @@ export function VodBrowser({
       plot: episode.plot ?? details.plot,
       season: episode.season,
       episode: episode.episode,
+      durationSecs: episode.durationSecs,
     });
   }
 

@@ -17,8 +17,17 @@ import { redactCredentials } from "../playlist/redaction";
 import { calculateVideoMarginRatio } from "./layout";
 import { clampSeekPosition, parseSubtitleTracks, type SubtitleTrack } from "./media";
 import { LatestPlaybackOperationCoordinator } from "./operations";
+import {
+  PLAYBACK_FAILED_MESSAGE,
+  PlaybackRecovery,
+  resumeStartPosition,
+  type RecoveryResult,
+  type RecoverySnapshot,
+} from "./recovery";
 
 export const DEFAULT_PLAYER_VOLUME = 72;
+const RECOVERY_TICK_MS = 1_000;
+const END_FILE_GRACE_MS = 750;
 const OBSERVED_PROPERTIES = [
   ["volume", "double"],
   ["mute", "flag"],
@@ -28,6 +37,7 @@ const OBSERVED_PROPERTIES = [
   ["container-fps", "double", "none"],
   ["paused-for-cache", "flag"],
   ["idle-active", "flag"],
+  ["eof-reached", "flag"],
   ["duration", "double", "none"],
   ["time-pos", "double", "none"],
   ["pause", "flag"],
@@ -53,6 +63,7 @@ export interface MpvPlayerState {
   duration: number | null;
   position: number | null;
   subtitleTracks: SubtitleTrack[];
+  recovery: RecoverySnapshot;
 }
 
 export interface MpvPlayableMedia {
@@ -62,6 +73,7 @@ export interface MpvPlayableMedia {
   stream: string | null;
   isPlayable: boolean;
   playabilityError?: string | null;
+  durationHint?: number | null;
 }
 
 type PlayerLayoutMode = "windowed" | "fullscreen";
@@ -125,6 +137,17 @@ export function useMpvPlayer(
   const userStoppedPlaybackRef = useRef(false);
   const lastErrorLogRef = useRef<string | null>(null);
   const playbackOperationsRef = useRef(new LatestPlaybackOperationCoordinator());
+  const recoveryRef = useRef(new PlaybackRecovery());
+  const recoverySnapshotRef = useRef<RecoverySnapshot>(recoveryRef.current.snapshot());
+  const readyRef = useRef(false);
+  const expectedStopRef = useRef(false);
+  const ourLoadRef = useRef(false);
+  const internalReloadRef = useRef(false);
+  const longestDurationRef = useRef<number | null>(null);
+  const lastStartFileAtRef = useRef(0);
+  const endFileGraceRef = useRef<number | null>(null);
+  const retryInFlightRef = useRef(false);
+  const lastPositionRef = useRef<number | null>(null);
   const [state, setState] = useState<MpvPlayerState>({
     environment: isNativeHost ? "tauri" : "browser",
     ready: false,
@@ -146,6 +169,7 @@ export function useMpvPlayer(
     duration: null,
     position: null,
     subtitleTracks: [],
+    recovery: recoveryRef.current.snapshot(),
   });
 
   async function applyVideoLayout() {
@@ -166,6 +190,86 @@ export function useMpvPlayer(
       if (await applyVideoLayout()) return true;
     }
     return false;
+  }
+
+  function clearEndFileGrace() {
+    if (endFileGraceRef.current !== null) {
+      window.clearTimeout(endFileGraceRef.current);
+      endFileGraceRef.current = null;
+    }
+  }
+
+  function applyRecovery(result: RecoveryResult) {
+    const previous = recoverySnapshotRef.current;
+    const next = result.snapshot;
+    const changed =
+      previous.phase !== next.phase ||
+      previous.attempt !== next.attempt ||
+      previous.maxAttempts !== next.maxAttempts ||
+      previous.message !== next.message ||
+      previous.lastError !== next.lastError;
+
+    if (changed) {
+      recoverySnapshotRef.current = next;
+      setState((currentState) => {
+        if (next.phase === "waiting") {
+          return {
+            ...currentState,
+            recovery: next,
+            loading: true,
+            buffering: false,
+            status: next.message ?? "Retrying…",
+          };
+        }
+        if (next.phase === "failed") {
+          return {
+            ...currentState,
+            recovery: next,
+            loading: false,
+            buffering: false,
+            idleActive: true,
+            status: "Playback error",
+            error: next.message ?? PLAYBACK_FAILED_MESSAGE,
+          };
+        }
+        return { ...currentState, recovery: next };
+      });
+    }
+
+    if (result.action.type === "retry") {
+      void retryCurrentMedia(result.action.startAt);
+    }
+
+    if (result.action.type === "give-up") {
+      // Holding a dead connection can block a one-connection account. Release
+      // it, but do not report a user stop; the error above is the outcome.
+      void command("stop").catch(() => undefined);
+    }
+  }
+
+  async function retryCurrentMedia(startAt: number | null) {
+    const media = currentMediaRef.current;
+    if (!media || retryInFlightRef.current) return;
+    retryInFlightRef.current = true;
+    try {
+      await loadMedia(media, () => true, { startAt, isRetry: true });
+    } finally {
+      retryInFlightRef.current = false;
+    }
+  }
+
+  /** mpv emits end-file during its own HLS reload; only a quiet one is a failure. */
+  function scheduleEndFileCheck(reason: string, code: number) {
+    clearEndFileGrace();
+    const startFileRevision = lastStartFileAtRef.current;
+    endFileGraceRef.current = window.setTimeout(() => {
+      endFileGraceRef.current = null;
+      if (userStoppedPlaybackRef.current) return;
+      if (lastStartFileAtRef.current !== startFileRevision) return;
+      const phase = recoverySnapshotRef.current.phase;
+      if (phase === "idle" || phase === "failed" || phase === "waiting") return;
+      applyRecovery(recoveryRef.current.loadFailed(`mpv reported ${reason} (${code})`, performance.now()));
+    }, END_FILE_GRACE_MS);
   }
 
   useEffect(() => {
@@ -241,15 +345,22 @@ export function useMpvPlayer(
             }
             case "paused-for-cache":
               if (typeof event.data === "boolean") {
+                applyRecovery(recoveryRef.current.bufferingChanged(event.data));
                 setState((currentState) => ({
                   ...currentState,
                   buffering: event.data,
-                  status: event.data ? "Buffering..." : currentState.status,
+                  status: event.data
+                    ? "Buffering..."
+                    : currentState.error
+                    ? currentState.status
+                    : currentMediaRef.current?.kind === "vod"
+                    ? "Playing"
+                    : "Playing live stream",
                 }));
               }
               break;
             case "idle-active":
-              if (typeof event.data === "boolean") {
+              if (typeof event.data === "boolean" && !expectedStopRef.current) {
                 setState((currentState) => ({
                   ...currentState,
                   idleActive: event.data,
@@ -262,22 +373,47 @@ export function useMpvPlayer(
                 }));
               }
               break;
-            case "duration":
-              setState((currentState) => ({
-                ...currentState,
-                duration: normalizeVideoFps(event.data),
-              }));
+            case "duration": {
+              const duration = normalizeVideoFps(event.data);
+              if (duration !== null) {
+                longestDurationRef.current = longestDurationRef.current === null
+                  ? duration
+                  : Math.max(longestDurationRef.current, duration);
+              }
+              applyRecovery(recoveryRef.current.progress(null, duration, performance.now()));
+              setState((currentState) => ({ ...currentState, duration }));
               break;
-            case "time-pos":
-              setState((currentState) => ({
-                ...currentState,
-                position: typeof event.data === "number" && Number.isFinite(event.data)
-                  ? Math.max(0, event.data)
-                  : null,
-              }));
+            }
+            case "time-pos": {
+              const position = typeof event.data === "number" && Number.isFinite(event.data)
+                ? Math.max(0, event.data)
+                : null;
+              lastPositionRef.current = position;
+              applyRecovery(recoveryRef.current.progress(position, null, performance.now()));
+              setState((currentState) => ({ ...currentState, position }));
+              break;
+            }
+            case "eof-reached":
+              if (event.data === true && !userStoppedPlaybackRef.current && !expectedStopRef.current) {
+                const media = currentMediaRef.current;
+                if (!media) break;
+                const result = recoveryRef.current.endOfStream(performance.now());
+                applyRecovery(result);
+                if (media.kind === "vod" && result.snapshot.phase === "idle") {
+                  setState((currentState) => ({
+                    ...currentState,
+                    status: "Playback complete",
+                    error: null,
+                    loading: false,
+                    buffering: false,
+                    idleActive: true,
+                  }));
+                }
+              }
               break;
             case "pause":
               if (typeof event.data === "boolean") {
+                applyRecovery(recoveryRef.current.pausedChanged(event.data, performance.now()));
                 setState((currentState) => ({ ...currentState, paused: event.data }));
               }
               break;
@@ -299,6 +435,15 @@ export function useMpvPlayer(
 
           switch (event.event) {
             case "start-file":
+              lastStartFileAtRef.current += 1;
+              clearEndFileGrace();
+              if (!ourLoadRef.current) {
+                // mpv reloading an HLS playlist by itself: no UI churn.
+                internalReloadRef.current = true;
+                break;
+              }
+              ourLoadRef.current = false;
+              internalReloadRef.current = false;
               setState((currentState) => ({
                 ...currentState,
                 loading: true,
@@ -312,7 +457,22 @@ export function useMpvPlayer(
               }));
               break;
             case "file-loaded":
+              expectedStopRef.current = false;
+              applyRecovery(recoveryRef.current.loaded(performance.now()));
+              if (!internalReloadRef.current) {
+                setState((currentState) => ({
+                  ...currentState,
+                  loading: true,
+                  status: "Starting playback...",
+                }));
+              }
+              break;
             case "playback-restart":
+              applyRecovery(recoveryRef.current.firstFrame(performance.now()));
+              if (internalReloadRef.current) {
+                internalReloadRef.current = false;
+                break;
+              }
               setState((currentState) => ({
                 ...currentState,
                 ready: true,
@@ -324,7 +484,7 @@ export function useMpvPlayer(
               }));
               break;
             case "end-file": {
-              if (userStoppedPlaybackRef.current || event.reason === "stop") {
+              if (userStoppedPlaybackRef.current) {
                 setState((currentState) => ({
                   ...currentState,
                   idleActive: true,
@@ -339,35 +499,16 @@ export function useMpvPlayer(
                 break;
               }
 
-              if (event.reason === "eof") {
-                setState((currentState) => ({
-                  ...currentState,
-                  idleActive: true,
-                  loading: false,
-                  buffering: false,
-                  error: null,
-                  status: currentMediaRef.current?.kind === "vod"
-                    ? "Playback complete"
-                    : "The stream ended.",
-                  videoWidth: null,
-                  videoHeight: null,
-                  videoFps: null,
-                }));
+              // The stop our own `loadfile replace` produces is not a user stop
+              // and must never reset the ladder.
+              if (event.reason === "stop") {
+                expectedStopRef.current = false;
                 break;
               }
 
-              const logSuffix = lastErrorLogRef.current ? ` ${lastErrorLogRef.current}` : "";
-              setState((currentState) => ({
-                ...currentState,
-                idleActive: true,
-                loading: false,
-                buffering: false,
-                error: `The stream stopped unexpectedly (${event.reason}, code ${event.error}).${logSuffix}`,
-                status: "Playback error",
-                videoWidth: null,
-                videoHeight: null,
-                videoFps: null,
-              }));
+              if (event.reason === "error" || event.reason === "eof") {
+                scheduleEndFileCheck(event.reason, event.error);
+              }
               break;
             }
             case "log-message": {
@@ -385,6 +526,7 @@ export function useMpvPlayer(
         await setProperty("volume", initialVolumeRef.current);
 
         if (!cancelled) {
+          readyRef.current = true;
           setState((currentState) => ({
             ...currentState,
             ready: true,
@@ -396,6 +538,7 @@ export function useMpvPlayer(
           return;
         }
 
+        readyRef.current = false;
         setState((currentState) => ({
           ...currentState,
           initError: describeInitError(error),
@@ -409,6 +552,7 @@ export function useMpvPlayer(
 
     return () => {
       cancelled = true;
+      clearEndFileGrace();
 
       if (unlistenProperties) {
         void unlistenProperties();
@@ -423,6 +567,20 @@ export function useMpvPlayer(
           // Best-effort cleanup during hot reload or shutdown.
         });
       }
+    };
+  }, [isNativeHost]);
+
+  useEffect(() => {
+    if (!isNativeHost) return undefined;
+
+    const timer = window.setInterval(() => {
+      const result = recoveryRef.current.tick(performance.now());
+      applyRecovery(result);
+    }, RECOVERY_TICK_MS);
+
+    return () => {
+      window.clearInterval(timer);
+      clearEndFileGrace();
     };
   }, [isNativeHost]);
 
@@ -470,10 +628,25 @@ export function useMpvPlayer(
     };
   }, [isNativeHost, layoutMode, state.ready, surfaceRef]);
 
-  async function playMedia(media: MpvPlayableMedia, externalGuard: () => boolean = () => true) {
+  interface LoadMediaOptions {
+    startAt?: number | null;
+    isRetry?: boolean;
+  }
+
+  async function loadMedia(
+    media: MpvPlayableMedia,
+    externalGuard: () => boolean = () => true,
+    options: LoadMediaOptions = {},
+  ) {
     if (!externalGuard()) return false;
     const operation = playbackOperationsRef.current.begin(externalGuard);
+    const { startAt = null, isRetry = false } = options;
     currentMediaRef.current = media;
+
+    if (!isRetry) {
+      clearEndFileGrace();
+      applyRecovery(recoveryRef.current.begin(media.kind, performance.now(), media.durationHint ?? null));
+    }
 
     if (!media.isPlayable) {
       setState((currentState) => ({
@@ -501,7 +674,7 @@ export function useMpvPlayer(
       return false;
     }
 
-    if (!state.ready) {
+    if (!readyRef.current) {
       setState((currentState) => ({
         ...currentState,
         idleActive: true,
@@ -531,6 +704,9 @@ export function useMpvPlayer(
 
     userStoppedPlaybackRef.current = false;
     lastErrorLogRef.current = null;
+    lastPositionRef.current = startAt ?? null;
+    if (!isRetry) longestDurationRef.current = null;
+    internalReloadRef.current = false;
 
     setState((currentState) => ({
       ...currentState,
@@ -544,33 +720,66 @@ export function useMpvPlayer(
       videoFps: null,
       playbackMode: media.kind,
       paused: false,
-      duration: null,
-      position: null,
+      duration: isRetry ? currentState.duration : null,
+      position: isRetry ? startAt : null,
       subtitleTracks: [],
     }));
 
     const stream = media.stream;
     try {
       if (!(await prepareVideoLayout())) {
-        throw new Error("The player surface is not ready yet. Try the channel again.");
+        if (operation.isCurrent()) {
+          if (isRetry) {
+            // A minimized window has no usable surface yet. That is not a
+            // stream failure, so wait instead of spending an attempt.
+            applyRecovery(recoveryRef.current.defer(performance.now()));
+          } else {
+            recoveryRef.current.cancel();
+            applyRecovery({ snapshot: recoveryRef.current.snapshot(), action: { type: "none", attempt: 0, delayMs: 0, startAt: null } });
+            setState((currentState) => ({
+              ...currentState,
+              idleActive: true,
+              loading: false,
+              buffering: false,
+              error: "The player surface is not ready yet. Try the channel again.",
+              status: "Playback error",
+              videoWidth: null,
+              videoHeight: null,
+              videoFps: null,
+            }));
+          }
+        }
+        return false;
+      }
+      // keep-open leaves pause=true at the end of the previous file; a retry
+      // must not start paused, or the watchdog sees a frozen "playing" stream.
+      await setProperty("pause", false).catch(() => undefined);
+      ourLoadRef.current = true;
+      expectedStopRef.current = true;
+      const args: (string | number)[] = [stream, "replace"];
+      if (typeof startAt === "number" && startAt >= 10) {
+        args.push(-1, `start=${Math.floor(startAt)}`);
       }
       const result = await playbackOperationsRef.current.run(operation, async () => {
-        await command("loadfile", [stream, "replace"]);
+        await command("loadfile", args);
         return true;
       });
       return result === true;
     } catch (error) {
+      ourLoadRef.current = false;
+      expectedStopRef.current = false;
       if (!operation.isCurrent()) return false;
-      setState((currentState) => ({
-        ...currentState,
-        idleActive: true,
-        loading: false,
-        buffering: false,
-        error: describeCommandError(error),
-        status: "Playback error",
-      }));
+      applyRecovery(recoveryRef.current.loadFailed(describeCommandError(error), performance.now()));
       return false;
     }
+  }
+
+  async function playMedia(
+    media: MpvPlayableMedia,
+    externalGuard: () => boolean = () => true,
+    options: LoadMediaOptions = {},
+  ) {
+    return loadMedia(media, externalGuard, options);
   }
 
   async function playChannel(channel: Channel, externalGuard?: () => boolean) {
@@ -591,6 +800,9 @@ export function useMpvPlayer(
     }
 
     userStoppedPlaybackRef.current = true;
+    clearEndFileGrace();
+    expectedStopRef.current = false;
+    applyRecovery(recoveryRef.current.cancel());
 
     try {
       const result = await playbackOperationsRef.current.run(operation, async () => {
@@ -621,11 +833,17 @@ export function useMpvPlayer(
   }
 
   async function reloadPlayback() {
-    if (!currentMediaRef.current) {
+    const media = currentMediaRef.current;
+    if (!media) {
       return;
     }
 
-    await playMedia(currentMediaRef.current);
+    const startAt = resumeStartPosition(
+      media.kind,
+      lastPositionRef.current,
+      longestDurationRef.current,
+    );
+    await loadMedia(media, () => true, { startAt });
   }
 
   async function toggleMute() {
@@ -661,11 +879,13 @@ export function useMpvPlayer(
     if (!isNativeHost || !state.ready || state.playbackMode !== "vod" || !Number.isFinite(seconds)) {
       return;
     }
+    applyRecovery(recoveryRef.current.seek(performance.now()));
     await command("seek", [seconds, "relative+exact"]);
   }
 
   async function seekAbsolute(seconds: number) {
     if (!isNativeHost || !state.ready || state.playbackMode !== "vod") return;
+    applyRecovery(recoveryRef.current.seek(performance.now()));
     await command("seek", [clampSeekPosition(seconds, state.duration), "absolute+exact"]);
   }
 

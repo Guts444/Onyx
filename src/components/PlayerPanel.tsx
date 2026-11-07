@@ -23,6 +23,10 @@ function getStatusTone(player: MpvPlayerState, selectedChannel: Channel | null) 
     return "error";
   }
 
+  if (player.recovery.phase === "waiting") {
+    return "warning";
+  }
+
   if (player.buffering) {
     return "warning";
   }
@@ -58,6 +62,9 @@ function getPlayerCopy(player: MpvPlayerState, selectedChannel: Channel | null) 
   } else if (player.error && selectedChannel) {
     heading = selectedChannel.name;
     body = player.error;
+  } else if (player.recovery.phase === "waiting") {
+    heading = selectedChannel?.name ?? "Playback";
+    body = player.recovery.message ?? "Retrying…";
   } else if (player.buffering && selectedChannel) {
     heading = selectedChannel.name;
     body = "The stream is buffering. Reload it if playback stalls for too long.";
@@ -104,6 +111,8 @@ export function PlayerPanel({
     player.idleActive ||
     selectedChannel.playabilityError !== null ||
     player.error !== null ||
+    player.recovery.phase === "waiting" ||
+    player.recovery.phase === "failed" ||
     player.loading ||
     player.buffering;
   const currentTitle = selectedChannel?.name ?? "Nothing selected";

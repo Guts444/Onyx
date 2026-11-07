@@ -15,6 +15,7 @@ interface VodPlayerPanelProps {
   onToggleMute: () => void;
   onSetVolume: (volume: number) => void;
   onQuit: () => void;
+  onReload: () => void;
 }
 
 function formatTime(seconds: number | null) {
@@ -41,6 +42,7 @@ export function VodPlayerPanel({
   onToggleMute,
   onSetVolume,
   onQuit,
+  onReload,
 }: VodPlayerPanelProps) {
   const [chromeVisible, setChromeVisible] = useState(true);
   const hideTimerRef = useRef<number | null>(null);
@@ -48,7 +50,8 @@ export function VodPlayerPanel({
   const position = player.position ?? 0;
   const duration = player.duration ?? 0;
   const selectedSubtitle = player.subtitleTracks.find((track) => track.selected)?.id ?? "off";
-  const showStatus = player.loading || player.buffering || player.error !== null || player.idleActive;
+  const showStatus = player.loading || player.buffering || player.error !== null || player.idleActive
+    || player.recovery.phase === "waiting" || player.recovery.phase === "failed";
   const resolution = player.videoWidth && player.videoHeight
     ? `${player.videoWidth} × ${player.videoHeight}`
     : null;
@@ -185,6 +188,9 @@ export function VodPlayerPanel({
                 onChange={(event) => onSetVolume(Number(event.currentTarget.value))}
               />
             </label>
+            <button type="button" className="control-button" onClick={onReload}>
+              Reload
+            </button>
             <button type="button" className="control-button" onClick={onQuit}>Quit</button>
           </div>
         </div>
