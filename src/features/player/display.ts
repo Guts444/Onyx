@@ -34,6 +34,43 @@ export type RestorePlan =
   | { kind: "keep" }
   | { kind: "size"; size: WindowSize };
 
+/**
+ * What `innerSize()`, `outerSize()` and `currentMonitor()` return: physical
+ * device pixels, unlike every size this module compares and sets, which are
+ * logical. Converting here means the rest of the window code has one unit.
+ */
+export interface PhysicalWindowReading {
+  inner: WindowSize;
+  outer: WindowSize;
+  monitor: WindowSize | null;
+  reportedMaximized: boolean;
+  scaleFactor: number;
+}
+
+export interface WindowReading extends WindowSnapshot {
+  /** Logical size the monitor reports; the closest thing to a work area Tauri exposes. */
+  monitor: WindowSize | null;
+}
+
+function toLogical(size: WindowSize, scale: number): WindowSize {
+  return { width: size.width / scale, height: size.height / scale };
+}
+
+export function logicalWindowReading(reading: PhysicalWindowReading): WindowReading {
+  const scale = reading.scaleFactor > 0 ? reading.scaleFactor : 1;
+  const inner = toLogical(reading.inner, scale);
+  const outer = toLogical(reading.outer, scale);
+  const monitor = reading.monitor ? toLogical(reading.monitor, scale) : null;
+  return {
+    innerWidth: inner.width,
+    innerHeight: inner.height,
+    maximized: monitor
+      ? isTrueMaximized(outer, monitor, reading.reportedMaximized)
+      : reading.reportedMaximized,
+    monitor,
+  };
+}
+
 export function clampToWorkArea(size: WindowSize, workArea: WindowSize): WindowSize {
   return {
     width: Math.max(1, Math.min(Math.round(size.width), Math.round(workArea.width))),

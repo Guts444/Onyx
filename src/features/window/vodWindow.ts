@@ -1,17 +1,15 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
-  isTrueMaximized,
+  logicalWindowReading,
   LIBRARY_WINDOW_MIN,
   VOD_WINDOWED_MIN,
+  type WindowReading,
   type WindowSize,
   type WindowSnapshot,
 } from "../player/display";
 
-export interface WindowReality extends WindowSnapshot {
-  /** Logical size the monitor reports; the closest thing to a work area Tauri exposes. */
-  monitor: WindowSize | null;
-}
+export type WindowReality = WindowReading;
 
 async function readCurrentWindow(): Promise<WindowReality> {
   if (!isTauri()) {
@@ -30,25 +28,15 @@ async function readCurrentWindow(): Promise<WindowReality> {
     currentMonitor(),
     appWindow.scaleFactor(),
   ]);
-  const logicalScale = scale > 0 ? scale : 1;
-  const monitorSize = monitor
-    ? {
-        width: monitor.size.width / logicalScale,
-        height: monitor.size.height / logicalScale,
-      }
-    : null;
-  return {
-    innerWidth: inner.width,
-    innerHeight: inner.height,
-    maximized: monitorSize
-      ? isTrueMaximized(
-          { width: outer.width, height: outer.height },
-          monitorSize,
-          maximized,
-        )
-      : maximized,
-    monitor: monitorSize,
-  };
+  // innerSize/outerSize/currentMonitor are physical pixels; every size the
+  // window code compares or sets is logical. Convert once, here.
+  return logicalWindowReading({
+    inner: { width: inner.width, height: inner.height },
+    outer: { width: outer.width, height: outer.height },
+    monitor: monitor ? { width: monitor.size.width, height: monitor.size.height } : null,
+    reportedMaximized: maximized,
+    scaleFactor: scale,
+  });
 }
 
 /** The window as it is now, after `enterWindowed` has applied its minimum. */
