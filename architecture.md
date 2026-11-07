@@ -121,6 +121,7 @@ Outside fullscreen, the primary navigation rail, searchable group pane, preview 
 - Selecting a movie or episode transitions directly to the shared fullscreen native player. VOD has no embedded/mini-player details-page mode; double-clicking, pressing `Esc`, or choosing **Quit** returns to the preserved details view.
 - VOD chrome hides after pointer inactivity and reappears on movement. A delayed single-click toggles pause/resume; double-click cancels that pending toggle before quitting, and control events do not bubble into surface gestures.
 - A finished title shows **Playback complete** instead of freezing on the last frame. A stalled or dropped title retries and re-opens at the last known position.
+- A saved position turns the action into **Resume from m:ss** with a separate **Start over**, for both movies and individual episodes. Positions are keyed by source, kind and the provider's own id (never the URL), saved between 10 s and 95% of a known duration, flushed every ten seconds while a title plays and once more on Quit, capped at 500 entries, and dropped when their source is removed.
 - Category catalogs and detail payloads load only after the user opens the corresponding section/title.
 - Poster images are lazy, card rendering is incremental, and switching away preserves the already loaded in-memory section state for the session.
 - Series episode maps are authoritative; season metadata is optional decoration.
@@ -161,6 +162,7 @@ Key persisted buckets:
 - saved volume
 - automatic-resume presentation mode
 - source-scoped hidden Movies and TV Shows category IDs
+- saved VOD positions (one entry per source, kind and provider id)
 
 Playback session details:
 

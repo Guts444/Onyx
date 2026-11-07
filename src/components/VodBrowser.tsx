@@ -22,6 +22,7 @@ import {
   fetchVodDetails,
 } from "../features/vod/api";
 import { buildXtreamVodStreamUrl, filterVodCatalog } from "../features/vod/model";
+import { vodPositionKey, type VodPositionStore } from "../features/vod/positions";
 
 interface VodBrowserProps {
   kind: VodKind;
@@ -30,8 +31,9 @@ interface VodBrowserProps {
   isActive: boolean;
   navigation: VodNavigationState;
   hiddenCategoryIds: string[];
+  positions: VodPositionStore;
   onNavigationChange: (patch: Partial<VodNavigationState>) => void;
-  onPlay: (item: VodPlaybackItem) => void;
+  onPlay: (item: VodPlaybackItem, startAt?: number | null) => void;
 }
 
 const PAGE_SIZE = 72;
@@ -43,6 +45,16 @@ function formatDuration(seconds: number | null) {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+function formatPosition(seconds: number) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remaining = total % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
+    : `${minutes}:${String(remaining).padStart(2, "0")}`;
+}
+
 export function VodBrowser({
   kind,
   sources,
@@ -50,6 +62,7 @@ export function VodBrowser({
   isActive,
   navigation,
   hiddenCategoryIds,
+  positions,
   onNavigationChange,
   onPlay,
 }: VodBrowserProps) {
@@ -67,6 +80,10 @@ export function VodBrowser({
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const deferredQuery = useDeferredValue(navigation.searchQuery);
   const source = sources.find((candidate) => candidate.id === sourceId) ?? sources[0] ?? null;
+  const moviePositionKey = source && details
+    ? vodPositionKey(source.id, "movie", details.id)
+    : null;
+  const savedMoviePosition = moviePositionKey ? positions[moviePositionKey] ?? null : null;
   const hiddenCategorySet = useMemo(() => new Set(hiddenCategoryIds), [hiddenCategoryIds]);
   const visibleCategories = useMemo(
     () => navigation.categories.filter((category) => !hiddenCategorySet.has(category.id)),
@@ -233,7 +250,7 @@ export function VodBrowser({
     );
   }
 
-  function playMovie() {
+  function playMovie(startAt: number | null) {
     if (!details || !source || !navigation.streamOrigin) return;
     const extension = details.containerExtension ?? selectedItem?.containerExtension ?? "mp4";
     onPlay({
@@ -247,10 +264,13 @@ export function VodBrowser({
       season: null,
       episode: null,
       durationSecs: details.durationSecs,
-    });
+    }, startAt);
   }
 
-  function playEpisode(episode: VodDetails["seasons"][number]["episodes"][number]) {
+  function playEpisode(
+    episode: VodDetails["seasons"][number]["episodes"][number],
+    startAt: number | null,
+  ) {
     if (!details || !source || !navigation.streamOrigin) return;
     onPlay({
       kind: "episode",
@@ -269,7 +289,7 @@ export function VodBrowser({
       season: episode.season,
       episode: episode.episode,
       durationSecs: episode.durationSecs,
-    });
+    }, startAt);
   }
 
   if (selectedItem) {
@@ -301,9 +321,28 @@ export function VodBrowser({
             {detailsLoading ? <span className="vod-loading-copy">Loading full details…</span> : null}
             {detailsError ? <span className="sidebar__notice">{detailsError}</span> : null}
             {kind === "movie" && details ? (
-              <button type="button" className="control-button control-button--primary vod-play-button" onClick={playMovie}>
-                ▶ Play Movie
-              </button>
+              savedMoviePosition ? (
+                <div className="vod-resume-actions">
+                  <button
+                    type="button"
+                    className="control-button control-button--primary vod-play-button"
+                    onClick={() => playMovie(savedMoviePosition.position)}
+                  >
+                    ▶ Resume from {formatPosition(savedMoviePosition.position)}
+                  </button>
+                  <button type="button" className="control-button" onClick={() => playMovie(null)}>
+                    Start over
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="control-button control-button--primary vod-play-button"
+                  onClick={() => playMovie(null)}
+                >
+                  ▶ Play Movie
+                </button>
+              )
             ) : null}
           </div>
         </div>
@@ -327,24 +366,45 @@ export function VodBrowser({
             </div>
             {activeSeason ? (
               <div className="vod-episode-list">
-                {activeSeason.episodes.map((episode) => (
-                  <article key={episode.id} className="vod-episode-card">
-                    {episode.cover ? (
-                      <img src={episode.cover} alt="" loading="lazy" />
-                    ) : (
-                      <div className="vod-episode-card__placeholder">E{episode.episode}</div>
-                    )}
-                    <div>
-                      <span className="sidebar__eyebrow">Episode {episode.episode}</span>
-                      <h3>{episode.title}</h3>
-                      <p>{episode.plot ?? "No episode description was provided."}</p>
-                      {formatDuration(episode.durationSecs) ? <small>{formatDuration(episode.durationSecs)}</small> : null}
-                    </div>
-                    <button type="button" className="control-button control-button--primary" onClick={() => playEpisode(episode)}>
-                      ▶ Play
-                    </button>
-                  </article>
-                ))}
+                {activeSeason.episodes.map((episode) => {
+                  const episodeKey = source
+                    ? vodPositionKey(source.id, "episode", episode.id)
+                    : null;
+                  const saved = episodeKey ? positions[episodeKey] ?? null : null;
+                  return (
+                    <article key={episode.id} className="vod-episode-card">
+                      {episode.cover ? (
+                        <img src={episode.cover} alt="" loading="lazy" />
+                      ) : (
+                        <div className="vod-episode-card__placeholder">E{episode.episode}</div>
+                      )}
+                      <div>
+                        <span className="sidebar__eyebrow">Episode {episode.episode}</span>
+                        <h3>{episode.title}</h3>
+                        <p>{episode.plot ?? "No episode description was provided."}</p>
+                        {formatDuration(episode.durationSecs) ? <small>{formatDuration(episode.durationSecs)}</small> : null}
+                      </div>
+                      {saved ? (
+                        <div className="vod-episode-actions">
+                          <button
+                            type="button"
+                            className="control-button control-button--primary"
+                            onClick={() => playEpisode(episode, saved.position)}
+                          >
+                            ▶ Resume {formatPosition(saved.position)}
+                          </button>
+                          <button type="button" className="control-button" onClick={() => playEpisode(episode, null)}>
+                            Start over
+                          </button>
+                        </div>
+                      ) : (
+                        <button type="button" className="control-button control-button--primary" onClick={() => playEpisode(episode, null)}>
+                          ▶ Play
+                        </button>
+                      )}
+                    </article>
+                  );
+                })}
               </div>
             ) : <div className="empty-state">No episodes were provided for this series.</div>}
           </div>

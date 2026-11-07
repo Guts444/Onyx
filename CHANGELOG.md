@@ -5,6 +5,7 @@
 - **Stream recovery**: A stream that never opens, stops progressing, drops mid-playback, or ends cleanly on a live channel is now retried automatically with a visible **Retrying (2 of 5)…** status instead of freezing on the last frame. Failures that arrive before any frame get a single retry, the ladder stops with a clear error and a working **Reload**, and changing channel, stopping, or switching source cancels a pending retry. Retried movies and episodes re-open at the position they reached.
 - **Playback truth**: Onyx now reports **Playing** only when a real frame exists, and a finished movie or episode shows **Playback complete** instead of a frozen picture.
 - **Reload for VOD**: The fullscreen movie and episode player now has a **Reload** control.
+- **Resume movies and episodes**: A movie or episode with saved progress opens with **Resume from m:ss** and a separate **Start over**, per episode for series. Progress is saved every ten seconds while a title plays and once more on Quit, survives a crash or restart, is scoped to its source, and is removed when that source is removed. When no saved progress exists the action stays a plain **Play**.
 
 ## v0.6.2 - 2026-11-06
 

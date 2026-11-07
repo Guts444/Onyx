@@ -151,6 +151,13 @@ import {
   updateHiddenVodCategoryIds,
   type VodCategoryVisibilityStore,
 } from "./features/vod/preferences";
+import {
+  removeSourcePositions,
+  reviveVodPositions,
+  saveVodPosition,
+  vodPositionKey,
+  type VodPositionStore,
+} from "./features/vod/positions";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { hashString } from "./utils/hash";
 import "./App.css";
@@ -158,6 +165,8 @@ import "./App.css";
 const FAVORITES_STORAGE_KEY = "iptv-player:favorites";
 const RECENTS_STORAGE_KEY = "iptv-player:recents";
 const GROUP_VISIBILITY_STORAGE_KEY = "iptv-player:hidden-groups";
+const VOD_POSITIONS_STORAGE_KEY = "iptv-player:vod-positions";
+const VOD_POSITION_FLUSH_MS = 10_000;
 const COLLAPSED_GROUPS_STORAGE_KEY = "iptv-player:collapsed-groups";
 const SAVED_SOURCES_STORAGE_KEY = SAVED_SOURCES_PERSISTENCE_KEY;
 const SOURCE_LIBRARY_INDEX_STORAGE_KEY = "iptv-player:source-library-index";
@@ -308,6 +317,11 @@ function App() {
     RECENTS_STORAGE_KEY,
     [],
   );
+  const [vodPositions, setVodPositions, vodPositionsHydrated] = usePersistentState<VodPositionStore>(
+    VOD_POSITIONS_STORAGE_KEY,
+    {},
+    reviveVodPositions,
+  );
   const [hiddenGroupsByLibrary, setHiddenGroupsByLibrary, hiddenGroupsHydrated] =
     usePersistentState<Record<string, string[]>>(GROUP_VISIBILITY_STORAGE_KEY, {});
   const [collapsedGroupsByLibrary, setCollapsedGroupsByLibrary, collapsedGroupsHydrated] = usePersistentState<
@@ -454,6 +468,8 @@ function App() {
   const startupPlaybackSessionRef = useRef<PlaybackSession | null>(null);
   const startupPlaybackRestoreGenerationRef = useRef(0);
   const fullscreenStateRevisionRef = useRef(0);
+  const vodPositionRef = useRef<number | null>(null);
+  const vodDurationRef = useRef<number | null>(null);
   const fullscreenHostOperationsRef = useRef(new LatestPlaybackOperationCoordinator());
 
   const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
@@ -541,6 +557,34 @@ function App() {
     seekAbsolute,
     setSubtitleTrack,
   } = useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
+
+  useEffect(() => {
+    vodPositionRef.current = player.position;
+    vodDurationRef.current = player.duration;
+  }, [player.position, player.duration]);
+
+  function commitVodPosition(
+    item: VodPlaybackItem,
+    position: number | null,
+    duration: number | null,
+  ) {
+    if (!vodPositionsHydrated) return;
+    const key = vodPositionKey(activeSourceIdRef.current, item.kind, item.id);
+    if (key === null) return;
+    setVodPositions((currentStore) =>
+      saveVodPosition(currentStore, key, position, duration, Date.now()),
+    );
+  }
+
+  useEffect(() => {
+    if (!activeVodPlayback) return undefined;
+
+    const timer = window.setInterval(() => {
+      commitVodPosition(activeVodPlayback, vodPositionRef.current, vodDurationRef.current);
+    }, VOD_POSITION_FLUSH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [activeVodPlayback]);
 
   useEffect(() => {
     selectedChannelIdRef.current = selectedChannelId;
@@ -1376,7 +1420,7 @@ function App() {
     }
   }
 
-  async function handlePlayVod(item: VodPlaybackItem) {
+  async function handlePlayVod(item: VodPlaybackItem, startAt: number | null = null) {
     cancelStartupPlaybackRestore();
     const fullscreenRevision = ++fullscreenStateRevisionRef.current;
     const isCurrentPlayback = () => fullscreenStateRevisionRef.current === fullscreenRevision;
@@ -1399,7 +1443,7 @@ function App() {
         stream: item.stream,
         isPlayable: true,
         durationHint: item.durationSecs,
-      }, isCurrentPlayback);
+      }, isCurrentPlayback, { startAt });
       if (!isCurrentPlayback()) return;
       if (!started) await handleStopVod();
     } catch (error) {
@@ -1410,6 +1454,12 @@ function App() {
   }
 
   async function handleStopVod() {
+    // Capture the position before the player resets; a null or a 0 from this
+    // point must not erase a good saved position.
+    if (activeVodPlayback) {
+      commitVodPosition(activeVodPlayback, vodPositionRef.current, vodDurationRef.current);
+    }
+
     const fullscreenRevision = ++fullscreenStateRevisionRef.current;
     const fullscreenExit = applyHostFullscreenForRevision(false, fullscreenRevision);
     await stopPlayback();
@@ -1746,6 +1796,7 @@ function App() {
     setHiddenVodCategoriesBySource((currentStore) =>
       removeVodCategoryVisibilitySource(currentStore, sourceId),
     );
+    setVodPositions((currentStore) => removeSourcePositions(currentStore, sourceId));
     setCollapsedSourceIds((currentIds) =>
       currentIds.filter((currentId) => currentId !== sourceId),
     );
@@ -2972,8 +3023,9 @@ function App() {
                 isActive={activeSection === "movies"}
                 navigation={vodNavigationByKind.movie}
                 hiddenCategoryIds={movieHiddenCategoryIds}
+                positions={vodPositions}
                 onNavigationChange={(patch) => updateVodNavigation("movie", patch)}
-                onPlay={(item) => { void handlePlayVod(item); }}
+                onPlay={(item, startAt) => { void handlePlayVod(item, startAt ?? null); }}
               />
             ) : null}
             {visitedVodSections.series ? (
@@ -2984,8 +3036,9 @@ function App() {
                 isActive={activeSection === "series"}
                 navigation={vodNavigationByKind.series}
                 hiddenCategoryIds={seriesHiddenCategoryIds}
+                positions={vodPositions}
                 onNavigationChange={(patch) => updateVodNavigation("series", patch)}
-                onPlay={(item) => { void handlePlayVod(item); }}
+                onPlay={(item, startAt) => { void handlePlayVod(item, startAt ?? null); }}
               />
             ) : null}
           </div>
