@@ -57,7 +57,9 @@ export function VodPlayerPanel({
   const clickTimerRef = useRef<number | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const position = player.position ?? 0;
-  const duration = player.duration ?? 0;
+  // The longest duration seen, not the raw value: a truncated read would make
+  // the bar jump to the end and the slider clamp inside the file.
+  const duration = player.longestDuration ?? player.duration ?? 0;
   const selectedSubtitle = player.subtitleTracks.find((track) => track.selected)?.id ?? "off";
   const showStatus = player.loading || player.buffering || player.error !== null || player.idleActive
     || player.recovery.phase === "waiting" || player.recovery.phase === "failed";
@@ -182,7 +184,7 @@ export function VodPlayerPanel({
               disabled={duration <= 0}
               aria-label="Playback position"
             />
-            <span>{formatTime(player.duration)}</span>
+            <span>{formatTime(duration)}</span>
           </div>
 
           <div className="vod-player__controls">

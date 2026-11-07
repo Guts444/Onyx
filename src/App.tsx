@@ -581,8 +581,8 @@ function App() {
 
   useEffect(() => {
     vodPositionRef.current = player.position;
-    vodDurationRef.current = player.duration;
-  }, [player.position, player.duration]);
+    vodDurationRef.current = player.longestDuration;
+  }, [player.position, player.longestDuration]);
 
   function commitVodPosition(
     item: VodPlaybackItem,

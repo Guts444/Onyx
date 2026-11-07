@@ -61,6 +61,12 @@ export interface MpvPlayerState {
   playbackMode: "live" | "vod" | null;
   paused: boolean;
   duration: number | null;
+  /**
+   * The longest duration seen for the current title, including the catalog
+   * hint. A truncated or re-estimated duration never shrinks this, so it is
+   * the value saved positions and the end rule must use.
+   */
+  longestDuration: number | null;
   position: number | null;
   subtitleTracks: SubtitleTrack[];
   recovery: RecoverySnapshot;
@@ -104,6 +110,10 @@ function normalizeVideoFps(value: unknown) {
   }
 
   return value;
+}
+
+function normalizeDurationHint(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function getMarginRatio(surface: HTMLElement) {
@@ -167,6 +177,7 @@ export function useMpvPlayer(
     playbackMode: null,
     paused: false,
     duration: null,
+    longestDuration: null,
     position: null,
     subtitleTracks: [],
     recovery: recoveryRef.current.snapshot(),
@@ -381,7 +392,14 @@ export function useMpvPlayer(
                   : Math.max(longestDurationRef.current, duration);
               }
               applyRecovery(recoveryRef.current.progress(null, duration, performance.now()));
-              setState((currentState) => ({ ...currentState, duration }));
+              setState((currentState) => ({
+                ...currentState,
+                duration,
+                longestDuration:
+                  duration === null
+                    ? currentState.longestDuration
+                    : Math.max(currentState.longestDuration ?? 0, duration),
+              }));
               break;
             }
             case "time-pos": {
@@ -721,6 +739,9 @@ export function useMpvPlayer(
       playbackMode: media.kind,
       paused: false,
       duration: isRetry ? currentState.duration : null,
+      longestDuration: isRetry
+        ? currentState.longestDuration
+        : normalizeDurationHint(media.durationHint),
       position: isRetry ? startAt : null,
       subtitleTracks: [],
     }));
@@ -753,7 +774,10 @@ export function useMpvPlayer(
       }
       // keep-open leaves pause=true at the end of the previous file; a retry
       // must not start paused, or the watchdog sees a frozen "playing" stream.
+      // The recovery machine is told too: a missed pause event must not leave
+      // it believing a deliberately unpaused load is a user pause.
       await setProperty("pause", false).catch(() => undefined);
+      applyRecovery(recoveryRef.current.pausedChanged(false, performance.now()));
       ourLoadRef.current = true;
       expectedStopRef.current = true;
       const args: (string | number)[] = [stream, "replace"];
