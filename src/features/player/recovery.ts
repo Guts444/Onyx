@@ -29,6 +29,13 @@ export interface RecoveryOptions {
   stallTimeoutMs: number;
   progressTimeoutMs: number;
   seekSuppressionMs: number;
+  /**
+   * A timestamp step backwards at least this large is a discontinuity (a
+   * provider restarting its clock) or a seek the player did not announce. It
+   * moves the progress baseline instead of counting as a stall. Smaller steps
+   * are the usual HLS rebuild, which must never look like progress.
+   */
+  backwardJumpSeconds: number;
   sustainedPlaybackMs: number;
   minimumResumeSeconds: number;
   minimumResumeFraction: number;
@@ -42,6 +49,7 @@ export const DEFAULT_RECOVERY_OPTIONS: RecoveryOptions = {
   stallTimeoutMs: 15_000,
   progressTimeoutMs: 30_000,
   seekSuppressionMs: 3_000,
+  backwardJumpSeconds: 10,
   sustainedPlaybackMs: 60_000,
   minimumResumeSeconds: 10,
   minimumResumeFraction: 0.05,
@@ -102,7 +110,8 @@ export class PlaybackRecovery {
   private lastProgressAt = 0;
 
   private lastPosition: number | null = null;
-  private maxPosition: number | null = null;
+  /** The position that last counted as progress; null means "adopt the next". */
+  private baseline: number | null = null;
   private longestDuration: number | null = null;
 
   private buffering = false;
@@ -128,7 +137,7 @@ export class PlaybackRecovery {
     this.firstFrameAt = null;
     this.lastProgressAt = at;
     this.lastPosition = null;
-    this.maxPosition = null;
+    this.baseline = null;
     this.longestDuration =
       typeof durationHint === "number" && Number.isFinite(durationHint) && durationHint > 0
         ? durationHint
@@ -145,7 +154,9 @@ export class PlaybackRecovery {
     return this.result(noAction());
   }
 
-  /** Metadata is parsed. This is explicitly not a first frame. */
+  /**
+   * Metadata is parsed. This is explicitly not a first frame.
+   */
   loaded(at: number): RecoveryResult {
     if (this.phase === "loading" && this.firstFrameAt === null) {
       this.lastProgressAt = Math.max(this.lastProgressAt, at);
@@ -154,19 +165,18 @@ export class PlaybackRecovery {
   }
 
   firstFrame(at: number): RecoveryResult {
-    if (this.phase === "idle") return this.result(noAction());
-    // mpv emits playback-restart again on every HLS reload; the attempt clock
-    // and the progress clock must be set once, at the real first frame.
-    if (this.phase === "playing" && this.firstFrameAt !== null) {
-      return this.result(noAction());
-    }
+    // Only a load in flight can produce a first frame. mpv also emits
+    // playback-restart when it seeks to the end of a file, and that event must
+    // never cancel a retry that is already decided (measured: it froze a
+    // truncated movie on "Playing" with the ladder dead).
+    if (this.phase !== "loading") return this.result(noAction());
     this.phase = "playing";
     this.firstFrameAt = at;
     this.lastProgressAt = at;
     this.reachedFirstFrame = true;
-    if (this.maxPosition === null && this.lastPosition !== null) {
-      this.maxPosition = this.lastPosition;
-    }
+    // Wherever the viewer is now is the baseline for progress, not a stale
+    // value from before a retry or a seek.
+    this.baseline = null;
     return this.result(noAction());
   }
 
@@ -180,22 +190,38 @@ export class PlaybackRecovery {
     }
     if (typeof position === "number" && Number.isFinite(position)) {
       this.lastPosition = position;
-      if (this.maxPosition === null) {
-        this.maxPosition = position;
-        if (this.phase === "playing") this.lastProgressAt = at;
-      } else if (position > this.maxPosition + 0.5) {
-        this.maxPosition = position;
-        if (this.phase === "playing") this.lastProgressAt = at;
-      }
+      if (this.phase === "playing") this.observePosition(position, at);
       if (
         this.lastRetryStartAt !== null &&
-        this.maxPosition !== null &&
-        this.maxPosition > this.lastRetryStartAt + 1
+        this.lastPosition > this.lastRetryStartAt + 1
       ) {
         this.progressSinceRetry = true;
       }
     }
     return this.result(noAction());
+  }
+
+  /**
+   * Only a picture that really moves counts. A step forward (or a step far
+   * enough back to be a discontinuity) moves the baseline; a small step back
+   * is the HLS rebuild of the last segments and is not progress.
+   */
+  private observePosition(position: number, at: number): void {
+    const baseline = this.baseline;
+    if (baseline === null) {
+      this.baseline = position;
+      this.lastProgressAt = at;
+      return;
+    }
+    if (position > baseline + 0.5) {
+      this.baseline = position;
+      this.lastProgressAt = at;
+      return;
+    }
+    if (position < baseline - this.options.backwardJumpSeconds) {
+      this.baseline = position;
+      this.lastProgressAt = at;
+    }
   }
 
   bufferingChanged(active: boolean): RecoveryResult {
@@ -212,15 +238,22 @@ export class PlaybackRecovery {
   seek(at: number): RecoveryResult {
     this.seekUntil = at + this.options.seekSuppressionMs;
     this.lastProgressAt = at;
+    // The viewer chose a new position; the next reported one is the baseline,
+    // whether they scrubbed forward or rewound an hour.
+    this.baseline = null;
     return this.result(noAction());
   }
 
   /** A clean stream end. A live stream is recoverable; for VOD it depends. */
   endOfStream(at: number): RecoveryResult {
-    if (this.phase === "idle") return this.result(noAction());
+    if (this.phase === "idle" || this.phase === "waiting" || this.phase === "failed") {
+      return this.result(noAction());
+    }
     if (this.kind === "vod") {
       const end = this.longestDuration;
-      const position = this.maxPosition ?? this.lastPosition ?? 0;
+      // Where the viewer actually is, not the furthest point they ever reached:
+      // an EOF after a rewind is a drop, not the end of the title.
+      const position = this.lastPosition ?? this.baseline ?? 0;
       const nearEnd = end !== null && end > 0 && position >= end - 2;
       // A retry that hits EOF again without advancing means the title really
       // ends there, so a truncated file cannot loop.
@@ -237,7 +270,11 @@ export class PlaybackRecovery {
 
   /** mpv reported an error before the first frame. */
   loadFailed(error: string, at: number): RecoveryResult {
-    if (this.phase === "idle") return this.result(noAction());
+    // A retry is already scheduled; a duplicate failure from the old stream
+    // must not spend a second attempt.
+    if (this.phase === "idle" || this.phase === "waiting" || this.phase === "failed") {
+      return this.result(noAction());
+    }
     // The refusal cap is about the media, not the attempt: a stream that
     // already played in this ladder is a drop, even if the retry fails fast.
     const refusal = !this.reachedFirstFrame;
@@ -319,7 +356,8 @@ export class PlaybackRecovery {
       const startAt = this.retryStartAt();
       this.lastRetryStartAt = startAt;
       this.progressSinceRetry = false;
-      this.maxPosition = startAt;
+      this.lastPosition = startAt;
+      this.baseline = null;
       return this.result({
         type: "retry",
         attempt: this.attempt,
@@ -388,12 +426,15 @@ export class PlaybackRecovery {
   }
 
   private retryStartAt(): number | null {
-    return resumeStartPosition(
-      this.kind,
-      this.maxPosition ?? this.lastPosition,
-      this.longestDuration,
-      this.options,
-    );
+    // A retry continues where the viewer is. Unlike Reload, it must not fall
+    // back to zero near the end: the title is not finished, the stream failed.
+    // It also must resume without a duration, or a real end would replay from
+    // the start for as long as the app stays open.
+    if (this.kind !== "vod") return null;
+    const position = this.lastPosition;
+    if (position === null || !Number.isFinite(position)) return null;
+    if (position < this.options.minimumResumeSeconds) return null;
+    return Math.floor(position);
   }
 
   private result(action: RecoveryAction): RecoveryResult {

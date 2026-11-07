@@ -182,7 +182,7 @@ test("a VOD EOF with no known duration retries from the position", () => {
   const result = recovery.endOfStream(1_100);
   assert.equal(result.snapshot.phase, "waiting");
   const retry = recovery.tick(2_100);
-  assert.equal(retry.action.startAt, null);
+  assert.equal(retry.action.startAt, 42);
 });
 
 test("a retry that hits EOF without progress is the real end", () => {
@@ -301,7 +301,9 @@ test("the final message says whether the stream ever opened", () => {
   const refused = new PlaybackRecovery(OPTIONS);
   refused.begin("live", 0);
   refused.loadFailed("http 403", 10);
-  refused.loadFailed("http 403", 20);
+  const retry = tickThrough(refused, 11, 12_000);
+  assert.equal(retry.action.type, "retry");
+  refused.loadFailed("http 403", retry.now + 100);
   assert.equal(refused.snapshot().phase, "failed");
   assert.equal(refused.snapshot().message, PLAYBACK_FAILED_MESSAGE);
 
@@ -404,7 +406,7 @@ test("a VOD retry resumes from the last position, not from zero", () => {
   assert.equal(result.action.startAt, 42);
 });
 
-test("a VOD retry near the start or near the end starts from zero", () => {
+test("a VOD retry starts where the viewer is", () => {
   const early = started("vod");
   early.progress(4, 600, 2_000);
   early.loadFailed("reset", 3_000);
@@ -413,12 +415,57 @@ test("a VOD retry near the start or near the end starts from zero", () => {
   const late = started("vod");
   late.progress(590, 600, 2_000);
   late.loadFailed("reset", 3_000);
-  assert.equal(late.tick(4_000).action.startAt, null);
+  assert.equal(late.tick(4_000).action.startAt, 590);
 
   const unknown = started("vod");
   unknown.progress(42, null, 2_000);
   unknown.loadFailed("reset", 3_000);
-  assert.equal(unknown.tick(4_000).action.startAt, null);
+  assert.equal(unknown.tick(4_000).action.startAt, 42);
+});
+
+test("rewinding a movie is not a failure, and the retry stays where the viewer is", () => {
+  const recovery = started("vod");
+  recovery.progress(600, 7_200, 1_000);
+  // Two presses of -30 s, exactly 60 seconds back.
+  recovery.seek(3_000);
+  recovery.progress(570, 7_200, 3_100);
+  recovery.seek(3_400);
+  recovery.progress(540, 7_200, 3_500);
+  // The picture keeps moving, but never past the old maximum.
+  let now = 4_000;
+  for (let offset = 1; offset <= 40; offset += 1) {
+    recovery.progress(540 + offset, 7_200, now);
+    const result = recovery.tick(now);
+    assert.equal(result.action.type, "none", `triggered at ${now}`);
+    now += 1_000;
+  }
+  // A real stall still fires from the new baseline, and the retry continues
+  // where the viewer is, not where the playback used to be.
+  recovery.bufferingChanged(true);
+  const stalled = tickUntil(recovery, now, now + 20_000);
+  assert.equal(stalled.action.type, "retry");
+  assert.equal(stalled.action.startAt, 580);
+});
+
+test("a backward timestamp jump on a healthy live stream is not a stall", () => {
+  const recovery = started("live");
+  recovery.progress(29, null, 1_000);
+  // Measured on the pinned DLL: a provider clock restart steps from 29 to 0.
+  recovery.progress(0, null, 2_000);
+  for (let now = 3_000; now <= 60_000; now += 1_000) {
+    recovery.progress((now - 2_000) / 1_000, null, now);
+    assert.equal(recovery.tick(now).action.type, "none", `triggered at ${now}`);
+  }
+});
+
+test("an EOF after a rewind is a drop, not the end of the title", () => {
+  const recovery = started("vod");
+  recovery.progress(7_190, 7_200, 1_000);
+  recovery.seek(2_000);
+  recovery.progress(120, 7_200, 2_100);
+  const result = recovery.endOfStream(2_200);
+  assert.equal(result.snapshot.phase, "waiting");
+  assert.equal(recovery.tick(3_300).action.startAt, 120);
 });
 
 test("a live retry never carries a start position", () => {
@@ -426,4 +473,38 @@ test("a live retry never carries a start position", () => {
   recovery.progress(42, 600, 2_000);
   recovery.loadFailed("reset", 3_000);
   assert.equal(recovery.tick(4_000).action.startAt, null);
+});
+
+test("a stale playback-restart never cancels a pending retry", () => {
+  // Measured on the pinned player: seeking to the end of a file emits both
+  // `eof-reached` and `playback-restart`, and the restart arrived after the
+  // retry was decided, freezing the movie on "Playing".
+  const live = started("live");
+  live.endOfStream(5_000);
+  assert.equal(live.snapshot().phase, "waiting");
+  live.firstFrame(5_050);
+  assert.equal(live.snapshot().phase, "waiting");
+  assert.equal(live.tick(6_500).action.type, "retry");
+
+  const vod = new PlaybackRecovery(OPTIONS);
+  vod.begin("vod", 0, 120);
+  vod.firstFrame(100);
+  vod.progress(82, 84, 80_000);
+  vod.endOfStream(80_100);
+  assert.equal(vod.snapshot().phase, "waiting");
+  vod.firstFrame(80_150);
+  assert.equal(vod.snapshot().phase, "waiting");
+  const retry = vod.tick(81_500);
+  assert.equal(retry.action.type, "retry");
+  assert.equal(retry.action.startAt, 82);
+});
+
+test("a duplicate end or failure while waiting does not spend another attempt", () => {
+  const recovery = started("live");
+  recovery.loadFailed("reset", 2_000);
+  assert.equal(recovery.snapshot().attempt, 2);
+  recovery.loadFailed("reset", 2_100);
+  recovery.endOfStream(2_200);
+  assert.equal(recovery.snapshot().attempt, 2);
+  assert.equal(recovery.snapshot().phase, "waiting");
 });
