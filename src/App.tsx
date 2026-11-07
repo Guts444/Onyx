@@ -170,6 +170,7 @@ import {
   leaveVodWindow,
   maximizeWindow,
   setLibraryWindowMinimum,
+  setVodWindowedMinimum,
   setWindowSize,
 } from "./features/window/vodWindow";
 import { DiagnosticsOverlay } from "./components/DiagnosticsOverlay";
@@ -487,6 +488,8 @@ function App() {
   const startupPlaybackRestoreGenerationRef = useRef(0);
   const fullscreenStateRevisionRef = useRef(0);
   const vodWindowSnapshotRef = useRef<WindowSnapshot | null>(null);
+  /** True once this playback left fullscreen, even if it came back. */
+  const vodWasWindowedRef = useRef(false);
   const vodPositionRef = useRef<number | null>(null);
   const vodDurationRef = useRef<number | null>(null);
   const fullscreenHostOperationsRef = useRef(new LatestPlaybackOperationCoordinator());
@@ -931,6 +934,12 @@ function App() {
           if (native === (vodDisplay === "fullscreen")) return;
           const revision = ++fullscreenStateRevisionRef.current;
           if (cancelled || fullscreenStateRevisionRef.current !== revision) return;
+          if (!native) {
+            // A fullscreen exit the app did not start still needs the smaller
+            // minimum, or the window cannot be snapped while playback goes on.
+            vodWasWindowedRef.current = true;
+            void setVodWindowedMinimum().catch(() => undefined);
+          }
           setVodDisplay(native ? "fullscreen" : "windowed");
           setIsFullscreen(native);
           schedulePlayerLayoutSync();
@@ -1498,6 +1507,7 @@ function App() {
         // The window keeps its size; the panel still fills it.
       }
       if (!isCurrent()) return;
+      vodWasWindowedRef.current = true;
       setVodDisplay("windowed");
       setIsFullscreen(false);
       schedulePlayerLayoutSync();
@@ -1520,6 +1530,7 @@ function App() {
   async function handlePlayVod(item: VodPlaybackItem, startAt: number | null = null) {
     cancelStartupPlaybackRestore();
     setVodDisplay("fullscreen");
+    vodWasWindowedRef.current = false;
     try {
       vodWindowSnapshotRef.current = await captureWindowSnapshot();
     } catch {
@@ -1563,7 +1574,9 @@ function App() {
       commitVodPosition(activeVodPlayback, vodPositionRef.current, vodDurationRef.current);
     }
 
-    const wasWindowed = vodDisplay === "windowed";
+    // The whole playback may have left fullscreen and come back; the window
+    // still needs its minimum and size restored.
+    const wasWindowed = vodWasWindowedRef.current;
     const snapshot = vodWindowSnapshotRef.current;
     const fullscreenRevision = ++fullscreenStateRevisionRef.current;
     const fullscreenExit = applyHostFullscreenForRevision(false, fullscreenRevision);
