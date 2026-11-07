@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import type { VodPlaybackItem } from "../domain/vod";
+import type { VodDisplay } from "../features/player/display";
 import type { MpvPlayerState } from "../features/player/mpv";
 
 interface VodPlayerPanelProps {
   player: MpvPlayerState;
   media: VodPlaybackItem;
   isFullscreen: boolean;
+  display: VodDisplay;
   playerShellRef: RefObject<HTMLDivElement | null>;
   playerSurfaceRef: RefObject<HTMLDivElement | null>;
   onTogglePause: () => void;
@@ -14,6 +16,7 @@ interface VodPlayerPanelProps {
   onSelectSubtitle: (trackId: number | null) => void;
   onToggleMute: () => void;
   onSetVolume: (volume: number) => void;
+  onToggleDisplay: () => void;
   onQuit: () => void;
   onReload: () => void;
 }
@@ -33,6 +36,7 @@ export function VodPlayerPanel({
   player,
   media,
   isFullscreen,
+  display,
   playerShellRef,
   playerSurfaceRef,
   onTogglePause,
@@ -41,17 +45,24 @@ export function VodPlayerPanel({
   onSelectSubtitle,
   onToggleMute,
   onSetVolume,
+  onToggleDisplay,
   onQuit,
   onReload,
 }: VodPlayerPanelProps) {
   const [chromeVisible, setChromeVisible] = useState(true);
+  const [compact, setCompact] = useState(false);
   const hideTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const position = player.position ?? 0;
   const duration = player.duration ?? 0;
   const selectedSubtitle = player.subtitleTracks.find((track) => track.selected)?.id ?? "off";
   const showStatus = player.loading || player.buffering || player.error !== null || player.idleActive
     || player.recovery.phase === "waiting" || player.recovery.phase === "failed";
+  // Chrome that disappears while the user is reading an error or a paused frame
+  // is a way to hide the controls exactly when they are needed.
+  const stickyChrome = player.paused || showStatus || player.recovery.phase === "waiting"
+    || player.recovery.phase === "failed";
   const resolution = player.videoWidth && player.videoHeight
     ? `${player.videoWidth} × ${player.videoHeight}`
     : null;
@@ -64,10 +75,16 @@ export function VodPlayerPanel({
   function revealChrome(scheduleHide = true) {
     clearHideTimer();
     setChromeVisible(true);
-    if (scheduleHide) {
+    if (scheduleHide && !stickyChrome) {
       hideTimerRef.current = window.setTimeout(() => setChromeVisible(false), 3000);
     }
   }
+
+  useEffect(() => {
+    if (!stickyChrome) return;
+    clearHideTimer();
+    setChromeVisible(true);
+  }, [stickyChrome]);
 
   useEffect(() => {
     revealChrome();
@@ -76,6 +93,18 @@ export function VodPlayerPanel({
       if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
     };
   }, [media.id]);
+
+  useEffect(() => {
+    const element = shellRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect) return;
+      setCompact(rect.width < 720 || rect.height < 420);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   function handleSurfaceClick(event: MouseEvent<HTMLDivElement>) {
     if (event.detail > 1) return;
@@ -91,15 +120,19 @@ export function VodPlayerPanel({
     event.preventDefault();
     if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
     clickTimerRef.current = null;
-    onQuit();
+    onToggleDisplay();
   }
 
   return (
     <section
-      ref={playerShellRef}
-      className={`panel player-shell vod-player ${
+      ref={(node) => {
+        const element = node as HTMLDivElement | null;
+        shellRef.current = element;
+        playerShellRef.current = element;
+      }}
+      className={`panel player-shell vod-player vod-player--${display} ${
         isFullscreen ? "player-shell--fullscreen" : ""
-      }`}
+      } ${compact ? "vod-player--compact" : ""}`}
     >
       <div
         ref={playerSurfaceRef}

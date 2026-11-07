@@ -1783,6 +1783,67 @@ img {
   accent-color: var(--accent);
 }
 
+/* Windowed VOD: the player is the whole window, so the shell keeps no gutter
+   and the library stays mounted but invisible behind it. */
+.app-shell.app-shell--vod-windowed {
+  display: flex;
+  padding: 0;
+}
+
+.app-shell--vod-windowed > .player-shell {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+}
+
+.app-shell--vod-windowed .player-surface {
+  min-height: 0;
+}
+
+/* Kept mounted (details view, scroll position) but out of the layout, so the
+   player can be the whole window. */
+.workspace--vod-hidden {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Narrow player: one row of controls must survive 480 x 270. */
+.vod-player--compact .vod-player__chrome {
+  padding: 10px 12px 14px;
+}
+
+.vod-player--compact .vod-player__title {
+  display: none;
+}
+
+.vod-player--compact .vod-player__timeline {
+  margin: 0 0 8px;
+}
+
+.vod-player--compact .vod-player__controls {
+  gap: 6px;
+}
+
+.vod-player--compact .vod-player__controls .control-button {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 0.82rem;
+}
+
+.vod-player--compact .vod-player__subtitle-control {
+  width: 96px;
+}
+
+.vod-player--compact .vod-player__subtitle-control span,
+.vod-player--compact .vod-player__volume {
+  display: none;
+}
+
 .player-shell--fullscreen .vod-player__chrome {
   padding: clamp(20px, 3vw, 48px);
 }

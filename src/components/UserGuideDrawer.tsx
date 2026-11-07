@@ -162,7 +162,7 @@ export function UserGuideDrawer({ isOpen, onClose, onOpenSources, onOpenEpg }: U
               <li>Choose fullscreen or mini-player automatic resume under <strong>Settings &gt; General</strong>.</li>
               <li>Movies and episodes open directly in fullscreen; move the pointer to reveal controls and single-click the video to pause or resume.</li>
               <li>Use 30-second skips, seek, detected resolution, subtitles, mute, volume, and one <strong>Quit</strong> action.</li>
-              <li>Double-click, choose <strong>Quit</strong>, or press <kbd>Esc</kbd> to return to the title you were browsing.</li>
+              <li>Double-click the video to switch between fullscreen and a resizable window; press <kbd>Esc</kbd> in fullscreen to drop to the window (it does nothing once windowed) and choose <strong>Quit</strong> to stop and go back to the title.</li>
               <li>Manage visible Live TV, Movies, and TV Shows groups independently under <strong>Settings &gt; Library</strong>.</li>
               <li>Restarting Onyx still resumes the last playing Live TV channel, never VOD automatically.</li>
               <li>A stream that stalls or drops is retried a few times automatically; if it still fails, use <strong>Reload</strong> in the player.</li>
