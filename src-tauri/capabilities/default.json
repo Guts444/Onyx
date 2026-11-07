@@ -16,7 +16,6 @@
     "core:window:allow-current-monitor",
     "core:window:allow-is-maximized",
     "core:window:allow-maximize",
-    "core:window:allow-unmaximize",
     "libmpv:allow-init",
     "libmpv:allow-destroy",
     "libmpv:allow-command",

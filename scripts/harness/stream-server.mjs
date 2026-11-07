@@ -96,8 +96,36 @@ function ensureMediaFiles(mediaDir) {
   const hlsSegments = fs.readdirSync(hlsDir).filter((name) => name.endsWith(".ts")).sort();
   if (hlsSegments.length === 0) throw new Error("ffmpeg produced no HLS segments");
 
+  // A long source, so a live stream does not wrap its timestamps every 30 s.
+  const longTs = path.join(mediaDir, "long.ts");
+  if (!fs.existsSync(longTs)) {
+    run("ffmpeg", ["-y", "-stream_loop", "7", "-i", loopTs, "-c", "copy", "-t", "240",
+      "-f", "mpegts", longTs], "ffmpeg long.ts");
+  }
+
+  // Live HLS with continuous timestamps: 2 s segments over the long source.
+  const liveDir = path.join(mediaDir, "hls-live");
+  const livePlaylist = path.join(liveDir, "index.m3u8");
+  if (!fs.existsSync(livePlaylist)) {
+    fs.mkdirSync(liveDir, { recursive: true });
+    run("ffmpeg", ["-y", "-i", longTs, "-c", "copy", "-f", "hls", "-hls_time", "2",
+      "-hls_playlist_type", "vod", "-hls_segment_filename",
+      path.join(liveDir, "seg%03d.ts"), livePlaylist], "ffmpeg hls live");
+  }
+  const liveSegments = fs.readdirSync(liveDir).filter((name) => name.endsWith(".ts")).sort();
+  if (liveSegments.length === 0) throw new Error("ffmpeg produced no live HLS segments");
+
+  // A server-side discontinuity: the clock restarts halfway through, with no
+  // connection drop. Used to prove a backward timestamp jump is not a stall.
+  const jumpTs = path.join(mediaDir, "jump.ts");
+  if (!fs.existsSync(jumpTs)) {
+    fs.writeFileSync(jumpTs, Buffer.concat([fs.readFileSync(loopTs), fs.readFileSync(loopTs)]));
+  }
+
   return {
     loopTs: fs.readFileSync(loopTs),
+    longTs: fs.readFileSync(longTs),
+    jumpTs: fs.readFileSync(jumpTs),
     audioTs: fs.readFileSync(audioTs),
     vodMp4: fs.readFileSync(vodMp4),
     shortMp4: fs.readFileSync(shortMp4),
@@ -105,10 +133,12 @@ function ensureMediaFiles(mediaDir) {
     vodTs: fs.readFileSync(vodTs),
     hlsDir,
     hlsSegments,
+    liveDir,
+    liveSegments,
   };
 }
 
-const MODES = new Set(["stall", "close", "reset", "slow", "forbidden", "error", "flaky", "clean", "live", "drop-once"]);
+const MODES = new Set(["stall", "close", "reset", "slow", "forbidden", "error", "flaky", "clean", "live", "drop-once", "jump"]);
 const stats = new Map();
 
 function recordConnection(key) {
@@ -250,7 +280,7 @@ function sendMedia(request, response, body, contentType, key) {
   response.end(request.method === "HEAD" ? undefined : body);
 }
 
-const serverState = { media: null, port: DEFAULT_PORT, flakyAttempts: new Map(), startedAt: Date.now() };
+const serverState = { media: null, port: DEFAULT_PORT, flakyAttempts: new Map(), liveStarts: new Map(), startedAt: Date.now() };
 
 function handleRequest(request, response) {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${serverState.port}`);
@@ -266,6 +296,7 @@ function handleRequest(request, response) {
   if (url.pathname === "/stats/reset") {
     stats.clear();
     serverState.flakyAttempts.clear();
+    serverState.liveStarts.clear();
     response.writeHead(204);
     response.end();
     return;
@@ -295,10 +326,14 @@ function handleRequest(request, response) {
       `${base}/ts/live`,
       `#EXTINF:-1 tvg-id="drop-once" tvg-name="Harness Drop Once" group-title="Harness",Harness Drop Once`,
       `${base}/ts/drop-once?after=6`,
+      `#EXTINF:-1 tvg-id="jump" tvg-name="Harness Jump" group-title="Harness",Harness Jump`,
+      `${base}/ts/jump`,
       `#EXTINF:-1 tvg-id="hls-stall" tvg-name="Harness HLS Stall" group-title="Harness",Harness HLS Stall`,
       `${base}/hls/stall/index.m3u8`,
       `#EXTINF:-1 tvg-id="hls-live" tvg-name="Harness HLS Live" group-title="Harness",Harness HLS Live`,
       `${base}/hls/live/index.m3u8`,
+      `#EXTINF:-1 tvg-id="hls-freeze" tvg-name="Harness HLS Freeze" group-title="Harness",Harness HLS Freeze`,
+      `${base}/hls/live/index.m3u8?freeze=20`,
       `#EXTINF:-1 tvg-id="hls-close" tvg-name="Harness HLS Close" group-title="Harness",Harness HLS Close`,
       `${base}/hls/close/index.m3u8`,
       `#EXTINF:-1 tvg-id="hls-reset" tvg-name="Harness HLS Reset" group-title="Harness",Harness HLS Reset`,
@@ -360,6 +395,9 @@ function handleRequest(request, response) {
       { stream_id: 107, name: "Harness TS Drop", category_id: "1", container_extension: "ts",
         stream_icon: null, plot: "TS that closes at seventy percent.", rating: "7.4", year: "2024",
         added: "1760000006" },
+      { stream_id: 108, name: "Harness TS Range Drop", category_id: "1", container_extension: "ts",
+        stream_icon: null, plot: "TS with byte ranges that closes at seventy percent.", rating: "7.6", year: "2024",
+        added: "1760000007" },
     ];
     const series = [
       { series_id: 501, name: "Harness Series", category_id: "10", cover: null,
@@ -567,6 +605,73 @@ function handleRequest(request, response) {
       timer();
       return;
     }
+    if (id === 108) {
+      // A truncated TS: the provider serves only 70 % of the file and says so
+      // in content-length, so the demuxer's duration is short while the
+      // catalog declares two minutes. Byte ranges still work, so a retry can
+      // resume. This is the shape that used to delete a saved position.
+      const key = "xtream/108";
+      recordConnection(key);
+      response.on("close", () => finishConnection(key));
+      noteRange(key, request.headers.range);
+      const stored = serverState.media.vodTs;
+      const total = Math.floor(stored.length * 0.7);
+      const body = stored.subarray(0, total);
+      if (request.method === "HEAD") {
+        response.writeHead(200, {
+          "content-type": "video/mp2t",
+          "content-length": String(total),
+          "accept-ranges": "bytes",
+        });
+        response.end();
+        return;
+      }
+      let startOffset = 0;
+      let endOffset = total - 1;
+      let status = 200;
+      const headers = {
+        "content-type": "video/mp2t",
+        "accept-ranges": "bytes",
+        "cache-control": "no-store",
+      };
+      const range = request.headers.range;
+      if (range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+        if (match) {
+          startOffset = match[1] === "" ? 0 : Number(match[1]);
+          endOffset = match[2] === "" ? total - 1 : Math.min(Number(match[2]), total - 1);
+          if (startOffset > endOffset) {
+            response.writeHead(416, { "content-range": `bytes */${total}` });
+            return response.end();
+          }
+          status = 206;
+          headers["content-range"] = `bytes ${startOffset}-${endOffset}/${total}`;
+        }
+      }
+      headers["content-length"] = String(endOffset - startOffset + 1);
+      response.writeHead(status, headers);
+      let offset = startOffset;
+      let closed = false;
+      const chunk = 64 * 1024;
+      const timer = () => {
+        if (closed) return;
+        if (offset > endOffset) {
+          closed = true;
+          response.end();
+          return;
+        }
+        const end = Math.min(offset + chunk, endOffset + 1);
+        response.write(body.subarray(offset, end));
+        countBytes(key, end - offset);
+        offset = end;
+        setTimeout(timer, 120);
+      };
+      response.on("close", () => {
+        closed = true;
+      });
+      timer();
+      return;
+    }
     if (id === 901 || id === 902) {
       const key = `xtream/live/${id}`;
       recordConnection(key);
@@ -651,6 +756,16 @@ function handleRequest(request, response) {
         streamBuffer(request, response, serverState.media.loopTs, key, {});
         return;
       }
+      if (mode === "live") {
+        streamBuffer(request, response, serverState.media.longTs, key, {});
+        return;
+      }
+      if (mode === "jump") {
+        // Plays 30 s, restarts its clock at 0, and carries on: a provider
+        // discontinuity with a healthy connection.
+        streamBuffer(request, response, serverState.media.jumpTs, key, {});
+        return;
+      }
       streamBuffer(request, response, serverState.media.loopTs, key, {});
     };
     if (delayMs > 0) setTimeout(start, delayMs);
@@ -690,18 +805,31 @@ function handleRequest(request, response) {
     const respond = () => {
       if (file === "index.m3u8") {
         if (mode === "live") {
+          // Realistic live HLS: a sliding window over segments with continuous
+          // timestamps. `?freeze=<seconds>` stops the window after that many
+          // seconds, which is a live picture that stops changing while the
+          // playlist keeps reloading.
           const windowSize = 3;
-          const segmentCount = serverState.media.hlsSegments.length;
-          const position = Math.floor((Date.now() - serverState.startedAt) / 2_000);
-          const first = Math.max(0, position - windowSize + 1);
+          const segments = serverState.media.liveSegments;
+          const startKey = `${key}?${url.searchParams.toString()}`;
+          const startedAt = serverState.liveStarts.get(startKey) ?? Date.now();
+          serverState.liveStarts.set(startKey, startedAt);
+          const freezeParam = url.searchParams.get("freeze");
+          const freezeAfter = freezeParam === null ? null : Number(freezeParam);
+          const elapsed = (Date.now() - startedAt) / 1_000;
+          const effective = freezeAfter !== null && Number.isFinite(freezeAfter)
+            ? Math.min(elapsed, freezeAfter)
+            : elapsed;
+          const head = Math.min(segments.length - 1, Math.floor(effective / 2));
+          const first = Math.max(0, head - windowSize + 1);
           const lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:3",
             "#EXT-X-TARGETDURATION:2",
             `#EXT-X-MEDIA-SEQUENCE:${first}`,
           ];
-          for (let index = first; index <= position; index += 1) {
-            lines.push("#EXTINF:2.000000,", serverState.media.hlsSegments[index % segmentCount]);
+          for (let index = first; index <= head; index += 1) {
+            lines.push("#EXTINF:2.000000,", segments[index]);
           }
           response.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" });
           response.end(lines.join("\n") + "\n");
@@ -723,7 +851,10 @@ function handleRequest(request, response) {
         response.end(lines.join("\n") + "\n");
         return;
       }
-      const segmentPath = path.join(serverState.media.hlsDir, file);
+      const segmentPath = path.join(
+        mode === "live" ? serverState.media.liveDir : serverState.media.hlsDir,
+        path.basename(file),
+      );
       if (!fs.existsSync(segmentPath)) return sendStatus(response, 404, "no segment\n");
       const body = fs.readFileSync(segmentPath);
       countBytes(key, body.length);

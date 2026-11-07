@@ -59,9 +59,9 @@ test("recovery attempt and last error are reported", () => {
 
 test("a stream URL never reaches the copied text", () => {
   const hostile =
-    "failed to open http://user:hunter2@provider.example:8080/live/abc/def/12345.ts";
+    "failed to open http://user:hunter2@provider.invalid:8080/live/abc/def/12345.ts";
   const text = formatDiagnostics({ ...SAMPLE, recoveryError: hostile }, META);
-  assert.doesNotMatch(text, /provider\.example/);
+  assert.doesNotMatch(text, /provider\.invalid/);
   assert.doesNotMatch(text, /hunter2/);
   assert.match(text, /\[removed\]/);
 });
