@@ -21,6 +21,7 @@
     "libmpv:allow-destroy",
     "libmpv:allow-command",
     "libmpv:allow-set-property",
-    "libmpv:allow-set-video-margin-ratio"
+    "libmpv:allow-set-video-margin-ratio",
+    "libmpv:allow-get-property"
   ]
 }

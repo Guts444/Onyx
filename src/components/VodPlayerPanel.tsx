@@ -19,6 +19,7 @@ interface VodPlayerPanelProps {
   onToggleDisplay: () => void;
   onQuit: () => void;
   onReload: () => void;
+  onToggleDiagnostics: () => void;
 }
 
 function formatTime(seconds: number | null) {
@@ -48,6 +49,7 @@ export function VodPlayerPanel({
   onToggleDisplay,
   onQuit,
   onReload,
+  onToggleDiagnostics,
 }: VodPlayerPanelProps) {
   const [chromeVisible, setChromeVisible] = useState(true);
   const [compact, setCompact] = useState(false);
@@ -223,6 +225,9 @@ export function VodPlayerPanel({
             </label>
             <button type="button" className="control-button" onClick={onReload}>
               Reload
+            </button>
+            <button type="button" className="control-button" onClick={onToggleDiagnostics}>
+              Stats
             </button>
             <button type="button" className="control-button" onClick={onQuit}>Quit</button>
           </div>

@@ -1783,6 +1783,66 @@ img {
   accent-color: var(--accent);
 }
 
+.diagnostics-overlay {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 40;
+  width: min(420px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(6, 10, 16, 0.94);
+  color: #eaf2fb;
+  font-size: 0.82rem;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.diagnostics-overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.diagnostics-overlay__header .control-button {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.diagnostics-overlay__rows {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+}
+
+.diagnostics-overlay__rows > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.diagnostics-overlay__rows dt {
+  color: rgba(234, 242, 251, 0.62);
+}
+
+.diagnostics-overlay__rows dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.diagnostics-overlay__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: rgba(234, 242, 251, 0.62);
+}
+
 /* Windowed VOD: the player is the whole window, so the shell keeps no gutter
    and the library stays mounted but invisible behind it. */
 .app-shell.app-shell--vod-windowed {

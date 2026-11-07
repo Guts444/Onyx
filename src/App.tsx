@@ -172,6 +172,8 @@ import {
   setLibraryWindowMinimum,
   setWindowSize,
 } from "./features/window/vodWindow";
+import { DiagnosticsOverlay } from "./components/DiagnosticsOverlay";
+import { useDiagnostics } from "./features/player/useDiagnostics";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { hashString } from "./utils/hash";
 import "./App.css";
@@ -452,6 +454,7 @@ function App() {
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [vodDisplay, setVodDisplay] = useState<VodDisplay>("fullscreen");
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isUserGuideOpen, setIsUserGuideOpen] = useState(false);
   const [startupRestoreToken, setStartupRestoreToken] = useState<SourceOperationToken | null>(null);
@@ -573,6 +576,8 @@ function App() {
     seekAbsolute,
     setSubtitleTrack,
   } = useMpvPlayer(playerSurfaceRef, isFullscreen ? "fullscreen" : "windowed", savedVolume);
+
+  const diagnostics = useDiagnostics(player, diagnosticsOpen);
 
   useEffect(() => {
     vodPositionRef.current = player.position;
@@ -2994,6 +2999,7 @@ function App() {
         void setVolumeLevel(nextVolume);
       }}
       onToggleDisplay={() => { void setVodDisplayMode("double-click"); }}
+      onToggleDiagnostics={() => setDiagnosticsOpen((open) => !open)}
       onQuit={() => { void handleStopVod(); }}
       onReload={() => { void reloadPlayback(); }}
     />
@@ -3031,6 +3037,7 @@ function App() {
             onReload={() => {
               void handleReloadPlayback();
             }}
+            onToggleDiagnostics={() => setDiagnosticsOpen((open) => !open)}
             onToggleMute={() => {
               void toggleMute();
             }}
@@ -3047,6 +3054,13 @@ function App() {
       ) : (
         windowedVod ? vodPlayerPanel : null
       )}
+      {diagnosticsOpen ? (
+        <DiagnosticsOverlay
+          sample={diagnostics.sample}
+          meta={diagnostics.meta}
+          onClose={() => setDiagnosticsOpen(false)}
+        />
+      ) : null}
       {(!isFullscreen || activeVodPlayback) ? (
         <div
           className={`workspace workspace--persistent-sidebar ${

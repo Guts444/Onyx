@@ -143,6 +143,15 @@ Outside fullscreen, the primary navigation rail, searchable group pane, preview 
 - **mpv EOF semantics.** With `keep-open=yes`, libavformat reports a closed stream or a mid-stream reset as EOF: no `end-file` arrives. Recovery therefore watches `eof-reached` and progress rather than `end-file`. HLS live reloads (`end-file` immediately followed by `start-file`) belong to mpv and are ignored.
 - **No logs.** The pinned `libmpv-wrapper` never calls `mpv_request_log_messages`, so `log-message` events never reach Onyx. Recovery cannot distinguish a 403 from a 500 and classifies by timing instead.
 
+### Diagnostics
+
+[src/features/player/diagnostics.ts](src/features/player/diagnostics.ts) owns the readable form; [useDiagnostics.ts](src/features/player/useDiagnostics.ts) owns the reads.
+
+- **Only while open.** The polling effect is mounted by the overlay's open flag and reads a fixed set of eleven properties about once a second; closed, nothing is read at all.
+- **Fixed property set.** Codec, size, estimated fps, `hwdec-current`, cache time/speed/fill, frame drops, and the recovery snapshot. `path`, `stream-open-filename`, `media-title` and anything else that can carry a URL or a credential are never read.
+- **Redacted twice.** Recovery errors are redacted before they reach the screen, and the whole block is redacted again when formatted: URLs, `user:pass@` segments and Xtream-style paths become `[removed]`.
+- **A dash, never an error.** An unavailable property formats as `—`; a failed read leaves its row empty for that tick instead of surfacing an exception.
+
 ## Persistence Model
 
 Most persistent UI and library state is stored through the shared hook in [src/hooks/usePersistentState.ts](src/hooks/usePersistentState.ts).

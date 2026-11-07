@@ -13,6 +13,7 @@ interface PlayerPanelProps {
   playerSurfaceRef: RefObject<HTMLDivElement | null>;
   onStop: () => void;
   onReload: () => void;
+  onToggleDiagnostics?: () => void;
   onToggleMute: () => void;
   onSetVolume: (volume: number) => void;
   onToggleFullscreen: () => void;
@@ -89,6 +90,7 @@ export function PlayerPanel({
   playerSurfaceRef,
   onStop,
   onReload,
+  onToggleDiagnostics,
   onToggleMute,
   onSetVolume,
   onToggleFullscreen,
@@ -261,6 +263,11 @@ export function PlayerPanel({
                   >
                     Reload
                   </button>
+                  {onToggleDiagnostics ? (
+                    <button type="button" className="control-button" onClick={onToggleDiagnostics}>
+                      Stats
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="control-button"

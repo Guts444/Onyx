@@ -166,6 +166,7 @@ export function UserGuideDrawer({ isOpen, onClose, onOpenSources, onOpenEpg }: U
               <li>Manage visible Live TV, Movies, and TV Shows groups independently under <strong>Settings &gt; Library</strong>.</li>
               <li>Restarting Onyx still resumes the last playing Live TV channel, never VOD automatically.</li>
               <li>A stream that stalls or drops is retried a few times automatically; if it still fails, use <strong>Reload</strong> in the player.</li>
+              <li><strong>Stats</strong> in the player shows codec, size, frame rate, hardware decoding, cache and recovery state, and copies a report that never includes your stream URL or credentials.</li>
               <li>Onyx remembers where a movie or episode stopped: the action becomes <strong>Resume from m:ss</strong>, with <strong>Start over</strong> beside it.</li>
             </ul>
           </section>
