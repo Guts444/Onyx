@@ -56,6 +56,11 @@ export function GeneralSettingsPanel({
           </label>
         </fieldset>
       </section>
+
+      <footer className="general-settings__about">
+        <strong>Onyx</strong>
+        <span>Version {__APP_VERSION__}</span>
+      </footer>
     </div>
   );
 }

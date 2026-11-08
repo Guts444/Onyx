@@ -1023,6 +1023,27 @@ img {
   overflow: auto;
 }
 
+.general-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.general-settings__about {
+  margin-top: auto;
+  padding: 14px 4px 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.general-settings__about strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .settings-section,
 .guide-step-card,
 .guide-reference-card {

@@ -14,6 +14,7 @@
 - **Resume movies and episodes**: A movie or episode with saved progress opens with **Resume from m:ss** and a separate **Start over**, per episode for series. Progress is saved every ten seconds while a title plays and once more on Quit, survives a crash or restart, is scoped to its source, and is removed when that source is removed. When no saved progress exists the action stays a plain **Play**.
 - **Snapping and display scaling**: The video stays exactly inside its frame after snapping, un-snapping, moving or resizing the window, including with Windows display scaling. If you move or resize the window while a player is open, closing the player keeps your position and size, grows only as much as the library needs, and never leaves the window partly off screen.
 - **One status display**: Loading, buffering and retry status now appears only in the status card, without a duplicate label in the Live player.
+- **Version in Settings**: **Settings > General** now shows the installed Onyx version.
 
 ### Known issue
 
