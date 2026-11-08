@@ -165,6 +165,11 @@ import {
   type WindowSnapshot,
 } from "./features/player/display";
 import {
+  planLiveViewTransition,
+  runLiveViewTransition,
+  type LiveDisplay,
+} from "./features/player/views";
+import {
   applyVodWindowedWindow,
   captureWindowSnapshot,
   leaveVodWindow,
@@ -454,6 +459,7 @@ function App() {
   const [channelRenderLimit, setChannelRenderLimit] = useState(CHANNEL_RENDER_INITIAL_LIMIT);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [liveDisplay, setLiveDisplay] = useState<LiveDisplay>("guide");
   const [vodDisplay, setVodDisplay] = useState<VodDisplay>("fullscreen");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -487,6 +493,12 @@ function App() {
   const startupPlaybackSessionRef = useRef<PlaybackSession | null>(null);
   const startupPlaybackRestoreGenerationRef = useRef(0);
   const fullscreenStateRevisionRef = useRef(0);
+  const liveDisplayRef = useRef<LiveDisplay>("guide");
+  /** True while a native window call is in flight; reconcile must not fight it. */
+  const liveViewTransitionRef = useRef(false);
+  const liveWindowSnapshotRef = useRef<WindowSnapshot | null>(null);
+  /** True once this player view left fullscreen, even if it came back. */
+  const liveWasWindowedRef = useRef(false);
   const vodWindowSnapshotRef = useRef<WindowSnapshot | null>(null);
   /** True once this playback left fullscreen, even if it came back. */
   const vodWasWindowedRef = useRef(false);
@@ -1432,6 +1444,114 @@ function App() {
     return result === true;
   }
 
+  /**
+   * The Live view is committed before the native window call, so a slow or
+   * animated window transition never shows the previous layout at the new
+   * size. The transition itself lives in `views.ts`; this owns the window
+   * minimum and the restore that the library needs when the player closes.
+   */
+  function commitLiveDisplay(next: LiveDisplay) {
+    liveDisplayRef.current = next;
+    setLiveDisplay(next);
+    setIsFullscreen(next === "fullscreen");
+    schedulePlayerLayoutSync();
+  }
+
+  async function restoreLibraryWindow(snapshot: WindowSnapshot | null) {
+    const current = await captureWindowSnapshot();
+    const workArea = current.monitor ?? {
+      width: current.innerWidth,
+      height: current.innerHeight,
+    };
+    const plan = planWindowRestore({
+      snapshot: snapshot ?? current,
+      current,
+      workArea,
+    });
+    await leaveVodWindow();
+    if (plan.kind === "maximize") {
+      await maximizeWindow();
+    } else if (plan.kind === "size") {
+      await setWindowSize(plan.size);
+    }
+  }
+
+  async function runLiveTransition(to: LiveDisplay): Promise<boolean> {
+    // The native window is the authority when the two disagree (a reload or a
+    // window manager change can leave React behind).
+    const from: LiveDisplay = isFullscreen ? "fullscreen" : liveDisplayRef.current;
+    const plan = planLiveViewTransition(from, to);
+    if (!plan || liveViewTransitionRef.current) return false;
+
+    if (from === "guide") {
+      try {
+        liveWindowSnapshotRef.current = await captureWindowSnapshot();
+      } catch {
+        liveWindowSnapshotRef.current = null;
+      }
+      liveWasWindowedRef.current = false;
+    }
+
+    const fullscreenRevision = ++fullscreenStateRevisionRef.current;
+    const isCurrent = () => fullscreenStateRevisionRef.current === fullscreenRevision;
+    liveViewTransitionRef.current = true;
+    try {
+      const completed = await runLiveViewTransition(plan, {
+        isFullscreen: async () =>
+          isTauri()
+            ? getCurrentWindow().isFullscreen()
+            : Boolean(document.fullscreenElement),
+        setFullscreen: async (value) => {
+          const applied = await applyHostFullscreenForRevision(value, fullscreenRevision);
+          if (!applied) throw new Error("The window change was superseded.");
+        },
+        applyWindowedMinimum: async () => {
+          const snapshot = liveWindowSnapshotRef.current;
+          if (snapshot) {
+            await applyVodWindowedWindow(snapshot);
+          } else {
+            await setVodWindowedMinimum();
+          }
+        },
+        applyLibraryMinimum: async () => {
+          // Never touch the minimum of a window that never left fullscreen:
+          // on Windows, changing it on a maximized window un-maximizes it.
+          if (liveWasWindowedRef.current) await setLibraryWindowMinimum();
+        },
+        restoreWindow: async () => {
+          if (liveWasWindowedRef.current) {
+            await restoreLibraryWindow(liveWindowSnapshotRef.current);
+          }
+        },
+      }, (nextDisplay) => {
+        if (isCurrent()) commitLiveDisplay(nextDisplay);
+      });
+
+      if (!isCurrent()) return false;
+      if (completed) {
+        if (plan.final === "fullscreen" && player.playbackMode !== "vod" && selectedChannel?.isPlayable) {
+          setPlaybackSession((currentSession) => ({
+            ...currentSession,
+            sourceId: activeSourceId,
+            channelId: selectedChannel.id,
+            shouldResume: true,
+            resumeSourceId: activeSourceId,
+            resumeChannelId: selectedChannel.id,
+            resumeInFullscreen: autoResumeMode === "fullscreen",
+          }));
+        }
+        if (plan.final === "guide") {
+          showSelectedChannelGroup();
+          liveWasWindowedRef.current = false;
+          liveWindowSnapshotRef.current = null;
+        }
+      }
+      return completed;
+    } finally {
+      if (isCurrent()) liveViewTransitionRef.current = false;
+    }
+  }
+
   async function handleSelectChannel(channel: Channel) {
     cancelStartupPlaybackRestore();
     setSelectedChannelId(channel.id);
@@ -1588,26 +1708,13 @@ function App() {
     }
     if (wasWindowed) {
       try {
-        const current = await captureWindowSnapshot();
-        const workArea = current.monitor ?? {
-          width: current.innerWidth,
-          height: current.innerHeight,
-        };
-        const plan = planWindowRestore({
-          snapshot: snapshot ?? current,
-          current,
-          workArea,
-        });
-        await leaveVodWindow();
-        if (plan.kind === "maximize") {
-          await maximizeWindow();
-        } else if (plan.kind === "size") {
-          await setWindowSize(plan.size);
-        }
+        await restoreLibraryWindow(snapshot);
       } catch {
         // A window that cannot be restored is still usable; do not block Quit.
       }
     }
+    vodWindowSnapshotRef.current = null;
+    vodWasWindowedRef.current = false;
     setVodDisplay("fullscreen");
     commitIfCurrentPlaybackRevision(
       fullscreenRevision,
@@ -1634,70 +1741,17 @@ function App() {
 
   async function handleToggleFullscreen() {
     cancelStartupPlaybackRestore();
-    const fullscreenRevision = ++fullscreenStateRevisionRef.current;
+    if (activeVodPlayback) return;
+    if (!isFullscreen && channelGuideBodyRef.current) {
+      channelScrollPositionRef.current = {
+        key: channelScrollPositionKeyRef.current,
+        top: channelGuideBodyRef.current.scrollTop,
+      };
+    }
     try {
-      if (!isFullscreen && channelGuideBodyRef.current) {
-        channelScrollPositionRef.current = {
-          key: channelScrollPositionKeyRef.current,
-          top: channelGuideBodyRef.current.scrollTop,
-        };
-      }
-      if (isTauri()) {
-        const appWindow = getCurrentWindow();
-        const nextFullscreen = !(await appWindow.isFullscreen());
-
-        await appWindow.setFullscreen(nextFullscreen);
-        if (nextFullscreen && player.playbackMode !== "vod" && selectedChannel?.isPlayable) {
-          setPlaybackSession((currentSession) => ({
-            ...currentSession,
-            sourceId: activeSourceId,
-            channelId: selectedChannel.id,
-            shouldResume: true,
-            resumeSourceId: activeSourceId,
-            resumeChannelId: selectedChannel.id,
-            resumeInFullscreen: autoResumeMode === "fullscreen",
-          }));
-        }
-        if (!nextFullscreen) {
-          showSelectedChannelGroup();
-        }
-        if (fullscreenStateRevisionRef.current === fullscreenRevision) {
-          setIsFullscreen(nextFullscreen);
-        }
-        schedulePlayerLayoutSync();
-        return;
-      }
-
-      if (!playerShellRef.current) {
-        return;
-      }
-
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        showSelectedChannelGroup();
-        if (fullscreenStateRevisionRef.current === fullscreenRevision) {
-          setIsFullscreen(false);
-        }
-        schedulePlayerLayoutSync();
-        return;
-      }
-
-      await playerShellRef.current.requestFullscreen();
-      if (player.playbackMode !== "vod" && selectedChannel?.isPlayable) {
-        setPlaybackSession((currentSession) => ({
-          ...currentSession,
-          sourceId: activeSourceId,
-          channelId: selectedChannel.id,
-          shouldResume: true,
-          resumeSourceId: activeSourceId,
-          resumeChannelId: selectedChannel.id,
-          resumeInFullscreen: autoResumeMode === "fullscreen",
-        }));
-      }
-      if (fullscreenStateRevisionRef.current === fullscreenRevision) {
-        setIsFullscreen(true);
-      }
-      schedulePlayerLayoutSync();
+      // The view commits before the window call; the transition rolls back to
+      // the native window when the host refuses the change.
+      await runLiveTransition(isFullscreen ? "guide" : "fullscreen");
     } catch (error) {
       setMessage(getErrorMessage(error, "Fullscreen mode could not be changed."));
     }
@@ -2991,7 +3045,39 @@ function App() {
     shouldDelayResumeForStartupRestore,
   ]);
 
+  const livePlayerOpen = activeVodPlayback === null && liveDisplay !== "guide";
+  const windowedLive = livePlayerOpen && liveDisplay === "windowed";
   const windowedVod = activeVodPlayback !== null && vodDisplay === "windowed";
+  const windowedPlayer = windowedVod || windowedLive;
+
+  const livePlayerPanel = (
+    <PlayerPanel
+      player={player}
+      selectedChannel={selectedChannel}
+      guide={selectedGuide}
+      isFullscreen={isFullscreen}
+      playerShellRef={playerShellRef}
+      playerSurfaceRef={playerSurfaceRef}
+      onStop={() => {
+        void handleStopPlayback();
+      }}
+      onReload={() => {
+        void handleReloadPlayback();
+      }}
+      onToggleDiagnostics={() => setDiagnosticsOpen((open) => !open)}
+      onToggleMute={() => {
+        void toggleMute();
+      }}
+      onSetVolume={(volume) => {
+        const nextVolume = Math.max(0, Math.min(100, Math.round(volume)));
+        setSavedVolume(nextVolume);
+        void setVolumeLevel(nextVolume);
+      }}
+      onToggleFullscreen={() => {
+        void handleToggleFullscreen();
+      }}
+    />
+  );
 
   const vodPlayerPanel = activeVodPlayback ? (
     <VodPlayerPanel
@@ -3032,41 +3118,12 @@ function App() {
   return (
     <main
       className={`app-shell ${isFullscreen ? "app-shell--fullscreen" : ""} ${
-        windowedVod ? "app-shell--vod-windowed" : ""
+        windowedPlayer ? "app-shell--player-windowed" : ""
       }`}
     >
-      {isFullscreen ? (
-        activeVodPlayback ? vodPlayerPanel : (
-          <PlayerPanel
-            player={player}
-            selectedChannel={selectedChannel}
-            guide={selectedGuide}
-            isFullscreen={isFullscreen}
-            playerShellRef={playerShellRef}
-            playerSurfaceRef={playerSurfaceRef}
-            onStop={() => {
-              void handleStopPlayback();
-            }}
-            onReload={() => {
-              void handleReloadPlayback();
-            }}
-            onToggleDiagnostics={() => setDiagnosticsOpen((open) => !open)}
-            onToggleMute={() => {
-              void toggleMute();
-            }}
-            onSetVolume={(volume) => {
-              const nextVolume = Math.max(0, Math.min(100, Math.round(volume)));
-              setSavedVolume(nextVolume);
-              void setVolumeLevel(nextVolume);
-            }}
-            onToggleFullscreen={() => {
-              void handleToggleFullscreen();
-            }}
-          />
-        )
-      ) : (
-        windowedVod ? vodPlayerPanel : null
-      )}
+      {isFullscreen
+        ? (activeVodPlayback ? vodPlayerPanel : livePlayerPanel)
+        : (windowedVod ? vodPlayerPanel : (windowedLive ? livePlayerPanel : null))}
       {diagnosticsOpen ? (
         <DiagnosticsOverlay
           sample={diagnostics.sample}
@@ -3078,8 +3135,8 @@ function App() {
         <div
           className={`workspace workspace--persistent-sidebar ${
             isFullscreen ? "workspace--fullscreen-background" : ""
-          } ${windowedVod ? "workspace--vod-hidden" : ""}`}
-          aria-hidden={isFullscreen || windowedVod}
+          } ${windowedPlayer ? "workspace--player-hidden" : ""}`}
+          aria-hidden={isFullscreen || windowedPlayer}
         >
           <div className="workspace__sidebar workspace__sidebar--visible workspace__sidebar--persistent">
             <ChannelSidebar
