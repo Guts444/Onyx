@@ -586,11 +586,21 @@ function App() {
     Object.keys(savedSources).length > 0 ||
     playbackSession.sourceId !== null ||
     playbackSession.channelId !== null ||
-    playbackSession.resumeChannelId !== null;
+    playbackSession.resumeChannelId !== null ||
+    // A locally imported M3U is not a saved source, but its cached playlist is
+    // still evidence of an install that already had a library.
+    playlistSnapshot !== null;
 
   useEffect(() => {
     if (autoResumeModeResolved) return;
-    if (!autoResumeModeHydrated || !savedSourcesHydrated || !playbackSessionHydrated) return;
+    if (
+      !autoResumeModeHydrated ||
+      !savedSourcesHydrated ||
+      !playbackSessionHydrated ||
+      !playlistSnapshotHydrated
+    ) {
+      return;
+    }
     if (!autoResumeModeMetadata.exists && !hasStoredProfile) {
       setAutoResumeMode("windowed");
     }
@@ -601,6 +611,7 @@ function App() {
     autoResumeModeResolved,
     hasStoredProfile,
     playbackSessionHydrated,
+    playlistSnapshotHydrated,
     savedSourcesHydrated,
     setAutoResumeMode,
   ]);
