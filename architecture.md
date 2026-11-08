@@ -89,7 +89,8 @@ Important rules:
 
 - The Tauri window and page background must remain transparent for libmpv video to show through.
 - Decorative gradients belong on app panels, not on `html`, `body`, or `:root`.
-- Startup autoplay resumes the last active channel according to the independent General preference: fullscreen by default or mini-player when selected.
+- Startup autoplay resumes the last active channel according to the independent General preference: windowed (the default for new installs), fullscreen, or mini-player.
+- Selecting a Live channel keeps the guide and plays it in the mini player. Double-clicking the mini player opens the windowed player; its own Fullscreen button opens fullscreen. The player views offer the other two views as buttons (**Windowed**/**Fullscreen** and **Guide**), and the mini player keeps **Stop**.
 - The player must synchronize native video margins before every `loadfile`, reject unmounted/zero-size surfaces, and resynchronize on nested scrolling as well as resize/fullscreen changes.
 - VOD play, pause, seek, stop, and fullscreen actions must never replace or clear the saved Live TV startup target.
 - Live has one explicit display state (`guide`, `fullscreen`, `windowed`). [src/features/player/views.ts](src/features/player/views.ts) plans every transition: the view commits before the native window call, the window minimum and the pre-player window snapshot are applied after it, and a refused call rolls back to the view that matches the window that actually exists. A view change never issues a new `loadfile`.
@@ -108,7 +109,9 @@ VOD is Xtream-only. Categories are fetched when a VOD section or its Library set
 
 Outside fullscreen, the primary navigation rail, searchable group pane, preview player, and TV guide remain visible together. Group selection never hides the navigation. Search is a field above the groups rather than a separate primary-navigation destination, and it filters enabled channels directly in the guide while preserving deferred/incremental rendering for large libraries.
 
-`Esc` leaves the fullscreen player, closes an open channel menu or dialog, and never walks through sidebar modes. Live TV has three views: the guide, the fullscreen player, and a windowed player that fills a normal resizable window. In fullscreen, `Esc` or a double-click drops to the windowed player; `Esc` again, or the **Guide** control, returns to the guide and restores the library window (size, maximized state, and minimum). A view change reuses the same mpv playback and never reopens the stream, and the windowed view is not saved between launches.
+`Esc` leaves the fullscreen player, closes an open channel menu or dialog, and never walks through sidebar modes. Live TV has three views: the guide, the fullscreen player, and a windowed player that fills a normal resizable window. The mini player and the player views carry buttons for the views they can reach: **Windowed** and **Guide** in fullscreen, **Fullscreen** and **Guide** in the window, and **Fullscreen** plus **Stop** on the guide's mini player. `Esc` in fullscreen drops to the window; `Esc` in the window returns to the guide and restores the library window (size, maximized state, and minimum). A view change reuses the same mpv playback and never reopens the stream, and the windowed view is not saved between launches.
+
+Leaving Live (for Movies, TV Shows, or a source change) stops the stream first, so a one-connection account never overlaps. Returning to Live resumes the channel recorded in the shared playback-session intent unless the user stopped it; a channel that is gone after a refresh leaves Live stopped, with no error.
 
 ### Guide Behavior
 
@@ -119,10 +122,10 @@ Outside fullscreen, the primary navigation rail, searchable group pane, preview 
 ### VOD Behavior
 
 - Movies and TV Shows are destinations under Live TV in the persistent primary rail. Their search and visible vertical category list occupy the same persistent secondary-sidebar pattern used by Live TV.
-- Selecting a movie or episode transitions directly to the shared fullscreen native player. VOD has no embedded/mini-player details-page mode; **Quit**, or `Esc` from the windowed player, returns to the preserved details view.
-- VOD chrome hides after pointer inactivity and reappears on movement. A delayed single-click toggles pause/resume; double-click cancels that pending toggle before quitting, and control events do not bubble into surface gestures.
+- Selecting a movie or episode opens the shared native player in its windowed view. VOD has no embedded/mini-player details-page mode; **Quit**, or `Esc` from the windowed player, returns to the preserved details view.
+- VOD chrome hides after pointer inactivity and reappears on movement. A delayed single-click toggles pause/resume; double-click cancels that pending toggle before switching views, and control events do not bubble into surface gestures.
 - A finished title shows **Playback complete** instead of freezing on the last frame. A stalled or dropped title retries and re-opens at the last known position.
-- Double-click switches a playing title between fullscreen and a normal resizable window; `Esc` leaves fullscreen and, once windowed, is Quit through the same path as the button (position saved, window restored, Resume row shown), so it can never leave an orphaned player behind. The panel fills the window and the library stays mounted but hidden, which is what restores the same details view (and its scroll position) on Quit.
+- The player offers **Fullscreen** while windowed and **Windowed** while fullscreen, plus **Quit**. Double-click switches views at any time; `Esc` leaves fullscreen and, once windowed, is Quit through the same path as the button (position saved, window restored, Resume row shown), so it can never leave an orphaned player behind. The panel fills the window and the library stays mounted but hidden, which is what restores the same details view (and its scroll position) on Quit. A title that starts windowed and later goes fullscreen still restores on Quit.
 - The window is not a saved setting. While windowed, the minimum drops to 480x270 and the controls switch to a compact single row; Quit puts the 1100x700 minimum back and then restores the pre-VOD window: by maximizing when the title started from a maximized window, by resizing only when the current window would be smaller than the library minimum, and never by moving it. A crash or a close while windowed relaunches at the normal size.
 - A saved position turns the action into **Resume from m:ss** with a separate **Start over**, for both movies and individual episodes. Positions are keyed by source, kind and the provider's own id (never the URL), saved between 10 s and 95% of a known duration, flushed every ten seconds while a title plays and once more on Quit, capped at 500 entries, and dropped when their source is removed.
 - Category catalogs and detail payloads load only after the user opens the corresponding section/title.
@@ -172,7 +175,7 @@ Key persisted buckets:
 - manual EPG mappings
 - playback session
 - saved volume
-- automatic-resume presentation mode
+- automatic-resume presentation mode (windowed, fullscreen, or mini-player; new installs resolve to windowed, profiles with saved sources or a playback intent keep fullscreen when the key was never stored)
 - source-scoped hidden Movies and TV Shows category IDs
 - saved VOD positions (one entry per source, kind and provider id)
 
@@ -189,7 +192,7 @@ Playback session details:
 1. Hydrate the playback-critical persisted state: saved sources, active source, playback target, volume, resume preference, playlist snapshot, and compact selection.
 2. Start all saved-source credential reads, but release playback startup as soon as the active source credential has settled; unrelated source credentials finish in the background.
 3. Load the credential-free cached playlist snapshot immediately. A validated Xtream descriptor is playable after active credential hydration, while a remote M3U cache remains intentionally display-only until refresh.
-4. Reconcile native fullscreen state explicitly with the General preference and issue the one-shot resume command for the exact cached target channel when materializable.
+4. Reconcile native fullscreen state explicitly with the General preference (windowed, fullscreen, or mini-player) and issue the one-shot resume command for the exact cached target channel when materializable.
 5. Refresh the active source catalog in the background when a playable cache exists; wait for refresh only when the requested target cannot be reconstructed safely.
 6. Hydrate EPG credentials, load cached EPG directories, and refresh configured EPG sources independently of playback startup.
 

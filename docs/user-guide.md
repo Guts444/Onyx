@@ -21,8 +21,8 @@ Onyx caches the loaded library locally. Enabled saved remote sources can refresh
 - **Left-click** navigation items, groups, channels, and buttons.
 - **Right-click a channel row** to add or remove it from Favorites, or to assign an EPG listing.
 - **Single-click a fullscreen movie or episode** to pause or resume it.
-- **Double-click the video surface** to enter Live TV fullscreen, or to switch a fullscreen channel or movie between fullscreen and a resizable window.
-- **Move the pointer over the fullscreen player** to reveal playback controls.
+- **Double-click the Live mini player** to open the resizable player window; **double-click the video surface** to switch between the window and fullscreen.
+- **Move the pointer over the player** to reveal playback controls.
 
 ### Escape key
 
@@ -54,25 +54,25 @@ Right-click the channel again and select **Remove Favorite** to remove it.
 
 ## Player Controls
 
-Left-click a channel to begin playback. In fullscreen, move the pointer to reveal:
+Left-click a channel to begin playback. The guide's mini player carries **Fullscreen** and **Stop** buttons. In the player views, move the pointer to reveal:
 
 - **Reload** — reopen the selected stream if playback stalls.
 - **Stats** — show the diagnostics overlay.
-- **Stop** — stop the current stream and return to the guide.
 - **Mute / Unmute**
-- **Guide** — return to the guide while the channel keeps playing in the mini-player (windowed mode).
+- **Windowed** (fullscreen player) or **Fullscreen** (windowed player) — switch views without interrupting playback.
+- **Guide** — return to the guide while the channel keeps playing in the mini player.
 - **Volume**
-- **Exit Fullscreen** / **Fullscreen**
 - Current resolution and frame rate, when available
 
-Double-click the video surface or use the **Fullscreen** button to change fullscreen mode. In fullscreen, **Esc** or a double-click drops into a resizable window; **Esc** again, or **Guide**, returns to the guide. The window keeps the channel playing throughout, drops its minimum size to 480 x 270 while windowed, and comes back to its previous size and maximized state when you return to the guide. The windowed view is not remembered between launches. Onyx remembers the current volume and may resume the last playing channel when reopened.
+Double-click the mini player to open the resizable window. In fullscreen, **Esc** or a double-click drops into the window; **Esc** again, or **Guide**, returns to the guide. The window keeps the channel playing throughout, drops its minimum size to 480 x 270 while open, and comes back to its previous size and maximized state when you return to the guide. The windowed view is not remembered between launches. Onyx remembers the current volume and may resume the last playing channel when reopened.
 
 Open **Settings > General** to choose where automatic resume starts:
 
-- **Fullscreen** — resumes directly into fullscreen playback and is the default.
+- **Windowed** — resumes in the resizable player window; the default for new installs.
+- **Fullscreen** — resumes directly into fullscreen playback.
 - **Mini-player** — resumes above the TV guide with navigation still visible.
 
-Automatic startup resume remains Live-TV-only. Playing a movie or episode does not replace the saved live channel.
+Existing installs keep the mode they already use. Automatic startup resume remains Live-TV-only. Playing a movie or episode does not replace the saved live channel, and coming back to Live resumes the last channel unless you stopped it.
 
 ## Movies And TV Shows
 
@@ -84,7 +84,7 @@ Movies and TV shows are available for enabled Xtream sources when the provider e
 4. Choose a group. Onyx loads one group at a time to avoid downloading the provider-wide catalog during ordinary browsing. Exceptionally large individual groups can still take time and memory to parse. Each group is capped at 20,000 valid titles; Onyx displays a notice when a provider response is truncated at that safety limit.
 5. For a TV show, select a season and then an episode.
 
-Movies and episodes open directly in fullscreen; Onyx does not place a mini-player underneath the details card. Move the pointer to reveal controls; they hide again after a few idle seconds. Single-click the video to pause or resume. Playback includes 30-second rewind and forward skips, timeline seeking, detected resolution, mute, volume, one **Quit** action, and embedded subtitle-track selection when the media contains subtitles. Double-click switches between fullscreen and a resizable window. **Esc** leaves fullscreen; once windowed, **Esc** or **Quit** stops playback and returns to the same title with its position saved. External sidecar subtitle URLs are not followed automatically.
+Movies and episodes open in the resizable player window; Onyx does not place a mini-player underneath the details card. Move the pointer to reveal controls; they hide again after a few idle seconds. Single-click the video to pause or resume, or double-click to switch to fullscreen. Playback includes 30-second rewind and forward skips, timeline seeking, detected resolution, mute, volume, one **Quit** action, and embedded subtitle-track selection when the media contains subtitles. **Esc** leaves fullscreen; once windowed, **Esc** or **Quit** stops playback and returns to the same title with its position saved. External sidecar subtitle URLs are not followed automatically.
 
 Movie and series metadata and catalogs are held in memory for the current session and are not written into the Live TV playlist cache.
 
