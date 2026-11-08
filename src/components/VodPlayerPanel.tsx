@@ -231,6 +231,9 @@ export function VodPlayerPanel({
             <button type="button" className="control-button" onClick={onToggleDiagnostics}>
               Stats
             </button>
+            <button type="button" className="control-button" onClick={onToggleDisplay}>
+              {display === "fullscreen" ? "Windowed" : "Fullscreen"}
+            </button>
             <button type="button" className="control-button" onClick={onQuit}>Quit</button>
           </div>
         </div>

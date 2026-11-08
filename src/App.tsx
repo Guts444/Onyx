@@ -1665,18 +1665,6 @@ function App() {
     await stopPlayback();
   }
 
-  /**
-   * Stop from a Live player view has nothing left to show, so it returns to
-   * the guide. From fullscreen this is also the only way out that does not
-   * leave an empty windowed player behind.
-   */
-  async function handleStopLivePlayback() {
-    await handleStopPlayback();
-    if (isFullscreen || liveDisplayRef.current !== "guide") {
-      await runLiveTransition("guide");
-    }
-  }
-
   async function handleSelectSection(section: "live" | "movies" | "series") {
     if (section === activeSection) return;
     cancelStartupPlaybackRestore();
@@ -3163,7 +3151,7 @@ function App() {
       playerShellRef={playerShellRef}
       playerSurfaceRef={playerSurfaceRef}
       onStop={() => {
-        void handleStopLivePlayback();
+        void handleStopPlayback();
       }}
       onReload={() => {
         void handleReloadPlayback();
@@ -3180,7 +3168,9 @@ function App() {
       onToggleFullscreen={() => {
         void handleToggleFullscreen();
       }}
-      onShowGuide={windowedLive ? () => { void runLiveTransition("guide"); } : undefined}
+      onWindowed={() => { void runLiveTransition("windowed"); }}
+      onFullscreen={() => { void runLiveTransition("fullscreen"); }}
+      onShowGuide={() => { void runLiveTransition("guide"); }}
     />
   );
 
@@ -3311,6 +3301,7 @@ function App() {
                   onToggleFullscreen={() => {
                     void handleToggleFullscreen();
                   }}
+                  onFullscreen={() => { void runLiveTransition("fullscreen"); }}
                 />
               }
               activeGroupLabel={activeGroupLabel}

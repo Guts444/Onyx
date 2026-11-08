@@ -16,8 +16,14 @@ interface PlayerPanelProps {
   onToggleDiagnostics?: () => void;
   onToggleMute: () => void;
   onSetVolume: (volume: number) => void;
+  /** Surface double-click: fullscreen and windowed players swap; the guide's
+   *  mini player opens the windowed view. */
   onToggleFullscreen: () => void;
-  /** Only a windowed Live player shows it: back to the guide without stopping. */
+  /** The fullscreen player's view button. */
+  onWindowed?: () => void;
+  /** The windowed player's and the mini player's view button. */
+  onFullscreen?: () => void;
+  /** Back to the guide with playback still running. */
   onShowGuide?: () => void;
 }
 
@@ -96,6 +102,8 @@ export function PlayerPanel({
   onToggleMute,
   onSetVolume,
   onToggleFullscreen,
+  onWindowed,
+  onFullscreen,
   onShowGuide,
 }: PlayerPanelProps) {
   const isPreviewLayout = layout === "preview";
@@ -251,6 +259,24 @@ export function PlayerPanel({
           </div>
         ) : null}
 
+        {isPreviewLayout && selectedChannel !== null ? (
+          <div className="player-mini-chrome">
+            {onFullscreen ? (
+              <button type="button" className="control-button" onClick={onFullscreen}>
+                Fullscreen
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="control-button"
+              onClick={onStop}
+              disabled={!canControlPlayback}
+            >
+              Stop
+            </button>
+          </div>
+        ) : null}
+
         {shouldRenderChrome ? (
           <div className={`player-chrome ${showPlayerChrome ? "" : "player-chrome--hidden"}`}>
             <div className="player-chrome__top">
@@ -296,32 +322,26 @@ export function PlayerPanel({
                   <button
                     type="button"
                     className="control-button"
-                    onClick={onStop}
-                    disabled={!canControlPlayback}
-                  >
-                    Stop
-                  </button>
-                  <button
-                    type="button"
-                    className="control-button"
                     onClick={onToggleMute}
                     disabled={!canControlPlayback}
                   >
                     {player.muted ? "Unmute" : "Mute"}
                   </button>
+                  {isFullscreen && onWindowed ? (
+                    <button type="button" className="control-button" onClick={onWindowed}>
+                      Windowed
+                    </button>
+                  ) : null}
+                  {!isFullscreen && onFullscreen ? (
+                    <button type="button" className="control-button" onClick={onFullscreen}>
+                      Fullscreen
+                    </button>
+                  ) : null}
                   {onShowGuide ? (
                     <button type="button" className="control-button" onClick={onShowGuide}>
                       Guide
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    className="control-button"
-                    onClick={onToggleFullscreen}
-                    disabled={selectedChannel === null}
-                  >
-                    {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-                  </button>
                 </div>
 
                 <label className="volume-control">
