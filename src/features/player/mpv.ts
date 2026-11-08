@@ -818,6 +818,11 @@ export function useMpvPlayer(
       }
       const result = await playbackOperationsRef.current.run(operation, async () => {
         await command("loadfile", args);
+        // The unpause above can be undone before loadfile runs: a dropped VOD
+        // stream surfaces as EOF, and keep-open re-pauses a file sitting at
+        // its end. Once the new file replaces it, unpause again so a Reload
+        // resumes playing instead of opening paused.
+        await setProperty("pause", false).catch(() => undefined);
         return true;
       });
       return result === true;
