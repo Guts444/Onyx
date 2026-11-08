@@ -13,6 +13,13 @@ export interface WindowSize {
   height: number;
 }
 
+export interface WindowPoint {
+  x: number;
+  y: number;
+}
+
+export interface WindowArea extends WindowPoint, WindowSize {}
+
 /** The window the player lives in while a movie or episode is in windowed mode. */
 export const VOD_WINDOWED_MIN: WindowSize = { width: 480, height: 270 };
 
@@ -46,32 +53,61 @@ export type RestorePlan =
 export interface PhysicalWindowReading {
   inner: WindowSize;
   outer: WindowSize;
+  /** Outer top-left in physical pixels. */
+  position?: WindowPoint;
   monitor: WindowSize | null;
+  /** The monitor's work area in physical pixels, when Tauri reports one. */
+  workArea?: WindowArea | null;
   reportedMaximized: boolean;
   scaleFactor: number;
 }
 
 export interface WindowReading extends WindowSnapshot {
-  /** Logical size the monitor reports; the closest thing to a work area Tauri exposes. */
+  outerWidth: number;
+  outerHeight: number;
+  /** Outer top-left in logical pixels, the unit `setPosition` takes. */
+  x: number;
+  y: number;
+  /** Logical size the monitor reports. */
   monitor: WindowSize | null;
+  /** Logical work area of the monitor the window is on. */
+  workArea: WindowArea | null;
 }
 
 function toLogical(size: WindowSize, scale: number): WindowSize {
   return { width: size.width / scale, height: size.height / scale };
 }
 
+function toLogicalPoint(point: WindowPoint, scale: number): WindowPoint {
+  return { x: point.x / scale, y: point.y / scale };
+}
+
 export function logicalWindowReading(reading: PhysicalWindowReading): WindowReading {
   const scale = reading.scaleFactor > 0 ? reading.scaleFactor : 1;
   const inner = toLogical(reading.inner, scale);
   const outer = toLogical(reading.outer, scale);
+  const position = toLogicalPoint(reading.position ?? { x: 0, y: 0 }, scale);
   const monitor = reading.monitor ? toLogical(reading.monitor, scale) : null;
+  const workArea = reading.workArea
+    ? {
+        x: reading.workArea.x / scale,
+        y: reading.workArea.y / scale,
+        width: reading.workArea.width / scale,
+        height: reading.workArea.height / scale,
+      }
+    : null;
   return {
     innerWidth: inner.width,
     innerHeight: inner.height,
+    outerWidth: outer.width,
+    outerHeight: outer.height,
+    x: position.x,
+    y: position.y,
     maximized: monitor
       ? isTrueMaximized(outer, monitor, reading.reportedMaximized)
       : reading.reportedMaximized,
     monitor,
+    workArea,
   };
 }
 
@@ -107,6 +143,78 @@ export function planWindowRestore(params: {
   const width = Math.max(snapshot.innerWidth, LIBRARY_WINDOW_MIN.width);
   const height = Math.max(snapshot.innerHeight, LIBRARY_WINDOW_MIN.height);
   return { kind: "size", size: clampToWorkArea({ width, height }, workArea) };
+}
+
+export type PlayerRestorePlan =
+  | { kind: "maximize" }
+  | { kind: "keep" }
+  | { kind: "size"; size: WindowSize; position: WindowPoint | null };
+
+/** Whether the window still sits where the app left it, outside the resize border. */
+export function playerRectChanged(a: WindowReading, b: WindowReading, tolerance = 4): boolean {
+  return (
+    Math.abs(a.x - b.x) > tolerance ||
+    Math.abs(a.y - b.y) > tolerance ||
+    Math.abs(a.outerWidth - b.outerWidth) > tolerance ||
+    Math.abs(a.outerHeight - b.outerHeight) > tolerance
+  );
+}
+
+/**
+ * What to do when the player gives the window back to the library.
+ *
+ * A fullscreen round trip returns to the same rect, so an entry rect equal to
+ * the current one means the user did not touch the window and today's restore
+ * applies. If they snapped, maximized or dragged it, the window keeps their
+ * position and size; it only grows to the library minimum and is nudged inside
+ * the work area, shrinking only when the minimum does not fit the monitor.
+ */
+export function planPlayerRestore(params: {
+  snapshot: WindowSnapshot;
+  entry: WindowReading | null;
+  current: WindowReading;
+  workArea: WindowArea | null;
+}): PlayerRestorePlan {
+  const { snapshot, entry, current, workArea } = params;
+
+  if (!entry || !playerRectChanged(entry, current)) {
+    const area: WindowArea = workArea ?? {
+      x: current.x,
+      y: current.y,
+      width: current.outerWidth,
+      height: current.outerHeight,
+    };
+    const plan = planWindowRestore({ snapshot, current, workArea: area });
+    return plan.kind === "size" ? { kind: "size", size: plan.size, position: null } : plan;
+  }
+
+  if (current.maximized) return { kind: "maximize" };
+
+  const frameWidth = Math.max(0, current.outerWidth - current.innerWidth);
+  const frameHeight = Math.max(0, current.outerHeight - current.innerHeight);
+  let outerWidth = Math.max(current.outerWidth, LIBRARY_WINDOW_MIN.width + frameWidth);
+  let outerHeight = Math.max(current.outerHeight, LIBRARY_WINDOW_MIN.height + frameHeight);
+  let x = current.x;
+  let y = current.y;
+
+  if (workArea) {
+    outerWidth = Math.min(outerWidth, workArea.width);
+    outerHeight = Math.min(outerHeight, workArea.height);
+    x = Math.min(Math.max(current.x, workArea.x), workArea.x + workArea.width - outerWidth);
+    y = Math.min(Math.max(current.y, workArea.y), workArea.y + workArea.height - outerHeight);
+  }
+
+  const size = {
+    width: Math.max(1, outerWidth - frameWidth),
+    height: Math.max(1, outerHeight - frameHeight),
+  };
+  const moved = x !== current.x || y !== current.y;
+  const resized =
+    Math.abs(size.width - current.innerWidth) > 1 ||
+    Math.abs(size.height - current.innerHeight) > 1;
+
+  if (!moved && !resized) return { kind: "keep" };
+  return { kind: "size", size, position: moved ? { x, y } : null };
 }
 
 /**

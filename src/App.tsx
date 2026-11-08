@@ -160,8 +160,9 @@ import {
 } from "./features/vod/positions";
 import {
   nextVodDisplay,
-  planWindowRestore,
+  planPlayerRestore,
   type VodDisplay,
+  type WindowReading,
   type WindowSnapshot,
 } from "./features/player/display";
 import {
@@ -176,6 +177,7 @@ import {
   maximizeWindow,
   setLibraryWindowMinimum,
   setVodWindowedMinimum,
+  setWindowPosition,
   setWindowSize,
 } from "./features/window/vodWindow";
 import { DiagnosticsOverlay } from "./components/DiagnosticsOverlay";
@@ -510,9 +512,12 @@ function App() {
   const liveWindowSnapshotRef = useRef<WindowSnapshot | null>(null);
   /** True once this player view left fullscreen, even if it came back. */
   const liveWasWindowedRef = useRef(false);
+  /** The window the player opened into; a different current rect means the user moved it. */
+  const livePlayerEntryRectRef = useRef<WindowReading | null>(null);
   const vodWindowSnapshotRef = useRef<WindowSnapshot | null>(null);
   /** True once this playback left fullscreen, even if it came back. */
   const vodWasWindowedRef = useRef(false);
+  const vodPlayerEntryRectRef = useRef<WindowReading | null>(null);
   const vodPositionRef = useRef<number | null>(null);
   const vodDurationRef = useRef<number | null>(null);
   const fullscreenHostOperationsRef = useRef(new LatestPlaybackOperationCoordinator());
@@ -1069,9 +1074,13 @@ function App() {
             liveWasWindowedRef.current = true;
             const snapshot = liveWindowSnapshotRef.current;
             if (snapshot) {
-              void applyVodWindowedWindow(snapshot).catch(() => undefined);
+              void applyVodWindowedWindow(snapshot)
+                .then(() => rememberPlayerEntry(livePlayerEntryRectRef))
+                .catch(() => undefined);
             } else {
-              void setVodWindowedMinimum().catch(() => undefined);
+              void setVodWindowedMinimum()
+                .then(() => rememberPlayerEntry(livePlayerEntryRectRef))
+                .catch(() => undefined);
             }
           }
           commitLiveDisplay(next);
@@ -1577,14 +1586,23 @@ function App() {
     schedulePlayerLayoutSync();
   }
 
-  async function restoreLibraryWindow(snapshot: WindowSnapshot | null) {
+  async function rememberPlayerEntry(target: { current: WindowReading | null }) {
+    if (target.current) return;
+    try {
+      target.current = await captureWindowSnapshot();
+    } catch {
+      target.current = null;
+    }
+  }
+
+  async function restoreLibraryWindow(snapshot: WindowSnapshot | null, entry: WindowReading | null) {
     const current = await captureWindowSnapshot();
-    const workArea = current.monitor ?? {
-      width: current.innerWidth,
-      height: current.innerHeight,
-    };
-    const plan = planWindowRestore({
+    const workArea =
+      current.workArea ??
+      (current.monitor ? { x: 0, y: 0, ...current.monitor } : null);
+    const plan = planPlayerRestore({
       snapshot: snapshot ?? current,
+      entry,
       current,
       workArea,
     });
@@ -1593,6 +1611,7 @@ function App() {
       await maximizeWindow();
     } else if (plan.kind === "size") {
       await setWindowSize(plan.size);
+      if (plan.position) await setWindowPosition(plan.position);
     }
   }
 
@@ -1631,15 +1650,17 @@ function App() {
           } else {
             await setVodWindowedMinimum();
           }
+          await rememberPlayerEntry(livePlayerEntryRectRef);
         },
         applyLibraryMinimum: async () => {
-          // Never touch the minimum of a window that never left fullscreen:
-          // on Windows, changing it on a maximized window un-maximizes it.
-          if (liveWasWindowedRef.current) await setLibraryWindowMinimum();
+          // Intentionally left to `restoreWindow`: changing the minimum
+          // un-maximizes a maximized window, which would erase the state the
+          // restore plan needs to read. `restoreLibraryWindow` applies the
+          // minimum after it has captured the current rect.
         },
         restoreWindow: async () => {
           if (liveWasWindowedRef.current) {
-            await restoreLibraryWindow(liveWindowSnapshotRef.current);
+            await restoreLibraryWindow(liveWindowSnapshotRef.current, livePlayerEntryRectRef.current);
           }
         },
       }, (nextDisplay) => {
@@ -1663,6 +1684,7 @@ function App() {
           showSelectedChannelGroup();
           liveWasWindowedRef.current = false;
           liveWindowSnapshotRef.current = null;
+          livePlayerEntryRectRef.current = null;
         } else if (plan.final === "windowed") {
           liveWasWindowedRef.current = true;
         }
@@ -1791,6 +1813,7 @@ function App() {
         } else {
           await setLibraryWindowMinimum();
         }
+        await rememberPlayerEntry(vodPlayerEntryRectRef);
       } catch {
         // The window keeps its size; the panel still fills it.
       }
@@ -1831,6 +1854,7 @@ function App() {
     // A title opens in the window now, so Quit must restore even when the
     // viewer never leaves it.
     vodWasWindowedRef.current = true;
+    vodPlayerEntryRectRef.current = null;
     try {
       vodWindowSnapshotRef.current = await captureWindowSnapshot();
     } catch {
@@ -1857,6 +1881,7 @@ function App() {
       } else {
         await setVodWindowedMinimum();
       }
+      await rememberPlayerEntry(vodPlayerEntryRectRef);
 
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
@@ -1902,12 +1927,13 @@ function App() {
     }
     if (wasWindowed) {
       try {
-        await restoreLibraryWindow(snapshot);
+        await restoreLibraryWindow(snapshot, vodPlayerEntryRectRef.current);
       } catch {
         // A window that cannot be restored is still usable; do not block Quit.
       }
     }
     vodWindowSnapshotRef.current = null;
+    vodPlayerEntryRectRef.current = null;
     vodWasWindowedRef.current = false;
     setVodDisplay("fullscreen");
     commitIfCurrentPlaybackRevision(
