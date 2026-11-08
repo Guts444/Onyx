@@ -8,6 +8,8 @@ export interface RecoverySnapshot {
   maxAttempts: number;
   message: string | null;
   lastError: string | null;
+  /** `performance.now()` deadline of the wait; null outside the waiting phase. */
+  retryAt: number | null;
 }
 
 export interface RecoveryAction {
@@ -53,7 +55,7 @@ export const DEFAULT_RECOVERY_OPTIONS: RecoveryOptions = {
   sustainedPlaybackMs: 60_000,
   minimumResumeSeconds: 10,
   minimumResumeFraction: 0.05,
-  retryDelaysMs: [1_000, 2_000, 4_000, 8_000],
+  retryDelaysMs: [3_000, 10_000, 30_000, 60_000],
 };
 
 const IDLE_SNAPSHOT: RecoverySnapshot = {
@@ -62,6 +64,7 @@ const IDLE_SNAPSHOT: RecoverySnapshot = {
   maxAttempts: 0,
   message: null,
   lastError: null,
+  retryAt: null,
 };
 
 function noAction(): RecoveryAction {
@@ -281,6 +284,16 @@ export class PlaybackRecovery {
     return this.fail(error, at, refusal);
   }
 
+  /**
+   * Skip the current wait and make the next attempt due immediately. It does
+   * not spend an extra attempt and does nothing while an attempt is loading.
+   */
+  retryNow(at: number): RecoveryResult {
+    if (this.phase !== "waiting") return this.result(noAction());
+    this.retryAt = at;
+    return this.result(noAction());
+  }
+
   cancel(): RecoveryResult {
     this.phase = "idle";
     this.attempt = 0;
@@ -321,6 +334,7 @@ export class PlaybackRecovery {
         maxAttempts: this.maxAttempts,
         message: this.reachedFirstFrame ? PLAYBACK_LOST_MESSAGE : PLAYBACK_FAILED_MESSAGE,
         lastError: this.lastError,
+        retryAt: null,
       };
     }
     if (this.phase === "waiting") {
@@ -330,6 +344,7 @@ export class PlaybackRecovery {
         maxAttempts: this.maxAttempts,
         message: `Retrying (${this.attempt} of ${this.maxAttempts})…`,
         lastError: this.lastError,
+        retryAt: this.retryAt,
       };
     }
     return {
@@ -338,6 +353,7 @@ export class PlaybackRecovery {
       maxAttempts: this.maxAttempts,
       message: null,
       lastError: this.lastError,
+      retryAt: null,
     };
   }
 

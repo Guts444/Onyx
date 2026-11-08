@@ -14,7 +14,7 @@ const OPTIONS: Partial<RecoveryOptions> = {
   progressTimeoutMs: 30_000,
   seekSuppressionMs: 3_000,
   sustainedPlaybackMs: 60_000,
-  retryDelaysMs: [1_000, 2_000, 4_000, 8_000],
+  retryDelaysMs: [3_000, 10_000, 30_000, 60_000],
 };
 
 function started(kind: "live" | "vod" = "live") {
@@ -61,7 +61,7 @@ test("no first frame within the timeout schedules a retry", () => {
   assert.equal(timedOut.snapshot.attempt, 2);
   assert.equal(timedOut.snapshot.message, "Retrying (2 of 5)…");
 
-  const retry = recovery.tick(21_000);
+  const retry = recovery.tick(23_000);
   assert.equal(retry.action.type, "retry");
   assert.equal(retry.action.attempt, 2);
 });
@@ -181,7 +181,7 @@ test("a VOD EOF with no known duration retries from the position", () => {
   recovery.progress(42, null, 1_000);
   const result = recovery.endOfStream(1_100);
   assert.equal(result.snapshot.phase, "waiting");
-  const retry = recovery.tick(2_100);
+  const retry = recovery.tick(4_100);
   assert.equal(retry.action.startAt, 42);
 });
 
@@ -191,7 +191,7 @@ test("a retry that hits EOF without progress is the real end", () => {
   recovery.bufferingChanged(true);
   const waiting = recovery.endOfStream(2_100);
   assert.equal(waiting.snapshot.phase, "waiting");
-  const retry = tickThrough(recovery, 2_200, 5_000);
+  const retry = tickThrough(recovery, 2_200, 6_000);
   assert.equal(retry.action.type, "retry");
   assert.equal(retry.action.startAt, 2_400);
   const ended = recovery.endOfStream(retry.now + 100);
@@ -204,7 +204,7 @@ test("a refusal on the first retry still gets the full ladder", () => {
   recovery.firstFrame(10);
   recovery.progress(1, null, 20);
   recovery.loadFailed("reset", 30);
-  const retry = tickThrough(recovery, 31, 2_000);
+  const retry = tickThrough(recovery, 31, 3_100);
   assert.equal(retry.action.type, "retry");
   // The retry fails before any frame, but the media did play in this ladder.
   recovery.loadFailed("refused", 3_000);
@@ -288,10 +288,10 @@ test("an error before the first frame gets one retry and then fails", () => {
   assert.equal(first.snapshot.attempt, 2);
   assert.equal(first.snapshot.maxAttempts, 2);
 
-  const retry = tickUntil(recovery, 11_000, 12_000);
+  const retry = tickUntil(recovery, 11_000, 13_100);
   assert.equal(retry.action.type, "retry");
 
-  const second = recovery.loadFailed("http 403", 12_100);
+  const second = recovery.loadFailed("http 403", retry.now + 100);
   assert.equal(second.snapshot.phase, "failed");
   assert.equal(second.snapshot.message, PLAYBACK_FAILED_MESSAGE);
   assert.equal(second.action.type, "give-up");
@@ -301,7 +301,7 @@ test("the final message says whether the stream ever opened", () => {
   const refused = new PlaybackRecovery(OPTIONS);
   refused.begin("live", 0);
   refused.loadFailed("http 403", 10);
-  const retry = tickThrough(refused, 11, 12_000);
+  const retry = tickThrough(refused, 11, 13_100);
   assert.equal(retry.action.type, "retry");
   refused.loadFailed("http 403", retry.now + 100);
   assert.equal(refused.snapshot().phase, "failed");
@@ -310,12 +310,15 @@ test("the final message says whether the stream ever opened", () => {
   const dropped = new PlaybackRecovery(OPTIONS);
   dropped.begin("live", 0);
   dropped.firstFrame(10);
+  let now = 20;
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    dropped.loadFailed("reset", 20);
-    tickThrough(dropped, 21, 30_000);
-    dropped.firstFrame(30_010);
+    dropped.loadFailed("reset", now);
+    const retry = tickThrough(dropped, now + 1, now + 61_000);
+    assert.equal(retry.action.type, "retry");
+    now = retry.now;
+    dropped.firstFrame(now + 10);
   }
-  dropped.loadFailed("reset", 30_020);
+  dropped.loadFailed("reset", now + 20);
   assert.equal(dropped.snapshot().phase, "failed");
   assert.equal(dropped.snapshot().message, PLAYBACK_LOST_MESSAGE);
 });
@@ -337,7 +340,7 @@ test("the ladder stops after five attempts", () => {
     now += 1;
     const failed = recovery.loadFailed("reset", now);
     assert.equal(failed.snapshot.phase, "waiting", `attempt ${attempt} should wait`);
-    const retry = tickThrough(recovery, now + 1, now + 10_000);
+    const retry = tickThrough(recovery, now + 1, now + 61_000);
     assert.equal(retry.action.type, "retry", `attempt ${attempt} should retry`);
     now = retry.now;
     recovery.firstFrame(now);
@@ -358,7 +361,7 @@ test("sustained playback resets a spent ladder", () => {
   let now = 25;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     recovery.loadFailed("reset", now);
-    const retry = tickUntil(recovery, now + 1, now + 10_000);
+    const retry = tickUntil(recovery, now + 1, now + 61_000);
     assert.equal(retry.action.type, "retry");
     now = retry.now;
     recovery.firstFrame(now);
@@ -383,7 +386,7 @@ test("a long tick gap (sleep or throttling) costs one attempt, not the ladder", 
   const wake = recovery.tick(120_000);
   assert.equal(wake.action.type, "none");
   assert.equal(wake.snapshot.phase, "waiting");
-  const retry = tickThrough(recovery, 121_000, 122_000);
+  const retry = tickThrough(recovery, 121_000, 123_100);
   assert.equal(retry.action.type, "retry");
   assert.equal(retry.snapshot.attempt, 2);
 });
@@ -410,17 +413,17 @@ test("a VOD retry starts where the viewer is", () => {
   const early = started("vod");
   early.progress(4, 600, 2_000);
   early.loadFailed("reset", 3_000);
-  assert.equal(early.tick(4_000).action.startAt, null);
+  assert.equal(early.tick(6_100).action.startAt, null);
 
   const late = started("vod");
   late.progress(590, 600, 2_000);
   late.loadFailed("reset", 3_000);
-  assert.equal(late.tick(4_000).action.startAt, 590);
+  assert.equal(late.tick(6_100).action.startAt, 590);
 
   const unknown = started("vod");
   unknown.progress(42, null, 2_000);
   unknown.loadFailed("reset", 3_000);
-  assert.equal(unknown.tick(4_000).action.startAt, 42);
+  assert.equal(unknown.tick(6_100).action.startAt, 42);
 });
 
 test("rewinding a movie is not a failure, and the retry stays where the viewer is", () => {
@@ -465,14 +468,14 @@ test("an EOF after a rewind is a drop, not the end of the title", () => {
   recovery.progress(120, 7_200, 2_100);
   const result = recovery.endOfStream(2_200);
   assert.equal(result.snapshot.phase, "waiting");
-  assert.equal(recovery.tick(3_300).action.startAt, 120);
+  assert.equal(recovery.tick(5_300).action.startAt, 120);
 });
 
 test("a live retry never carries a start position", () => {
   const recovery = started("live");
   recovery.progress(42, 600, 2_000);
   recovery.loadFailed("reset", 3_000);
-  assert.equal(recovery.tick(4_000).action.startAt, null);
+  assert.equal(recovery.tick(6_100).action.startAt, null);
 });
 
 test("a stale playback-restart never cancels a pending retry", () => {
@@ -484,7 +487,7 @@ test("a stale playback-restart never cancels a pending retry", () => {
   assert.equal(live.snapshot().phase, "waiting");
   live.firstFrame(5_050);
   assert.equal(live.snapshot().phase, "waiting");
-  assert.equal(live.tick(6_500).action.type, "retry");
+  assert.equal(live.tick(8_100).action.type, "retry");
 
   const vod = new PlaybackRecovery(OPTIONS);
   vod.begin("vod", 0, 120);
@@ -494,7 +497,7 @@ test("a stale playback-restart never cancels a pending retry", () => {
   assert.equal(vod.snapshot().phase, "waiting");
   vod.firstFrame(80_150);
   assert.equal(vod.snapshot().phase, "waiting");
-  const retry = vod.tick(81_500);
+  const retry = vod.tick(83_200);
   assert.equal(retry.action.type, "retry");
   assert.equal(retry.action.startAt, 82);
 });
@@ -507,4 +510,69 @@ test("a duplicate end or failure while waiting does not spend another attempt", 
   recovery.endOfStream(2_200);
   assert.equal(recovery.snapshot().attempt, 2);
   assert.equal(recovery.snapshot().phase, "waiting");
+});
+
+test("the snapshot carries the retry deadline only while waiting", () => {
+  const recovery = new PlaybackRecovery(OPTIONS);
+  recovery.begin("live", 0);
+  assert.equal(recovery.snapshot().retryAt, null);
+
+  const failed = recovery.loadFailed("reset", 1_000);
+  assert.equal(failed.snapshot.retryAt, 4_000);
+
+  recovery.tick(4_000);
+  assert.equal(recovery.snapshot().phase, "loading");
+  assert.equal(recovery.snapshot().retryAt, null);
+});
+
+test("Retry now skips the wait without spending an attempt", () => {
+  const recovery = new PlaybackRecovery(OPTIONS);
+  recovery.begin("live", 0);
+  const failed = recovery.loadFailed("reset", 1_000);
+  assert.equal(failed.snapshot.attempt, 2);
+  assert.equal(failed.snapshot.retryAt, 4_000);
+
+  const skipped = recovery.retryNow(2_000);
+  assert.equal(skipped.action.type, "none");
+  assert.equal(skipped.snapshot.attempt, 2);
+  assert.equal(skipped.snapshot.retryAt, 2_000);
+
+  const started = recovery.tick(2_000);
+  assert.equal(started.action.type, "retry");
+  assert.equal(started.action.attempt, 2);
+
+  // The attempt is in flight: no second connection and no second retry.
+  assert.equal(recovery.retryNow(2_001).action.type, "none");
+  assert.equal(recovery.tick(2_001).action.type, "none");
+});
+
+test("the full ladder waits 3, 10, 30 and 60 seconds before giving up", () => {
+  const recovery = new PlaybackRecovery(OPTIONS);
+  recovery.begin("live", 0);
+  recovery.firstFrame(10);
+
+  let failed = recovery.loadFailed("reset", 1_000);
+  assert.equal(failed.snapshot.retryAt, 4_000);
+  let retry = recovery.tick(4_000);
+  assert.equal(retry.action.attempt, 2);
+
+  failed = recovery.loadFailed("reset", 5_000);
+  assert.equal(failed.snapshot.retryAt, 15_000);
+  retry = recovery.tick(15_000);
+  assert.equal(retry.action.attempt, 3);
+
+  failed = recovery.loadFailed("reset", 16_000);
+  assert.equal(failed.snapshot.retryAt, 46_000);
+  retry = recovery.tick(46_000);
+  assert.equal(retry.action.attempt, 4);
+
+  failed = recovery.loadFailed("reset", 47_000);
+  assert.equal(failed.snapshot.retryAt, 107_000);
+  retry = recovery.tick(107_000);
+  assert.equal(retry.action.attempt, 5);
+
+  const last = recovery.loadFailed("reset", 108_000);
+  assert.equal(last.action.type, "give-up");
+  assert.equal(last.snapshot.phase, "failed");
+  assert.equal(last.snapshot.retryAt, null);
 });
