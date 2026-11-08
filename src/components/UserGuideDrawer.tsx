@@ -158,6 +158,7 @@ export function UserGuideDrawer({ isOpen, onClose, onOpenSources, onOpenEpg }: U
             <ul>
               <li>Double-click the mini player to open the resizable player window; use its Windowed button to do the same or Fullscreen to go straight to fullscreen. Double-click the player to switch between the window and fullscreen. Its mini-player controls fade in when playback starts, on hover, and on keyboard focus.</li>
               <li>Press <kbd>Esc</kbd> in fullscreen to drop into a resizable window; press <kbd>Esc</kbd> again to return to the guide, or use <strong>Guide</strong> in the controls.</li>
+              <li>If a stream drops, the player counts down the next retry (3 s, 10 s, 30 s, 60 s) and offers <strong>Retry now</strong> to start it immediately.</li>
               <li>Right-click a channel to manage Favorites or assign an EPG listing.</li>
               <li>Choose windowed, fullscreen, or mini-player automatic resume under <strong>Settings &gt; General</strong>.</li>
               <li>Movies and episodes open in the player window; move the pointer to reveal controls and single-click the video to pause or resume.</li>

@@ -66,6 +66,10 @@ Left-click a channel to begin playback. The guide's mini player carries **Window
 
 Double-click the mini player to open the resizable window. In fullscreen, **Esc** or a double-click drops into the window; **Esc** again, or **Guide**, returns to the guide. The window keeps the channel playing throughout, drops its minimum size to 480 x 270 while open, and comes back to its previous size and maximized state when you return to the guide. The windowed view is not remembered between launches. Onyx remembers the current volume and may resume the last playing channel when reopened.
 
+### When a stream drops
+
+Onyx retries a stream that stalls, drops, or ends early up to five times. The waits between attempts grow: **3 s, 10 s, 30 s and 60 s**, about a minute and three quarters in all. While it waits, the player shows a countdown such as "Retrying in 42 s (4 of 5)" and a **Retry now** button that starts that attempt at once without changing the retry count. Both appear in the guide's mini player and in every player view, including a 480 x 270 window. A stream that never shows a frame gets a single retry before Onyx reports the failure and offers **Reload**. A retried movie or episode resumes where it stopped.
+
 Open **Settings > General** to choose where automatic resume starts:
 
 - **Windowed** — resumes in the resizable player window; the default for new installs.

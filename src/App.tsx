@@ -640,6 +640,7 @@ function App() {
     player,
     playChannel,
     playMedia,
+    retryNow,
     setVolumeLevel,
     stopPlayback,
     reloadPlayback,
@@ -3308,6 +3309,7 @@ function App() {
       onReload={() => {
         void handleReloadPlayback();
       }}
+      onRetryNow={retryNow}
       onToggleDiagnostics={() => setDiagnosticsOpen((open) => !open)}
       onToggleMute={() => {
         void toggleMute();
@@ -3348,6 +3350,7 @@ function App() {
       onToggleDiagnostics={() => setDiagnosticsOpen((open) => !open)}
       onQuit={() => { void handleStopVod(); }}
       onReload={() => { void reloadPlayback(); }}
+      onRetryNow={retryNow}
     />
   ) : null;
 
@@ -3441,6 +3444,7 @@ function App() {
                   onReload={() => {
                     void handleReloadPlayback();
                   }}
+                  onRetryNow={retryNow}
                   onToggleMute={() => {
                     void toggleMute();
                   }}

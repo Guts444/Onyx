@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "re
 import type { VodPlaybackItem } from "../domain/vod";
 import type { VodDisplay } from "../features/player/display";
 import type { MpvPlayerState } from "../features/player/mpv";
+import { RecoveryNotice } from "./RecoveryNotice";
 
 interface VodPlayerPanelProps {
   player: MpvPlayerState;
@@ -19,6 +20,8 @@ interface VodPlayerPanelProps {
   onToggleDisplay: () => void;
   onQuit: () => void;
   onReload: () => void;
+  /** Skip the current recovery wait and start that attempt. */
+  onRetryNow?: () => void;
   onToggleDiagnostics: () => void;
 }
 
@@ -49,6 +52,7 @@ export function VodPlayerPanel({
   onToggleDisplay,
   onQuit,
   onReload,
+  onRetryNow,
   onToggleDiagnostics,
 }: VodPlayerPanelProps) {
   const [chromeVisible, setChromeVisible] = useState(true);
@@ -152,7 +156,11 @@ export function VodPlayerPanel({
             </span>
             <div className="player-status-card__copy">
               <h2>{media.title}</h2>
-              <p>{player.error ?? media.plot ?? "Preparing video playback."}</p>
+              {player.recovery.phase === "waiting" && player.recovery.retryAt !== null ? (
+                <RecoveryNotice recovery={player.recovery} onRetryNow={onRetryNow} />
+              ) : (
+                <p>{player.error ?? media.plot ?? "Preparing video playback."}</p>
+              )}
             </div>
           </div>
         ) : null}

@@ -888,6 +888,20 @@ export function useMpvPlayer(
     }
   }
 
+  /**
+   * The user asked to skip the current wait. The recovery machine keeps the
+   * same attempt; this only makes its deadline now and starts it.
+   */
+  function retryNow() {
+    const recovery = recoveryRef.current;
+    applyRecovery(recovery.retryNow(performance.now()));
+    const started = recovery.tick(performance.now());
+    applyRecovery(started);
+    if (started.action.type === "retry") {
+      void retryCurrentMedia(started.action.startAt);
+    }
+  }
+
   async function reloadPlayback() {
     const media = currentMediaRef.current;
     if (!media) {
@@ -972,6 +986,7 @@ export function useMpvPlayer(
     playMedia,
     stopPlayback,
     reloadPlayback,
+    retryNow,
     toggleMute,
     togglePause,
     seekRelative,

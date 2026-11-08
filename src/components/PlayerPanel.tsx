@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import type { EpgResolvedGuide } from "../domain/epg";
 import type { Channel } from "../domain/iptv";
 import type { MpvPlayerState } from "../features/player/mpv";
+import { RecoveryNotice } from "./RecoveryNotice";
 
 interface PlayerPanelProps {
   player: MpvPlayerState;
@@ -13,6 +14,8 @@ interface PlayerPanelProps {
   playerSurfaceRef: RefObject<HTMLDivElement | null>;
   onStop: () => void;
   onReload: () => void;
+  /** Skip the current recovery wait and start that attempt. */
+  onRetryNow?: () => void;
   onToggleDiagnostics?: () => void;
   onToggleMute: () => void;
   onSetVolume: (volume: number) => void;
@@ -98,6 +101,7 @@ export function PlayerPanel({
   playerSurfaceRef,
   onStop,
   onReload,
+  onRetryNow,
   onToggleDiagnostics,
   onToggleMute,
   onSetVolume,
@@ -336,7 +340,11 @@ export function PlayerPanel({
             <span className={`status-pill status-pill--${statusTone}`}>{player.status}</span>
             <div className="player-status-card__copy">
               <h2>{heading}</h2>
-              <p>{body}</p>
+              {player.recovery.phase === "waiting" && player.recovery.retryAt !== null ? (
+                <RecoveryNotice recovery={player.recovery} onRetryNow={onRetryNow} />
+              ) : (
+                <p>{body}</p>
+              )}
             </div>
           </div>
         ) : null}

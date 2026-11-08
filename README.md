@@ -43,7 +43,7 @@ For guide data, add an XMLTV URL under **Settings > EPG**, apply it, and select 
 - Caches guide data locally for matching and now/next programme display.
 - Supports manual EPG matching when automatic matching is not enough.
 - Plays streams through native `libmpv`.
-- Recovers from stalls and drops on its own: a stream that stops opening or stops progressing is retried a few times before Onyx reports the failure and offers **Reload**. A retried movie or episode resumes where it stopped.
+- Recovers from stalls and drops on its own: a stream that stops opening or stops progressing is retried up to five times, with waits growing from 3 seconds to a minute and a visible countdown plus **Retry now**; when the ladder is spent Onyx reports the failure and offers **Reload**. A retried movie or episode resumes where it stopped.
 - Opens movies and episodes in the resizable player window with idle-hiding controls, click-to-pause/resume, 30-second skips, seeking, detected resolution, subtitles, mute, volume, a **Fullscreen** switch and one **Quit** action through native `libmpv`.
 - **Stats** in either player shows codec, resolution, frame rate, hardware decoding, cache, dropped frames, and recovery state, with a **Copy** button for bug reports that never includes a stream URL or credential.
 - Double-click switches a movie or episode between the window and fullscreen at any time. The window works down to 480 x 270; **Esc** leaves fullscreen and, once windowed, quits back to the title with its position saved.

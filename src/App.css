@@ -278,6 +278,19 @@ img {
   line-height: 1.05;
 }
 
+.recovery-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.recovery-notice__action {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 0.78rem;
+}
+
 .sidebar__section-header p,
 .sidebar__notice,
 .settings-drawer__header p,
