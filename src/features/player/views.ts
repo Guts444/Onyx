@@ -45,7 +45,6 @@ export function planLiveViewTransition(
   to: LiveDisplay,
 ): LiveViewPlan | null {
   if (from === to) return null;
-  if (from === "guide" && to === "windowed") return null;
   if (from === "windowed" && to === "guide") {
     return {
       from,
@@ -79,7 +78,7 @@ export function planLiveViewTransition(
       minimum: "player",
       restoreWindow: false,
       final: "windowed",
-      fallback: "fullscreen",
+      fallback: from === "guide" ? "guide" : "fullscreen",
     };
   }
   return {

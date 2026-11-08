@@ -56,14 +56,22 @@ function createFakeHost(options: {
   return { host, calls, nativeState: () => native };
 }
 
-test("the guide reaches windowed mode only through fullscreen", () => {
-  assert.equal(planLiveViewTransition("guide", "windowed"), null);
+test("a selection can open the windowed player straight from the guide", () => {
+  const plan = planLiveViewTransition("guide", "windowed");
+  assert.ok(plan);
+  if (!plan) return;
+  assert.equal(plan.interim, "windowed");
+  assert.equal(plan.final, "windowed");
+  assert.equal(plan.fullscreen, false);
+  assert.equal(plan.minimum, "player");
+  assert.equal(plan.fallback, "guide");
   assert.equal(planLiveViewTransition("guide", "guide"), null);
 });
 
 test("every player transition uses a windowed interim view", () => {
   for (const [from, to] of [
     ["guide", "fullscreen"],
+    ["guide", "windowed"],
     ["fullscreen", "windowed"],
     ["fullscreen", "guide"],
     ["windowed", "guide"],
@@ -82,9 +90,26 @@ test("window minimums follow the destination", () => {
   assert.equal(fullscreen?.minimum, "none");
   const windowed = planLiveViewTransition("fullscreen", "windowed");
   assert.equal(windowed?.minimum, "player");
+  const direct = planLiveViewTransition("guide", "windowed");
+  assert.equal(direct?.minimum, "player");
   const guide = planLiveViewTransition("windowed", "guide");
   assert.equal(guide?.minimum, "library");
   assert.equal(guide?.restoreWindow, true);
+});
+
+test("opening windowed from the guide never touches fullscreen", async () => {
+  const fake = createFakeHost({ native: false });
+  const commits: LiveDisplay[] = [];
+  const completed = await runLiveViewTransition(
+    planLiveViewTransition("guide", "windowed")!,
+    fake.host,
+    (display) => commits.push(display),
+  );
+
+  assert.equal(completed, true);
+  assert.deepEqual(commits, ["windowed", "windowed"]);
+  assert.deepEqual(fake.calls.filter((call) => call.startsWith("set:")), []);
+  assert.ok(fake.calls.includes("minimum:player"));
 });
 
 test("entering fullscreen commits the player before the window call resolves", async () => {

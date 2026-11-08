@@ -1620,6 +1620,22 @@ function App() {
     }
   }
 
+  /** Double-clicking the guide's mini player opens the windowed player. */
+  async function handlePreviewWindowed() {
+    cancelStartupPlaybackRestore();
+    if (channelGuideBodyRef.current) {
+      channelScrollPositionRef.current = {
+        key: channelScrollPositionKeyRef.current,
+        top: channelGuideBodyRef.current.scrollTop,
+      };
+    }
+    try {
+      await runLiveTransition("windowed");
+    } catch (error) {
+      setMessage(getErrorMessage(error, "The windowed player could not be opened."));
+    }
+  }
+
   async function handleSelectChannel(channel: Channel) {
     cancelStartupPlaybackRestore();
     setSelectedChannelId(channel.id);
@@ -1723,12 +1739,14 @@ function App() {
 
   async function handlePlayVod(item: VodPlaybackItem, startAt: number | null = null) {
     cancelStartupPlaybackRestore();
-    setVodDisplay("fullscreen");
+    setVodDisplay("windowed");
     // VOD owns the window for the duration; never let a stale Live view
     // reappear when the title closes.
     liveDisplayRef.current = "guide";
     setLiveDisplay("guide");
-    vodWasWindowedRef.current = false;
+    // A title opens in the window now, so Quit must restore even when the
+    // viewer never leaves it.
+    vodWasWindowedRef.current = true;
     try {
       vodWindowSnapshotRef.current = await captureWindowSnapshot();
     } catch {
@@ -1737,10 +1755,24 @@ function App() {
     const fullscreenRevision = ++fullscreenStateRevisionRef.current;
     const isCurrentPlayback = () => fullscreenStateRevisionRef.current === fullscreenRevision;
     setActiveVodPlayback(item);
-    setIsFullscreen(true);
+    setIsFullscreen(false);
 
     try {
-      if (!(await applyHostFullscreenForRevision(true, fullscreenRevision))) return;
+      // A title takes over a normal window. If the window is somehow still
+      // fullscreen, leave it before the windowed minimum is applied.
+      const nativeFullscreen = isTauri()
+        ? await getCurrentWindow().isFullscreen().catch(() => false)
+        : Boolean(document.fullscreenElement);
+      if (nativeFullscreen) {
+        if (!(await applyHostFullscreenForRevision(false, fullscreenRevision))) return;
+      }
+
+      const snapshot = vodWindowSnapshotRef.current;
+      if (snapshot) {
+        await applyVodWindowedWindow(snapshot);
+      } else {
+        await setVodWindowedMinimum();
+      }
 
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
@@ -1760,7 +1792,7 @@ function App() {
       if (!started) await handleStopVod();
     } catch (error) {
       if (!isCurrentPlayback()) return;
-      setMessage(getErrorMessage(error, "Fullscreen VOD playback could not be started."));
+      setMessage(getErrorMessage(error, "VOD playback could not be started."));
       await handleStopVod();
     }
   }
@@ -3299,7 +3331,7 @@ function App() {
                     void setVolumeLevel(nextVolume);
                   }}
                   onToggleFullscreen={() => {
-                    void handleToggleFullscreen();
+                    void handlePreviewWindowed();
                   }}
                   onFullscreen={() => { void runLiveTransition("fullscreen"); }}
                 />
