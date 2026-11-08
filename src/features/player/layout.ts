@@ -43,3 +43,50 @@ export function calculateVideoMarginRatio(
     bottom: Math.max(0, Math.min(1, (viewport.height - rect.bottom) / viewport.height)),
   };
 }
+
+export interface LayoutSyncScheduler {
+  setTimeout(callback: () => void, milliseconds: number): number;
+  clearTimeout(handle: number): void;
+}
+
+export const LAYOUT_TRAILING_SYNC_MS = 200;
+
+export interface LayoutSync {
+  /** Syncs now, then once more after the window has settled. */
+  schedule(): void;
+  cancel(): void;
+}
+
+/**
+ * A snap or an un-snap moves the video surface inside the window without
+ * resizing it, so the ResizeObserver sees nothing and a single sync can read a
+ * frame from before the browser laid the new window size out. Every window
+ * change therefore syncs immediately and again after a short settle delay.
+ * Repeated events coalesce into one trailing call.
+ */
+export function createLayoutSync(
+  sync: () => void,
+  delayMs: number,
+  scheduler: LayoutSyncScheduler,
+): LayoutSync {
+  let trailing: number | null = null;
+
+  return {
+    schedule() {
+      sync();
+      if (trailing !== null) {
+        scheduler.clearTimeout(trailing);
+      }
+      trailing = scheduler.setTimeout(() => {
+        trailing = null;
+        sync();
+      }, delayMs);
+    },
+    cancel() {
+      if (trailing !== null) {
+        scheduler.clearTimeout(trailing);
+      }
+      trailing = null;
+    },
+  };
+}

@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -14,7 +15,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import type { Channel } from "../../domain/iptv";
 import { getErrorMessage } from "../errors/messages";
 import { redactCredentials } from "../playlist/redaction";
-import { calculateVideoMarginRatio } from "./layout";
+import { calculateVideoMarginRatio, createLayoutSync, LAYOUT_TRAILING_SYNC_MS } from "./layout";
 import { clampSeekPosition, parseSubtitleTracks, type SubtitleTrack } from "./media";
 import { LatestPlaybackOperationCoordinator } from "./operations";
 import {
@@ -609,7 +610,9 @@ export function useMpvPlayer(
 
     const surface = surfaceRef.current;
     let frameHandle = 0;
-    const timeoutHandles: number[] = [];
+    let disposed = false;
+    const earlyHandles: number[] = [];
+    const unlistenFns: UnlistenFn[] = [];
 
     const syncMargin = () => {
       cancelAnimationFrame(frameHandle);
@@ -624,25 +627,54 @@ export function useMpvPlayer(
       });
     };
 
-    syncMargin();
-    timeoutHandles.push(window.setTimeout(syncMargin, 80));
-    timeoutHandles.push(window.setTimeout(syncMargin, 220));
+    const layoutSync = createLayoutSync(syncMargin, LAYOUT_TRAILING_SYNC_MS, {
+      setTimeout: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
+      clearTimeout: (handle) => window.clearTimeout(handle),
+    });
 
-    const resizeObserver = new ResizeObserver(syncMargin);
+    layoutSync.schedule();
+    earlyHandles.push(window.setTimeout(() => layoutSync.schedule(), 80));
+    earlyHandles.push(window.setTimeout(() => layoutSync.schedule(), 220));
+
+    if (isTauri()) {
+      const appWindow = getCurrentWindow();
+      const attach = (registration: Promise<UnlistenFn>) => {
+        void registration
+          .then((unlisten) => {
+            if (disposed) {
+              unlisten();
+            } else {
+              unlistenFns.push(unlisten);
+            }
+          })
+          .catch(() => {
+            // Window events are an extra trigger; the DOM events still sync.
+          });
+      };
+      attach(appWindow.onResized(() => layoutSync.schedule()));
+      attach(appWindow.onMoved(() => layoutSync.schedule()));
+      attach(appWindow.onScaleChanged(() => layoutSync.schedule()));
+    }
+
+    const resizeObserver = new ResizeObserver(() => layoutSync.schedule());
     resizeObserver.observe(surface);
-    window.addEventListener("resize", syncMargin);
-    document.addEventListener("scroll", syncMargin, true);
-    document.addEventListener("fullscreenchange", syncMargin);
+    const onViewportChange = () => layoutSync.schedule();
+    window.addEventListener("resize", onViewportChange);
+    document.addEventListener("scroll", onViewportChange, true);
+    document.addEventListener("fullscreenchange", onViewportChange);
 
     return () => {
+      disposed = true;
+      layoutSync.cancel();
       cancelAnimationFrame(frameHandle);
-      timeoutHandles.forEach((timeoutHandle) => {
+      earlyHandles.forEach((timeoutHandle) => {
         window.clearTimeout(timeoutHandle);
       });
+      unlistenFns.forEach((unlisten) => unlisten());
       resizeObserver.disconnect();
-      window.removeEventListener("resize", syncMargin);
-      document.removeEventListener("scroll", syncMargin, true);
-      document.removeEventListener("fullscreenchange", syncMargin);
+      window.removeEventListener("resize", onViewportChange);
+      document.removeEventListener("scroll", onViewportChange, true);
+      document.removeEventListener("fullscreenchange", onViewportChange);
     };
   }, [isNativeHost, layoutMode, state.ready, surfaceRef]);
 

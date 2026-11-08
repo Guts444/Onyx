@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateVideoMarginRatio } from "./layout.ts";
+import { calculateVideoMarginRatio, createLayoutSync } from "./layout.ts";
 
 test("a mounted preview surface maps to bounded window-relative video margins", () => {
   assert.deepEqual(
@@ -35,4 +35,65 @@ test("invalid viewport dimensions cannot produce a whole-window video surface", 
     ),
     null,
   );
+});
+
+function fakeScheduler() {
+  const timers: Array<{ handle: number; callback: () => void }> = [];
+  let nextHandle = 1;
+  return {
+    timers,
+    scheduler: {
+      setTimeout(callback: () => void) {
+        const handle = nextHandle++;
+        timers.push({ handle, callback });
+        return handle;
+      },
+      clearTimeout(handle: number) {
+        const index = timers.findIndex((timer) => timer.handle === handle);
+        if (index >= 0) timers.splice(index, 1);
+      },
+    },
+  };
+}
+
+test("a window change syncs again after it settles", () => {
+  let syncs = 0;
+  const { timers, scheduler } = fakeScheduler();
+  const layoutSync = createLayoutSync(() => { syncs += 1; }, 200, scheduler);
+
+  layoutSync.schedule();
+
+  assert.equal(syncs, 1);
+  assert.equal(timers.length, 1);
+
+  timers.shift()?.callback();
+  assert.equal(syncs, 2);
+});
+
+test("a burst of window events leaves one trailing sync", () => {
+  let syncs = 0;
+  const { timers, scheduler } = fakeScheduler();
+  const layoutSync = createLayoutSync(() => { syncs += 1; }, 200, scheduler);
+
+  layoutSync.schedule();
+  layoutSync.schedule();
+  layoutSync.schedule();
+
+  assert.equal(syncs, 3);
+  assert.equal(timers.length, 1);
+
+  timers.shift()?.callback();
+  assert.equal(syncs, 4);
+});
+
+test("cancelling drops the trailing sync", () => {
+  let syncs = 0;
+  const { timers, scheduler } = fakeScheduler();
+  const layoutSync = createLayoutSync(() => { syncs += 1; }, 200, scheduler);
+
+  layoutSync.schedule();
+  layoutSync.cancel();
+
+  assert.equal(timers.length, 0);
+  assert.equal(syncs, 1);
 });
