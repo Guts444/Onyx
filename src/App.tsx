@@ -406,11 +406,21 @@ function App() {
     PLAYER_VOLUME_STORAGE_KEY,
     DEFAULT_PLAYER_VOLUME,
   );
-  const [autoResumeMode, setAutoResumeMode, autoResumeModeHydrated] = usePersistentState<AutoResumeMode>(
-    AUTO_RESUME_MODE_STORAGE_KEY,
-    "fullscreen",
-    (value) => value === "mini-player" ? "mini-player" : "fullscreen",
-  );
+  const [autoResumeMode, setAutoResumeMode, autoResumeModeHydrated, autoResumeModeMetadata] =
+    usePersistentState<AutoResumeMode>(
+      AUTO_RESUME_MODE_STORAGE_KEY,
+      // Existing installs with no stored choice keep today's fullscreen start;
+      // a genuinely new profile is switched to "windowed" once hydration can
+      // tell the two apart.
+      "fullscreen",
+      (value) =>
+        value === "windowed"
+          ? "windowed"
+          : value === "mini-player"
+          ? "mini-player"
+          : "fullscreen",
+    );
+  const [autoResumeModeResolved, setAutoResumeModeResolved] = useState(false);
   const [hiddenVodCategoriesBySource, setHiddenVodCategoriesBySource] =
     usePersistentState<VodCategoryVisibilityStore>(
       VOD_CATEGORY_VISIBILITY_STORAGE_KEY,
@@ -564,6 +574,37 @@ function App() {
     autoResumeModeHydrated &&
     playlistSnapshotHydrated &&
     playlistSelectionHydrated;
+
+  /**
+   * A new profile gets the new Windowed default. An existing profile with no
+   * stored choice (the hook never writes its default) must keep the fullscreen
+   * start it has today, so the presence of any saved source or playback intent
+   * is what tells the two apart. Writing the resolved value means a new user
+   * who adds a source before the next launch keeps Windowed.
+   */
+  const hasStoredProfile =
+    Object.keys(savedSources).length > 0 ||
+    playbackSession.sourceId !== null ||
+    playbackSession.channelId !== null ||
+    playbackSession.resumeChannelId !== null;
+
+  useEffect(() => {
+    if (autoResumeModeResolved) return;
+    if (!autoResumeModeHydrated || !savedSourcesHydrated || !playbackSessionHydrated) return;
+    if (!autoResumeModeMetadata.exists && !hasStoredProfile) {
+      setAutoResumeMode("windowed");
+    }
+    setAutoResumeModeResolved(true);
+  }, [
+    autoResumeModeHydrated,
+    autoResumeModeMetadata.exists,
+    autoResumeModeResolved,
+    hasStoredProfile,
+    playbackSessionHydrated,
+    savedSourcesHydrated,
+    setAutoResumeMode,
+  ]);
+
   savedSourcesRef.current = savedSources;
   activeSourceIdRef.current = activeSourceId;
   epgSourcesRef.current = normalizeEpgSources(epgSources);
@@ -3063,6 +3104,7 @@ function App() {
 
   useEffect(() => {
     if (startupPlaybackRestoreCompletedRef.current) return;
+    if (!autoResumeModeResolved) return;
 
     const startupPlaybackSession = startupPlaybackSessionRef.current;
     const waitingForRequiredRefresh =
@@ -3135,30 +3177,38 @@ function App() {
       const isCurrentRestore = () =>
         startupPlaybackRestoreGenerationRef.current === restoreGeneration;
       const shouldUseFullscreen = autoResumeMode === "fullscreen";
+      const shouldUseWindowed = autoResumeMode === "windowed";
       const fullscreenRevision = ++fullscreenStateRevisionRef.current;
       try {
-        const appWindow = getCurrentWindow();
-        const currentFullscreen = await appWindow.isFullscreen();
-        if (!isCurrentRestore()) return;
-        if (shouldUseFullscreen) {
-          // The first windowed session must be able to put the window back:
-          // capture what it looked like before startup took it fullscreen.
-          try {
-            liveWindowSnapshotRef.current = await captureWindowSnapshot();
-          } catch {
-            liveWindowSnapshotRef.current = null;
+        if (shouldUseWindowed) {
+          // Windowed startup never touches fullscreen; the transition captures
+          // the pre-player window so the first trip to the guide restores it.
+          await runLiveTransition("windowed");
+          if (!isCurrentRestore()) return;
+        } else {
+          const appWindow = getCurrentWindow();
+          const currentFullscreen = await appWindow.isFullscreen();
+          if (!isCurrentRestore()) return;
+          if (shouldUseFullscreen) {
+            // The first windowed session must be able to put the window back:
+            // capture what it looked like before startup took it fullscreen.
+            try {
+              liveWindowSnapshotRef.current = await captureWindowSnapshot();
+            } catch {
+              liveWindowSnapshotRef.current = null;
+            }
+            liveWasWindowedRef.current = false;
+            if (!isCurrentRestore()) return;
           }
-          liveWasWindowedRef.current = false;
-          if (!isCurrentRestore()) return;
-        }
-        if (currentFullscreen !== shouldUseFullscreen) {
-          await appWindow.setFullscreen(shouldUseFullscreen);
-          if (!isCurrentRestore()) return;
-        }
-        if (fullscreenStateRevisionRef.current === fullscreenRevision) {
-          liveDisplayRef.current = shouldUseFullscreen ? "fullscreen" : "guide";
-          setLiveDisplay(shouldUseFullscreen ? "fullscreen" : "guide");
-          setIsFullscreen(shouldUseFullscreen);
+          if (currentFullscreen !== shouldUseFullscreen) {
+            await appWindow.setFullscreen(shouldUseFullscreen);
+            if (!isCurrentRestore()) return;
+          }
+          if (fullscreenStateRevisionRef.current === fullscreenRevision) {
+            liveDisplayRef.current = shouldUseFullscreen ? "fullscreen" : "guide";
+            setLiveDisplay(shouldUseFullscreen ? "fullscreen" : "guide");
+            setIsFullscreen(shouldUseFullscreen);
+          }
         }
         schedulePlayerLayoutSync();
       } catch {
@@ -3187,6 +3237,7 @@ function App() {
   }, [
     activeSourceId,
     autoResumeMode,
+    autoResumeModeResolved,
     cachedStartupPlaylistNeedsRefresh,
     cachedStartupResumeChannelPlaybackReady,
     channelsById,

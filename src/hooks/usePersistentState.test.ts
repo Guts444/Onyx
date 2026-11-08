@@ -241,6 +241,7 @@ const legacyValue: LoadedPersistentValue = {
   shouldMigrate: true,
   metadata: {
     source: "legacy-local-storage",
+    exists: true,
     schemaVersion: null,
     recovered: false,
     corrupt: false,
@@ -303,6 +304,7 @@ test("recovery metadata is preserved for optional hook consumers", () => {
   );
   assert.deepStrictEqual(loaded.metadata, {
     source: "backend",
+    exists: true,
     schemaVersion: 1,
     recovered: true,
     corrupt: true,

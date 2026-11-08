@@ -21,6 +21,8 @@ export function createHydrationRevisionGuard() {
 
 export interface PersistentStateMetadata {
   source: "backend" | "legacy-local-storage" | "memory";
+  /** Whether the key existed when state was hydrated. */
+  exists: boolean;
   schemaVersion: number | null;
   recovered: boolean;
   corrupt: boolean;
@@ -47,6 +49,7 @@ export interface AppStatePayload {
 
 const cleanBackendMetadata: PersistentStateMetadata = {
   source: "backend",
+  exists: false,
   schemaVersion: null,
   recovered: false,
   corrupt: false,
@@ -79,7 +82,7 @@ function loadLegacyLocalStorageValue(key: string): LoadedPersistentValue {
     return {
       value: JSON.parse(storedValue),
       shouldMigrate: true,
-      metadata,
+      metadata: { ...metadata, exists: true },
     };
   } catch {
     return { value: null, shouldMigrate: false, metadata };
@@ -101,6 +104,7 @@ export function resolvePersistentPayload(
 ): LoadedPersistentValue {
   const metadata: PersistentStateMetadata = {
     source: "backend",
+    exists: payload.exists,
     schemaVersion: typeof payload.schemaVersion === "number" ? payload.schemaVersion : null,
     recovered: payload.recovered === true,
     corrupt: payload.corrupt === true,
@@ -132,10 +136,11 @@ export function resolvePersistentPayload(
 
 async function loadPersistentValue(key: string): Promise<LoadedPersistentValue> {
   if (!isTauri()) {
+    const exists = memoryStateStore.has(key);
     return {
-      value: memoryStateStore.has(key) ? memoryStateStore.get(key) ?? null : null,
+      value: exists ? memoryStateStore.get(key) ?? null : null,
       shouldMigrate: false,
-      metadata: { ...cleanBackendMetadata, source: "memory" },
+      metadata: { ...cleanBackendMetadata, source: "memory", exists },
     };
   }
 
@@ -149,7 +154,7 @@ async function loadPersistentValue(key: string): Promise<LoadedPersistentValue> 
     return {
       value: storedValue,
       shouldMigrate: false,
-      metadata: cleanBackendMetadata,
+      metadata: { ...cleanBackendMetadata, exists: true },
     };
   }
 

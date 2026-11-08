@@ -1,4 +1,4 @@
-export type AutoResumeMode = "fullscreen" | "mini-player";
+export type AutoResumeMode = "windowed" | "fullscreen" | "mini-player";
 
 interface GeneralSettingsPanelProps {
   autoResumeMode: AutoResumeMode;
@@ -21,6 +21,17 @@ export function GeneralSettingsPanel({
         </div>
 
         <fieldset className="resume-mode-options" aria-labelledby="automatic-resume-heading">
+          <label className={`resume-mode-card ${autoResumeMode === "windowed" ? "resume-mode-card--active" : ""}`}>
+            <input
+              type="radio"
+              name="auto-resume-mode"
+              value="windowed"
+              checked={autoResumeMode === "windowed"}
+              onChange={() => onAutoResumeModeChange("windowed")}
+            />
+            <strong>Windowed</strong>
+            <span>Resume in the resizable player window. This is the default.</span>
+          </label>
           <label className={`resume-mode-card ${autoResumeMode === "fullscreen" ? "resume-mode-card--active" : ""}`}>
             <input
               type="radio"
@@ -30,7 +41,7 @@ export function GeneralSettingsPanel({
               onChange={() => onAutoResumeModeChange("fullscreen")}
             />
             <strong>Fullscreen</strong>
-            <span>Resume directly into fullscreen playback. This is the default.</span>
+            <span>Resume directly into fullscreen playback.</span>
           </label>
           <label className={`resume-mode-card ${autoResumeMode === "mini-player" ? "resume-mode-card--active" : ""}`}>
             <input
