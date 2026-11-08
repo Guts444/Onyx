@@ -20,12 +20,16 @@ export const VOD_WINDOWED_MIN: WindowSize = { width: 480, height: 270 };
 export const LIBRARY_WINDOW_MIN: WindowSize = { width: 1100, height: 700 };
 
 /**
- * Esc leaves fullscreen and is a no-op in windowed mode: Esc has always meant
- * "leave the player", and the only way out of a windowed player is Quit.
- * Double-click is the mode switch, in both directions.
+ * Double-click is the mode switch in both directions. Esc leaves fullscreen
+ * and, once windowed, is Quit: it returns to the library through the same
+ * path as the button (saving the position and restoring the window), so it
+ * can never leave an orphaned player behind.
  */
-export function nextVodDisplay(current: VodDisplay, action: VodDisplayAction): VodDisplay {
-  if (action === "escape") return "windowed";
+export function nextVodDisplay(
+  current: VodDisplay,
+  action: VodDisplayAction,
+): VodDisplay | null {
+  if (action === "escape") return current === "fullscreen" ? "windowed" : null;
   return current === "fullscreen" ? "windowed" : "fullscreen";
 }
 

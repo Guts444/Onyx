@@ -157,12 +157,12 @@ export function UserGuideDrawer({ isOpen, onClose, onOpenSources, onOpenEpg }: U
             <h3>Useful controls</h3>
             <ul>
               <li>Double-click the video surface to enter or leave fullscreen.</li>
-              <li>Press <kbd>Esc</kbd> to leave fullscreen or close an open channel menu.</li>
+              <li>Press <kbd>Esc</kbd> in fullscreen to drop into a resizable window; press <kbd>Esc</kbd> again to return to the guide, or use <strong>Guide</strong> in the controls.</li>
               <li>Right-click a channel to manage Favorites or assign an EPG listing.</li>
               <li>Choose fullscreen or mini-player automatic resume under <strong>Settings &gt; General</strong>.</li>
               <li>Movies and episodes open directly in fullscreen; move the pointer to reveal controls and single-click the video to pause or resume.</li>
               <li>Use 30-second skips, seek, detected resolution, subtitles, mute, volume, and one <strong>Quit</strong> action.</li>
-              <li>Double-click the video to switch between fullscreen and a resizable window; press <kbd>Esc</kbd> in fullscreen to drop to the window (it does nothing once windowed) and choose <strong>Quit</strong> to stop and go back to the title.</li>
+              <li>Double-click the video to switch between fullscreen and a resizable window; press <kbd>Esc</kbd> in fullscreen to drop to the window, and <kbd>Esc</kbd> once windowed (or <strong>Quit</strong>) stops and returns to the title.</li>
               <li>Manage visible Live TV, Movies, and TV Shows groups independently under <strong>Settings &gt; Library</strong>.</li>
               <li>Restarting Onyx still resumes the last playing Live TV channel, never VOD automatically.</li>
               <li>A stream that stalls or drops is retried a few times automatically; if it still fails, use <strong>Reload</strong> in the player.</li>

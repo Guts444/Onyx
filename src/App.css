@@ -1904,6 +1904,93 @@ img {
   display: none;
 }
 
+/* At 480 x 270 the bottom chrome owns the lower third; an error card anchored
+   to the bottom would sit behind it. Put it at the top instead. */
+.vod-player--compact .player-status-card {
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  bottom: auto;
+  max-width: none;
+  max-height: calc(100% - 110px);
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 14px;
+}
+
+/* Narrow Live player: the same 480 x 270 floor as windowed VOD, so the chrome
+   becomes one wrap-capable row plus a slim volume slider. Guide, Reload,
+   Stop and Fullscreen stay reachable. */
+.player-shell--compact .player-chrome__top {
+  display: none;
+}
+
+.player-shell--compact .player-chrome__bottom {
+  gap: 6px;
+  padding: 8px 10px 10px;
+}
+
+.player-shell--compact .player-chrome__summary {
+  display: none;
+}
+
+.player-shell--compact .player-chrome__controls {
+  width: 100%;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.player-shell--compact .control-row {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.player-shell--compact .control-row .control-button {
+  min-height: 32px;
+  padding: 0 9px;
+  font-size: 0.8rem;
+}
+
+.player-shell--compact .control-metric {
+  display: none;
+}
+
+.player-shell--compact .volume-control {
+  width: 100%;
+  gap: 8px;
+}
+
+.player-shell--compact .volume-control > span {
+  display: none;
+}
+
+.player-shell--compact .volume-control input {
+  width: 100%;
+  height: 18px;
+}
+
+.player-shell--compact .player-status-card {
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  bottom: auto;
+  max-width: none;
+  max-height: calc(100% - 110px);
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 14px;
+}
+
+.player-shell--compact .player-status-card__copy h2 {
+  margin-top: 6px;
+  font-size: 1rem;
+}
+
+.player-shell--compact .player-status-card__copy p {
+  margin-top: 4px;
+  font-size: 0.85rem;
+}
+
 .player-shell--fullscreen .vod-player__chrome {
   padding: clamp(20px, 3vw, 48px);
 }

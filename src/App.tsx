@@ -902,7 +902,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if ((!isFullscreen && !activeVodPlayback) || !isTauri()) {
+    if (!isTauri()) {
+      return undefined;
+    }
+    if (!activeVodPlayback && liveDisplay === "guide" && !isFullscreen) {
       return undefined;
     }
 
@@ -914,11 +917,22 @@ function App() {
       event.preventDefault();
       event.stopPropagation();
       if (activeVodPlayback) {
-        // Fullscreen: Esc drops to the window. Windowed: Esc is a no-op, so a
-        // pressed Esc can never end a movie the user chose to keep watching.
-        void setVodDisplayMode("escape");
-      } else {
-        void handleToggleFullscreen();
+        // Fullscreen: Esc drops to the window. Windowed: Esc is Quit, the same
+        // path as the button, so the position is saved and the window comes
+        // back before the library does.
+        if (vodDisplay === "fullscreen") {
+          void setVodDisplayMode("escape");
+        } else {
+          void handleStopVod();
+        }
+        return;
+      }
+      if (isFullscreen) {
+        void runLiveTransition("windowed");
+        return;
+      }
+      if (liveDisplay === "windowed") {
+        void runLiveTransition("guide");
       }
     };
 
@@ -927,7 +941,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activeVodPlayback, isFullscreen, vodDisplay]);
+  }, [activeVodPlayback, isFullscreen, liveDisplay, vodDisplay]);
 
   useEffect(() => {
     if (!activeVodPlayback || !isTauri()) {
@@ -970,6 +984,59 @@ function App() {
       window.removeEventListener("resize", sync);
     };
   }, [activeVodPlayback, vodDisplay]);
+
+  useEffect(() => {
+    if (!isTauri() || activeVodPlayback) {
+      return undefined;
+    }
+    if (!isFullscreen && liveDisplay === "guide") {
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timer: number | null = null;
+    const sync = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        timer = null;
+        if (liveViewTransitionRef.current) return;
+        try {
+          const native = await getCurrentWindow().isFullscreen();
+          if (cancelled || liveViewTransitionRef.current) return;
+          const current: LiveDisplay = isFullscreen ? "fullscreen" : liveDisplay;
+          const next: LiveDisplay = native ? "fullscreen" : "windowed";
+          if (next === current) return;
+          const revision = ++fullscreenStateRevisionRef.current;
+          if (cancelled || fullscreenStateRevisionRef.current !== revision) return;
+          if (!native) {
+            // A fullscreen exit the app did not start drops to the windowed
+            // player: the channel keeps playing, and Esc or Guide still
+            // reaches the guide. Going straight to the guide would hide the
+            // video without the user asking.
+            liveWasWindowedRef.current = true;
+            const snapshot = liveWindowSnapshotRef.current;
+            if (snapshot) {
+              void applyVodWindowedWindow(snapshot).catch(() => undefined);
+            } else {
+              void setVodWindowedMinimum().catch(() => undefined);
+            }
+          }
+          commitLiveDisplay(next);
+        } catch {
+          // Keep the last known state if the native window cannot be read.
+        }
+      }, 250);
+    };
+
+    window.addEventListener("focus", sync);
+    window.addEventListener("resize", sync);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, [activeVodPlayback, isFullscreen, liveDisplay]);
 
 
   useEffect(() => {
@@ -1483,19 +1550,18 @@ function App() {
     const plan = planLiveViewTransition(from, to);
     if (!plan || liveViewTransitionRef.current) return false;
 
-    if (from === "guide") {
-      try {
-        liveWindowSnapshotRef.current = await captureWindowSnapshot();
-      } catch {
-        liveWindowSnapshotRef.current = null;
-      }
-      liveWasWindowedRef.current = false;
-    }
-
     const fullscreenRevision = ++fullscreenStateRevisionRef.current;
     const isCurrent = () => fullscreenStateRevisionRef.current === fullscreenRevision;
     liveViewTransitionRef.current = true;
     try {
+      if (from === "guide") {
+        try {
+          liveWindowSnapshotRef.current = await captureWindowSnapshot();
+        } catch {
+          liveWindowSnapshotRef.current = null;
+        }
+        liveWasWindowedRef.current = false;
+      }
       const completed = await runLiveViewTransition(plan, {
         isFullscreen: async () =>
           isTauri()
@@ -1544,6 +1610,8 @@ function App() {
           showSelectedChannelGroup();
           liveWasWindowedRef.current = false;
           liveWindowSnapshotRef.current = null;
+        } else if (plan.final === "windowed") {
+          liveWasWindowedRef.current = true;
         }
       }
       return completed;
@@ -1597,6 +1665,18 @@ function App() {
     await stopPlayback();
   }
 
+  /**
+   * Stop from a Live player view has nothing left to show, so it returns to
+   * the guide. From fullscreen this is also the only way out that does not
+   * leave an empty windowed player behind.
+   */
+  async function handleStopLivePlayback() {
+    await handleStopPlayback();
+    if (isFullscreen || liveDisplayRef.current !== "guide") {
+      await runLiveTransition("guide");
+    }
+  }
+
   async function handleSelectSection(section: "live" | "movies" | "series") {
     if (section === activeSection) return;
     cancelStartupPlaybackRestore();
@@ -1643,6 +1723,12 @@ function App() {
 
   async function setVodDisplayMode(action: "escape" | "double-click") {
     const next = nextVodDisplay(vodDisplay, action);
+    if (next === null) {
+      // Esc in a windowed player is Quit: the same path saves the position,
+      // restores the window and shows the Resume row.
+      await handleStopVod();
+      return;
+    }
     if (next === vodDisplay) return;
     await applyVodDisplay(next);
   }
@@ -1650,6 +1736,10 @@ function App() {
   async function handlePlayVod(item: VodPlaybackItem, startAt: number | null = null) {
     cancelStartupPlaybackRestore();
     setVodDisplay("fullscreen");
+    // VOD owns the window for the duration; never let a stale Live view
+    // reappear when the title closes.
+    liveDisplayRef.current = "guide";
+    setLiveDisplay("guide");
     vodWasWindowedRef.current = false;
     try {
       vodWindowSnapshotRef.current = await captureWindowSnapshot();
@@ -1751,7 +1841,7 @@ function App() {
     try {
       // The view commits before the window call; the transition rolls back to
       // the native window when the host refuses the change.
-      await runLiveTransition(isFullscreen ? "guide" : "fullscreen");
+      await runLiveTransition(isFullscreen ? "windowed" : "fullscreen");
     } catch (error) {
       setMessage(getErrorMessage(error, "Fullscreen mode could not be changed."));
     }
@@ -2998,11 +3088,24 @@ function App() {
         const appWindow = getCurrentWindow();
         const currentFullscreen = await appWindow.isFullscreen();
         if (!isCurrentRestore()) return;
+        if (shouldUseFullscreen) {
+          // The first windowed session must be able to put the window back:
+          // capture what it looked like before startup took it fullscreen.
+          try {
+            liveWindowSnapshotRef.current = await captureWindowSnapshot();
+          } catch {
+            liveWindowSnapshotRef.current = null;
+          }
+          liveWasWindowedRef.current = false;
+          if (!isCurrentRestore()) return;
+        }
         if (currentFullscreen !== shouldUseFullscreen) {
           await appWindow.setFullscreen(shouldUseFullscreen);
           if (!isCurrentRestore()) return;
         }
         if (fullscreenStateRevisionRef.current === fullscreenRevision) {
+          liveDisplayRef.current = shouldUseFullscreen ? "fullscreen" : "guide";
+          setLiveDisplay(shouldUseFullscreen ? "fullscreen" : "guide");
           setIsFullscreen(shouldUseFullscreen);
         }
         schedulePlayerLayoutSync();
@@ -3056,10 +3159,11 @@ function App() {
       selectedChannel={selectedChannel}
       guide={selectedGuide}
       isFullscreen={isFullscreen}
+      layout={windowedLive ? "windowed" : "default"}
       playerShellRef={playerShellRef}
       playerSurfaceRef={playerSurfaceRef}
       onStop={() => {
-        void handleStopPlayback();
+        void handleStopLivePlayback();
       }}
       onReload={() => {
         void handleReloadPlayback();
@@ -3076,6 +3180,7 @@ function App() {
       onToggleFullscreen={() => {
         void handleToggleFullscreen();
       }}
+      onShowGuide={windowedLive ? () => { void runLiveTransition("guide"); } : undefined}
     />
   );
 
@@ -3131,12 +3236,12 @@ function App() {
           onClose={() => setDiagnosticsOpen(false)}
         />
       ) : null}
-      {(!isFullscreen || activeVodPlayback) ? (
+      {((!isFullscreen && !windowedLive) || activeVodPlayback) ? (
         <div
           className={`workspace workspace--persistent-sidebar ${
             isFullscreen ? "workspace--fullscreen-background" : ""
-          } ${windowedPlayer ? "workspace--player-hidden" : ""}`}
-          aria-hidden={isFullscreen || windowedPlayer}
+          } ${windowedVod ? "workspace--player-hidden" : ""}`}
+          aria-hidden={isFullscreen || windowedVod}
         >
           <div className="workspace__sidebar workspace__sidebar--visible workspace__sidebar--persistent">
             <ChannelSidebar

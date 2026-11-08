@@ -17,9 +17,9 @@ test("double-click toggles the display in both directions", () => {
   assert.equal(nextVodDisplay("windowed", "double-click"), "fullscreen");
 });
 
-test("Esc leaves fullscreen and does nothing in windowed mode", () => {
+test("Esc leaves fullscreen and quits a windowed player", () => {
   assert.equal(nextVodDisplay("fullscreen", "escape"), "windowed");
-  assert.equal(nextVodDisplay("windowed", "escape"), "windowed");
+  assert.equal(nextVodDisplay("windowed", "escape"), null);
 });
 
 test("windowed mode allows the small window the library does not", () => {

@@ -92,6 +92,7 @@ Important rules:
 - Startup autoplay resumes the last active channel according to the independent General preference: fullscreen by default or mini-player when selected.
 - The player must synchronize native video margins before every `loadfile`, reject unmounted/zero-size surfaces, and resynchronize on nested scrolling as well as resize/fullscreen changes.
 - VOD play, pause, seek, stop, and fullscreen actions must never replace or clear the saved Live TV startup target.
+- Live has one explicit display state (`guide`, `fullscreen`, `windowed`). [src/features/player/views.ts](src/features/player/views.ts) plans every transition: the view commits before the native window call, the window minimum and the pre-player window snapshot are applied after it, and a refused call rolls back to the view that matches the window that actually exists. A view change never issues a new `loadfile`.
 
 ### Video On Demand
 
@@ -107,7 +108,7 @@ VOD is Xtream-only. Categories are fetched when a VOD section or its Library set
 
 Outside fullscreen, the primary navigation rail, searchable group pane, preview player, and TV guide remain visible together. Group selection never hides the navigation. Search is a field above the groups rather than a separate primary-navigation destination, and it filters enabled channels directly in the guide while preserving deferred/incremental rendering for large libraries.
 
-`Esc` is reserved for leaving fullscreen or closing an open channel menu/dialog; it does not walk through sidebar modes.
+`Esc` leaves the fullscreen player, closes an open channel menu or dialog, and never walks through sidebar modes. Live TV has three views: the guide, the fullscreen player, and a windowed player that fills a normal resizable window. In fullscreen, `Esc` or a double-click drops to the windowed player; `Esc` again, or the **Guide** control, returns to the guide and restores the library window (size, maximized state, and minimum). A view change reuses the same mpv playback and never reopens the stream, and the windowed view is not saved between launches.
 
 ### Guide Behavior
 
@@ -118,10 +119,10 @@ Outside fullscreen, the primary navigation rail, searchable group pane, preview 
 ### VOD Behavior
 
 - Movies and TV Shows are destinations under Live TV in the persistent primary rail. Their search and visible vertical category list occupy the same persistent secondary-sidebar pattern used by Live TV.
-- Selecting a movie or episode transitions directly to the shared fullscreen native player. VOD has no embedded/mini-player details-page mode; double-clicking, pressing `Esc`, or choosing **Quit** returns to the preserved details view.
+- Selecting a movie or episode transitions directly to the shared fullscreen native player. VOD has no embedded/mini-player details-page mode; **Quit**, or `Esc` from the windowed player, returns to the preserved details view.
 - VOD chrome hides after pointer inactivity and reappears on movement. A delayed single-click toggles pause/resume; double-click cancels that pending toggle before quitting, and control events do not bubble into surface gestures.
 - A finished title shows **Playback complete** instead of freezing on the last frame. A stalled or dropped title retries and re-opens at the last known position.
-- Double-click switches a playing title between fullscreen and a normal resizable window; `Esc` leaves fullscreen and is a no-op once windowed, so it can never end a title the user chose to keep watching. The panel fills the window and the library stays mounted but hidden, which is what restores the same details view (and its scroll position) on Quit.
+- Double-click switches a playing title between fullscreen and a normal resizable window; `Esc` leaves fullscreen and, once windowed, is Quit through the same path as the button (position saved, window restored, Resume row shown), so it can never leave an orphaned player behind. The panel fills the window and the library stays mounted but hidden, which is what restores the same details view (and its scroll position) on Quit.
 - The window is not a saved setting. While windowed, the minimum drops to 480x270 and the controls switch to a compact single row; Quit puts the 1100x700 minimum back and then restores the pre-VOD window: by maximizing when the title started from a maximized window, by resizing only when the current window would be smaller than the library minimum, and never by moving it. A crash or a close while windowed relaunches at the normal size.
 - A saved position turns the action into **Resume from m:ss** with a separate **Start over**, for both movies and individual episodes. Positions are keyed by source, kind and the provider's own id (never the URL), saved between 10 s and 95% of a known duration, flushed every ten seconds while a title plays and once more on Quit, capped at 500 entries, and dropped when their source is removed.
 - Category catalogs and detail payloads load only after the user opens the corresponding section/title.

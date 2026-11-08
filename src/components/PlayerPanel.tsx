@@ -8,7 +8,7 @@ interface PlayerPanelProps {
   selectedChannel: Channel | null;
   guide: EpgResolvedGuide | null;
   isFullscreen: boolean;
-  layout?: "default" | "preview";
+  layout?: "default" | "preview" | "windowed";
   playerShellRef: RefObject<HTMLDivElement | null>;
   playerSurfaceRef: RefObject<HTMLDivElement | null>;
   onStop: () => void;
@@ -17,6 +17,8 @@ interface PlayerPanelProps {
   onToggleMute: () => void;
   onSetVolume: (volume: number) => void;
   onToggleFullscreen: () => void;
+  /** Only a windowed Live player shows it: back to the guide without stopping. */
+  onShowGuide?: () => void;
 }
 
 function getStatusTone(player: MpvPlayerState, selectedChannel: Channel | null) {
@@ -94,8 +96,11 @@ export function PlayerPanel({
   onToggleMute,
   onSetVolume,
   onToggleFullscreen,
+  onShowGuide,
 }: PlayerPanelProps) {
   const isPreviewLayout = layout === "preview";
+  const isWindowedLayout = layout === "windowed";
+  const [compact, setCompact] = useState(false);
   const statusTone = getStatusTone(player, selectedChannel);
   const { heading, body } = getPlayerCopy(player, selectedChannel);
   const hideChromeTimeoutRef = useRef<number | null>(null);
@@ -203,11 +208,31 @@ export function PlayerPanel({
     };
   }, [shouldRenderChrome, isFullscreen, shouldShowStatusCard]);
 
+  // The windowed player is resizable down to 480 x 270, where the full chrome
+  // cannot fit. The VOD panel uses the same breakpoint.
+  useEffect(() => {
+    if (!isWindowedLayout) {
+      setCompact(false);
+      return undefined;
+    }
+    const element = playerShellRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect) return;
+      setCompact(rect.width < 720 || rect.height < 420);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [isWindowedLayout, playerShellRef]);
+
   return (
     <section
       ref={playerShellRef}
       className={`panel player-shell ${isPreviewLayout ? "player-shell--preview" : ""} ${
         isFullscreen ? "player-shell--fullscreen" : ""
+      } ${isWindowedLayout ? "player-shell--windowed" : ""} ${
+        compact ? "player-shell--compact" : ""
       } ${
         shouldHideCursor ? "player-shell--cursor-hidden" : ""
       }`}
@@ -284,6 +309,11 @@ export function PlayerPanel({
                   >
                     {player.muted ? "Unmute" : "Mute"}
                   </button>
+                  {onShowGuide ? (
+                    <button type="button" className="control-button" onClick={onShowGuide}>
+                      Guide
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="control-button"

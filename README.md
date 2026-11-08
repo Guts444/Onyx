@@ -27,7 +27,7 @@ New to Onyx? Read the complete **[User Guide](docs/user-guide.md)**.
 3. Open **Live TV**, optionally search above the group list, select a group, then left-click a channel in the TV guide.
    For Xtream providers, open **Movies** or **TV Shows**, search above the vertical group list, then browse details, seasons, and episodes.
 4. Right-click a channel to manage Favorites or assign an EPG listing.
-5. Double-click the video surface for fullscreen. Press **Esc** to leave fullscreen or close an open channel menu.
+5. Double-click the video surface for fullscreen. In fullscreen, **Esc** or a double-click drops into a resizable window; once windowed, **Esc** returns to the guide and the window comes back to its previous size.
 
 The in-app **User Guide** button above Settings contains this quick start and direct links to Sources and EPG settings.
 
@@ -46,7 +46,8 @@ For guide data, add an XMLTV URL under **Settings > EPG**, apply it, and select 
 - Recovers from stalls and drops on its own: a stream that stops opening or stops progressing is retried a few times before Onyx reports the failure and offers **Reload**. A retried movie or episode resumes where it stopped.
 - Opens movies and episodes directly in fullscreen with idle-hiding controls, click-to-pause/resume, 30-second skips, seeking, detected resolution, subtitles, mute, volume, and one **Quit** action through native `libmpv`.
 - **Stats** in either player shows codec, resolution, frame rate, hardware decoding, cache, dropped frames, and recovery state, with a **Copy** button for bug reports that never includes a stream URL or credential.
-- Double-click drops a movie or episode out of fullscreen into a resizable window that works down to 480 x 270, and double-click again returns to fullscreen.
+- Double-click drops a movie or episode out of fullscreen into a resizable window that works down to 480 x 270, and double-click again returns to fullscreen. **Esc** leaves fullscreen and, once windowed, quits back to the title with its position saved.
+- Live TV has the same windowed mode: double-click or **Esc** in fullscreen drops the channel into a normal resizable window, double-click returns to fullscreen, and **Esc** or the **Guide** button goes back to the guide. Changing between guide, fullscreen, and windowed never reopens the stream, and returning to the guide restores the previous window size.
 - Remembers where each movie and episode stopped, offers **Resume from m:ss** or **Start over**, and keeps that progress across restarts.
 - Lets automatic resume start in fullscreen (the default) or in the mini-player under **Settings > General**.
 
