@@ -1,17 +1,23 @@
 # Changelog
 
-## v0.7.0 - Unreleased
+## v0.7.0 - 2026-11-08
 
 - **Stream recovery**: A stream that never opens, stops progressing, drops mid-playback, or ends cleanly on a live channel is now retried automatically with a visible status instead of freezing on the last frame. The waits grow to **3 s, 10 s, 30 s and 60 s** across five attempts, and a countdown ("Retrying in 42 s (4 of 5)") plus a **Retry now** button appears in the mini player and every player view; **Retry now** starts the current attempt at once without changing the ladder. Failures that arrive before any frame get a single retry, the ladder stops with a clear error and a working **Reload**, and changing channel, stopping, or switching source cancels a pending retry. Retried movies and episodes re-open at the position they reached.
 - **Always-readable status card**: The card that reports loading, retrying and failure now sits at the top-left of the video, above the control bar, its gradient and the title overlays, so its text and its **Retry now** and **Reload** buttons are never covered. It applies to the mini player, windowed and fullscreen Live, and windowed and fullscreen movies and episodes, and fits a 480 x 270 window.
 - **Playback truth**: Onyx now reports **Playing** only when a real frame exists, and a finished movie or episode shows **Playback complete** instead of a frozen picture.
-- **Reload for VOD**: The fullscreen movie and episode player now has a **Reload** control.
+- **Reload for VOD**: The movie and episode player now has a **Reload** control in both windowed and fullscreen views.
 - **Diagnostics overlay**: A **Stats** button in both players shows codec, resolution, frame rate, hardware decoding, cache state and speed, dropped frames, and the current recovery attempt, plus one **Copy** button that produces a text block for a bug report. It reads nothing while closed, and the text it shows and copies never contains a stream URL, host, or credential.
 - **Windowed playback**: Movies and episodes now open in the normal, resizable player window so they can sit beside other work, with **Fullscreen** and **Quit** controls; double-click switches views at any time. The player fills the window down to 480 x 270 with a compact control row, **Quit** and **Reload** stay reachable, and the controls no longer hide while paused or showing an error. Quit restores the previous window size (or the maximized state) and returns to the same title details. **Esc** in the windowed player is now Quit through the same path, so the position is saved and the window comes back.
 - **Windowed Live TV**: Double-clicking the guide's mini player opens the same kind of resizable window; its **Windowed** and **Fullscreen** buttons open either view directly. The fullscreen player offers **Windowed** and **Guide**, the windowed player offers **Fullscreen** and **Guide**, and the guide's mini player keeps **Stop**. The mini player's buttons fade in for five seconds when playback starts, on hover, and on keyboard focus, and never move the video. **Esc** or **Guide** returns to the guide while the channel keeps playing. Changing views reuses the same stream and never reconnects, and returning to the guide restores the previous window size and maximized state.
 - **Live picks up where it left off**: Coming back to Live after Movies, TV Shows, or another section resumes the channel that was playing when you left, unless you stopped it. The Live stream still closes before anything else opens, so a one-connection account never sees an overlap.
 - **Windowed startup**: Automatic resume now offers **Windowed**, **Fullscreen**, and **Mini-player**. New installs default to Windowed; existing installs keep the mode they already use, including an untouched fullscreen setting.
 - **Resume movies and episodes**: A movie or episode with saved progress opens with **Resume from m:ss** and a separate **Start over**, per episode for series. Progress is saved every ten seconds while a title plays and once more on Quit, survives a crash or restart, is scoped to its source, and is removed when that source is removed. When no saved progress exists the action stays a plain **Play**.
+- **Snapping and display scaling**: The video stays exactly inside its frame after snapping, un-snapping, moving or resizing the window, including with Windows display scaling. If you move or resize the window while a player is open, closing the player keeps your position and size, grows only as much as the library needs, and never leaves the window partly off screen.
+- **One status display**: Loading, buffering and retry status now appears only in the status card, without a duplicate label in the Live player.
+
+### Known issue
+
+- **Reload** in a movie or episode can reopen it paused. Press **Play** to continue. A fix is planned for the next release.
 
 ## v0.6.2 - 2026-11-06
 
