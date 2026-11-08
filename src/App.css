@@ -919,15 +919,8 @@ img {
   backdrop-filter: blur(8px);
 }
 
-.player-chrome__top,
 .player-chrome__bottom {
   pointer-events: auto;
-}
-
-.player-chrome__top {
-  position: absolute;
-  top: 20px;
-  left: 20px;
 }
 
 .player-chrome__bottom {
@@ -1982,10 +1975,6 @@ img {
 /* Narrow Live player: the same 480 x 270 floor as windowed VOD, so the chrome
    becomes one wrap-capable row plus a slim volume slider. Guide, Reload,
    Stop and Fullscreen stay reachable. */
-.player-shell--compact .player-chrome__top {
-  display: none;
-}
-
 .player-shell--compact .player-chrome__bottom {
   gap: 6px;
   padding: 8px 10px 10px;
@@ -2215,11 +2204,6 @@ img {
     right: 14px;
     bottom: 14px;
     max-width: none;
-  }
-
-  .player-chrome__top {
-    top: 14px;
-    left: 14px;
   }
 
   .player-chrome__bottom {

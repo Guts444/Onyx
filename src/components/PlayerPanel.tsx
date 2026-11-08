@@ -381,10 +381,6 @@ export function PlayerPanel({
 
         {shouldRenderChrome ? (
           <div className={`player-chrome ${showPlayerChrome ? "" : "player-chrome--hidden"}`}>
-            <div className="player-chrome__top">
-              <span className={`status-pill status-pill--${statusTone}`}>{player.status}</span>
-            </div>
-
             <div className="player-chrome__bottom">
               <div className="player-chrome__summary">
                 <strong>{currentTitle}</strong>
