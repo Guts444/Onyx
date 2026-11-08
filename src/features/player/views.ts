@@ -37,8 +37,8 @@ export interface LiveViewPlan {
 }
 
 /**
- * `null` when the target is the current view or when there is no direct route
- * (the guide only reaches windowed mode through fullscreen).
+ * `null` only when the target is already the current view; the guide can open
+ * either player view directly.
  */
 export function planLiveViewTransition(
   from: LiveDisplay,
