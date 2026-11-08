@@ -342,6 +342,13 @@ export function PlayerPanel({
               <h2>{heading}</h2>
               {player.recovery.phase === "waiting" && player.recovery.retryAt !== null ? (
                 <RecoveryNotice recovery={player.recovery} onRetryNow={onRetryNow} />
+              ) : player.recovery.phase === "failed" ? (
+                <div className="recovery-notice">
+                  <span>{body}</span>
+                  <button type="button" className="control-button recovery-notice__action" onClick={onReload}>
+                    Reload
+                  </button>
+                </div>
               ) : (
                 <p>{body}</p>
               )}

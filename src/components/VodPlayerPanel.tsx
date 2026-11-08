@@ -158,6 +158,13 @@ export function VodPlayerPanel({
               <h2>{media.title}</h2>
               {player.recovery.phase === "waiting" && player.recovery.retryAt !== null ? (
                 <RecoveryNotice recovery={player.recovery} onRetryNow={onRetryNow} />
+              ) : player.recovery.phase === "failed" ? (
+                <div className="recovery-notice">
+                  <span>{player.recovery.message ?? player.error ?? "The stream stopped and could not be reconnected."}</span>
+                  <button type="button" className="control-button recovery-notice__action" onClick={onReload}>
+                    Reload
+                  </button>
+                </div>
               ) : (
                 <p>{player.error ?? media.plot ?? "Preparing video playback."}</p>
               )}

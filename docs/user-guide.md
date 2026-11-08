@@ -68,7 +68,7 @@ Double-click the mini player to open the resizable window. In fullscreen, **Esc*
 
 ### When a stream drops
 
-Onyx retries a stream that stalls, drops, or ends early up to five times. The waits between attempts grow: **3 s, 10 s, 30 s and 60 s**, about a minute and three quarters in all. While it waits, the player shows a countdown such as "Retrying in 42 s (4 of 5)" and a **Retry now** button that starts that attempt at once without changing the retry count. Both appear in the guide's mini player and in every player view, including a 480 x 270 window. A stream that never shows a frame gets a single retry before Onyx reports the failure and offers **Reload**. A retried movie or episode resumes where it stopped.
+Onyx retries a stream that stalls, drops, or ends early up to five times. The waits between attempts grow: **3 s, 10 s, 30 s and 60 s**, about a minute and three quarters in all. While it waits, the player shows a status card at the top of the video with a countdown such as "Retrying in 42 s (4 of 5)" and a **Retry now** button that starts that attempt at once without changing the retry count. Both appear in the guide's mini player and in every player view, including a 480 x 270 window. The card stays above the controls, so the countdown and button are never covered. A stream that never shows a frame gets a single retry before Onyx reports the failure; the failure card also carries a **Reload** button, and the players keep their own **Reload**. A retried movie or episode resumes where it stopped.
 
 Open **Settings > General** to choose where automatic resume starts:
 

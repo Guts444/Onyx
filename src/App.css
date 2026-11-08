@@ -816,22 +816,27 @@ img {
 
 .player-status-card {
   position: absolute;
+  top: 18px;
   left: 18px;
-  bottom: 18px;
-  z-index: 2;
+  bottom: auto;
+  z-index: 6;
   max-width: min(480px, calc(100% - 36px));
+  max-height: calc(100% - 36px);
+  overflow: auto;
   padding: 16px 18px;
   border-radius: 20px;
-  background: rgba(7, 12, 18, 0.82);
+  background: rgba(6, 10, 16, 0.9);
   box-shadow: 0 16px 28px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(10px);
 }
 
 .player-status-card--preview {
+  top: 16px;
   left: 16px;
   right: 16px;
-  bottom: 16px;
+  bottom: auto;
   max-width: none;
+  max-height: calc(100% - 32px);
 }
 
 .player-status-card__copy h2 {
@@ -887,13 +892,14 @@ img {
   opacity: 0;
 }
 
-/* The guide's mini player keeps the two controls it needs: a direct fullscreen
-   button and Stop (the fullscreen players no longer carry Stop). */
+/* The guide's mini player keeps the three controls it needs: a direct
+   windowed and fullscreen entry, and Stop. It sits above the status card so
+   the card never blocks it; the card's top-right corner is empty text-wise. */
 .player-mini-chrome {
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 3;
+  z-index: 7;
   display: flex;
   gap: 6px;
   opacity: 1;
@@ -1900,6 +1906,22 @@ img {
 
 .app-shell--player-windowed .player-surface {
   min-height: 0;
+}
+
+.vod-player .player-status-card__copy p {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The VOD card is a status card, not a banner: same top-left inset and width
+   cap as the Live player's card. The compact 480 x 270 rule below widens it. */
+.vod-player .player-status-card {
+  top: 18px;
+  left: 18px;
+  right: auto;
+  max-width: min(480px, calc(100% - 36px));
 }
 
 /* Kept mounted (details view, scroll position) but out of the layout, so the
