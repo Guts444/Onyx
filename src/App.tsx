@@ -493,6 +493,7 @@ function App() {
   const startupPlaybackSessionRef = useRef<PlaybackSession | null>(null);
   const startupPlaybackRestoreGenerationRef = useRef(0);
   const fullscreenStateRevisionRef = useRef(0);
+  const sectionSwitchGenerationRef = useRef(0);
   const liveDisplayRef = useRef<LiveDisplay>("guide");
   /** True while a native window call is in flight; reconcile must not fight it. */
   const liveViewTransitionRef = useRef(false);
@@ -1684,12 +1685,43 @@ function App() {
   async function handleSelectSection(section: "live" | "movies" | "series") {
     if (section === activeSection) return;
     cancelStartupPlaybackRestore();
+    const generation = ++sectionSwitchGenerationRef.current;
+
+    // One connection: the Live stream (or the title being watched) is closed
+    // before the next section can open anything.
     if (!player.idleActive) await stopPlayback();
+
     setActiveVodPlayback(null);
     setActiveSection(section);
     if (section !== "live") {
       setVisitedVodSections((current) => ({ ...current, [section]: true }));
+      return;
     }
+
+    // Coming back to Live resumes the channel that was playing when the user
+    // left, using the same resume intent startup uses. A channel that is gone
+    // after a refresh just leaves Live stopped, with no error.
+    if (
+      !playbackSession.shouldResume ||
+      playbackSession.resumeSourceId !== activeSourceId ||
+      playbackSession.resumeChannelId === null
+    ) {
+      return;
+    }
+    const channelToResume = channelsById.get(playbackSession.resumeChannelId) ?? null;
+    if (!channelToResume || !channelToResume.isPlayable) return;
+
+    const isCurrentSwitch = () => sectionSwitchGenerationRef.current === generation;
+    setSelectedChannelId(channelToResume.id);
+    persistSelectedChannel(channelToResume.id);
+    setRecentIds((currentIds) => pushRecentId(currentIds, channelToResume.id));
+
+    // The guide's mini player has to exist before the player can lay out.
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+    });
+    if (!isCurrentSwitch()) return;
+    await playCanonicalChannel(channelToResume, isCurrentSwitch);
   }
 
   async function applyVodDisplay(next: VodDisplay) {
