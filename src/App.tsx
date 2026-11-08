@@ -161,6 +161,7 @@ import {
 import {
   nextVodDisplay,
   planPlayerRestore,
+  readWindowThenApplyMinimum,
   type VodDisplay,
   type WindowReading,
   type WindowSnapshot,
@@ -1597,7 +1598,11 @@ function App() {
   }
 
   async function restoreLibraryWindow(snapshot: WindowSnapshot | null, entry: WindowReading | null) {
-    const current = await captureWindowSnapshot();
+    const current = await readWindowThenApplyMinimum({
+      read: captureWindowSnapshot,
+      applyMinimum: leaveVodWindow,
+    });
+    if (!current) return;
     const workArea =
       current.workArea ??
       (current.monitor ? { x: 0, y: 0, ...current.monitor } : null);
@@ -1607,7 +1612,6 @@ function App() {
       current,
       workArea,
     });
-    await leaveVodWindow();
     if (plan.kind === "maximize") {
       await maximizeWindow();
     } else if (plan.kind === "size") {

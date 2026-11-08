@@ -150,6 +150,30 @@ export type PlayerRestorePlan =
   | { kind: "keep" }
   | { kind: "size"; size: WindowSize; position: WindowPoint | null };
 
+export interface WindowExitHost {
+  read(): Promise<WindowReading>;
+  applyMinimum(): Promise<void>;
+}
+
+/**
+ * Leaving the player must always hand the library minimum back, even when the
+ * window geometry cannot be read: otherwise a failed read leaves the guide at
+ * the 480 x 270 player minimum. The read comes first so the restore plan still
+ * sees the window before the minimum changes it.
+ */
+export async function readWindowThenApplyMinimum(
+  host: WindowExitHost,
+): Promise<WindowReading | null> {
+  let current: WindowReading | null = null;
+  try {
+    current = await host.read();
+  } catch {
+    current = null;
+  }
+  await host.applyMinimum();
+  return current;
+}
+
 /** Whether the window still sits where the app left it, outside the resize border. */
 export function playerRectChanged(a: WindowReading, b: WindowReading, tolerance = 4): boolean {
   return (

@@ -9,6 +9,7 @@ import {
   planPlayerRestore,
   planWindowRestore,
   playerRectChanged,
+  readWindowThenApplyMinimum,
   VOD_WINDOWED_MIN,
   type WindowReading,
 } from "./display.ts";
@@ -271,4 +272,48 @@ test("positions and the work area convert at 125%", () => {
   assert.equal(converted.x, 240);
   assert.equal(converted.y, 120);
   assert.deepEqual(converted.workArea, { x: 0, y: 0, width: 1920, height: 1120 });
+});
+
+test("leaving the player applies the library minimum after reading the window", async () => {
+  const events: string[] = [];
+  const current = await readWindowThenApplyMinimum({
+    read: async () => {
+      events.push("read");
+      return reading();
+    },
+    applyMinimum: async () => {
+      events.push("minimum");
+    },
+  });
+
+  assert.deepEqual(events, ["read", "minimum"]);
+  assert.equal(current?.innerWidth, 1440);
+});
+
+test("a failed read still applies the library minimum", async () => {
+  const events: string[] = [];
+  const current = await readWindowThenApplyMinimum({
+    read: async () => {
+      events.push("read");
+      throw new Error("window unavailable");
+    },
+    applyMinimum: async () => {
+      events.push("minimum");
+    },
+  });
+
+  assert.equal(current, null);
+  assert.deepEqual(events, ["read", "minimum"]);
+});
+
+test("a failed minimum is reported, not hidden", async () => {
+  await assert.rejects(
+    readWindowThenApplyMinimum({
+      read: async () => reading(),
+      applyMinimum: async () => {
+        throw new Error("not allowed");
+      },
+    }),
+    /not allowed/,
+  );
 });
