@@ -54,7 +54,7 @@ Right-click the channel again and select **Remove Favorite** to remove it.
 
 ## Player Controls
 
-Left-click a channel to begin playback. The guide's mini player carries **Fullscreen** and **Stop** buttons. In the player views, move the pointer to reveal:
+Left-click a channel to begin playback. The guide's mini player carries **Windowed**, **Fullscreen** and **Stop** buttons. They appear for five seconds when a channel starts playing, whenever the pointer is over the mini player, and when keyboard focus reaches them; otherwise they stay transparent so the video is unobstructed. In the player views, move the pointer to reveal:
 
 - **Reload** — reopen the selected stream if playback stalls.
 - **Stats** — show the diagnostics overlay.

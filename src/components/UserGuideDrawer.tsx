@@ -156,7 +156,7 @@ export function UserGuideDrawer({ isOpen, onClose, onOpenSources, onOpenEpg }: U
           <section className="guide-reference-card">
             <h3>Useful controls</h3>
             <ul>
-              <li>Double-click the mini player to open the resizable player window; double-click the player to switch between the window and fullscreen.</li>
+              <li>Double-click the mini player to open the resizable player window; use its Windowed button to do the same or Fullscreen to go straight to fullscreen. Double-click the player to switch between the window and fullscreen. Its mini-player controls fade in when playback starts, on hover, and on keyboard focus.</li>
               <li>Press <kbd>Esc</kbd> in fullscreen to drop into a resizable window; press <kbd>Esc</kbd> again to return to the guide, or use <strong>Guide</strong> in the controls.</li>
               <li>Right-click a channel to manage Favorites or assign an EPG listing.</li>
               <li>Choose windowed, fullscreen, or mini-player automatic resume under <strong>Settings &gt; General</strong>.</li>

@@ -3453,6 +3453,7 @@ function App() {
                   onToggleFullscreen={() => {
                     void handlePreviewWindowed();
                   }}
+                  onWindowed={() => { void handlePreviewWindowed(); }}
                   onFullscreen={() => { void runLiveTransition("fullscreen"); }}
                 />
               }

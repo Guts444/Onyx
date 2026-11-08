@@ -113,6 +113,10 @@ export function PlayerPanel({
   const { heading, body } = getPlayerCopy(player, selectedChannel);
   const hideChromeTimeoutRef = useRef<number | null>(null);
   const [showPlayerChrome, setShowPlayerChrome] = useState(false);
+  const [showMiniChrome, setShowMiniChrome] = useState(false);
+  const miniChromeTimerRef = useRef<number | null>(null);
+  const miniHoveredRef = useRef(false);
+  const miniFocusedRef = useRef(false);
   const canControlPlayback =
     player.environment === "tauri" &&
     player.ready &&
@@ -195,6 +199,53 @@ export function PlayerPanel({
     }
   }
 
+  function clearMiniChromeTimer() {
+    if (miniChromeTimerRef.current !== null) {
+      window.clearTimeout(miniChromeTimerRef.current);
+      miniChromeTimerRef.current = null;
+    }
+  }
+
+  function revealMiniChrome(delayMs = 5000) {
+    clearMiniChromeTimer();
+    setShowMiniChrome(true);
+    miniChromeTimerRef.current = window.setTimeout(() => {
+      miniChromeTimerRef.current = null;
+      if (!miniHoveredRef.current && !miniFocusedRef.current) {
+        setShowMiniChrome(false);
+      }
+    }, delayMs);
+  }
+
+  function hideMiniChromeSoon() {
+    clearMiniChromeTimer();
+    if (miniHoveredRef.current || miniFocusedRef.current) return;
+    miniChromeTimerRef.current = window.setTimeout(() => {
+      miniChromeTimerRef.current = null;
+      if (!miniHoveredRef.current && !miniFocusedRef.current) {
+        setShowMiniChrome(false);
+      }
+    }, 400);
+  }
+
+  // The mini player's controls appear when playback starts, while the pointer
+  // is over it, or when Tab reaches them. Focus is what makes them reachable
+  // by keyboard even while they are transparent.
+  const miniPlaybackStarted = isPreviewLayout && selectedChannel !== null && !shouldShowStatusCard;
+  useEffect(() => {
+    if (!miniPlaybackStarted) {
+      clearMiniChromeTimer();
+      if (!miniHoveredRef.current && !miniFocusedRef.current) {
+        setShowMiniChrome(false);
+      }
+      return undefined;
+    }
+    revealMiniChrome(5000);
+    return undefined;
+  }, [miniPlaybackStarted, selectedChannel?.id]);
+
+  useEffect(() => () => clearMiniChromeTimer(), []);
+
   useEffect(() => {
     clearHideTimer();
 
@@ -245,8 +296,39 @@ export function PlayerPanel({
         shouldHideCursor ? "player-shell--cursor-hidden" : ""
       }`}
       onMouseMove={isPreviewLayout ? undefined : revealPlayerChrome}
-      onMouseEnter={isPreviewLayout ? undefined : revealPlayerChrome}
-      onMouseLeave={isPreviewLayout ? undefined : hidePlayerChrome}
+      onMouseEnter={
+        isPreviewLayout
+          ? () => {
+              miniHoveredRef.current = true;
+              revealMiniChrome();
+            }
+          : revealPlayerChrome
+      }
+      onMouseLeave={
+        isPreviewLayout
+          ? () => {
+              miniHoveredRef.current = false;
+              hideMiniChromeSoon();
+            }
+          : hidePlayerChrome
+      }
+      onFocusCapture={
+        isPreviewLayout
+          ? () => {
+              miniFocusedRef.current = true;
+              revealMiniChrome();
+            }
+          : undefined
+      }
+      onBlurCapture={
+        isPreviewLayout
+          ? (event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              miniFocusedRef.current = false;
+              hideMiniChromeSoon();
+            }
+          : undefined
+      }
     >
       <div ref={playerSurfaceRef} className="player-surface" onDoubleClick={onToggleFullscreen}>
         {shouldShowStatusCard ? (
@@ -260,7 +342,12 @@ export function PlayerPanel({
         ) : null}
 
         {isPreviewLayout && selectedChannel !== null ? (
-          <div className="player-mini-chrome">
+          <div className={`player-mini-chrome ${showMiniChrome ? "" : "player-mini-chrome--hidden"}`}>
+            {onWindowed ? (
+              <button type="button" className="control-button" onClick={onWindowed}>
+                Windowed
+              </button>
+            ) : null}
             {onFullscreen ? (
               <button type="button" className="control-button" onClick={onFullscreen}>
                 Fullscreen

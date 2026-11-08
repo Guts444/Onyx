@@ -883,6 +883,13 @@ img {
   z-index: 3;
   display: flex;
   gap: 6px;
+  opacity: 1;
+  transition: opacity 160ms ease;
+}
+
+.player-mini-chrome--hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .player-mini-chrome .control-button {
